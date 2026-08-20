@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_WEIGHTS,
   FRAGMENTS,
@@ -20,6 +20,8 @@ type SortColumn = "name" | "source" | "signal" | "date" | "duration" | "key" | "
 type SortDirection = "asc" | "desc";
 type SourceSortColumn = "name" | "signal" | "date" | "duration" | "format" | "device" | "fragments";
 type ScoredRelationship = Relationship & { score: number; otherId: string };
+type EditableRange = { id:string; start:number; end:number; color:string };
+type DraggedEdge = { sourceId:string; rangeId:string; edge:"start" | "end" };
 
 const CONTEXTS: { id: SearchContext; label: string }[] = [
   { id: "whole", label: "Whole" }, { id: "melody", label: "Melody" }, { id: "rhythm", label: "Rhythm" },
@@ -36,6 +38,7 @@ const SOURCE_COLUMNS: { id:SourceSortColumn; label:string }[] = [
   { id:"duration", label:"Length" }, { id:"format", label:"Format" }, { id:"device", label:"Device" },
   { id:"fragments", label:"Fragments" },
 ];
+const RANGE_COLORS = ["#a99cff","#74d8ff","#ffbc65","#c8fa78","#ff849b","#75e2c2"];
 const GRAPH_POSITIONS = [
   [15,20],[38,16],[64,22],[80,14],[24,42],[49,39],[71,44],[89,36],[12,66],[33,62],[55,66],[76,61],[91,70],[21,84],[44,83],[67,85],[82,88],[54,19],
 ];
@@ -44,6 +47,31 @@ const fragmentById = (id: string) => FRAGMENTS.find((fragment) => fragment.id ==
 const otherIdFor = (relationship: Relationship, selectedId: string) => relationship.source === selectedId ? relationship.target : relationship.source;
 const formatSeconds = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 const durationSeconds = (duration:string) => { const [minutes,seconds] = duration.split(":").map(Number); return minutes * 60 + seconds; };
+const fragmentCountForSensitivity = (sensitivity:number) => Math.max(1,Math.min(6,Math.floor((sensitivity - 10) / 16) + 1));
+
+function rangeForIndex(source:SourceFile,index:number):EditableRange {
+  if (index === 0) return { id:`${source.id}-range-1`, start:source.start, end:source.end, color:RANGE_COLORS[0] };
+  const length = Math.max(8,Math.min(32,source.duration * (.12 + (index % 3) * .025)));
+  const proposed = source.start + index * source.duration * .105 - (index % 2 ? source.duration * .028 : 0);
+  const start = Math.max(0,Math.min(source.duration - length,proposed));
+  return { id:`${source.id}-range-${index + 1}`, start, end:start + length, color:RANGE_COLORS[index % RANGE_COLORS.length] };
+}
+
+const initialSourceRanges = () => Object.fromEntries(SOURCE_FILES.map((source) => [source.id,Array.from({ length:fragmentCountForSensitivity(source.sensitivity) },(_,index) => rangeForIndex(source,index))]));
+
+function waveformPath(values:number[],width=1000,height=160) {
+  const middle = height / 2;
+  const upper = values.map((value,index) => `${index ? "L" : "M"}${index / Math.max(1,values.length - 1) * width},${middle - value / 100 * middle * .88}`).join(" ");
+  const lower = [...values].reverse().map((value,reverseIndex) => { const index=values.length - 1 - reverseIndex; return `L${index / Math.max(1,values.length - 1) * width},${middle + value / 100 * middle * .88}`; }).join(" ");
+  return `${upper} ${lower} Z`;
+}
+
+function waveformSlice(values:number[],time:number,duration:number) {
+  const center = Math.round(time / duration * (values.length - 1));
+  const start = Math.max(0,center - 5);
+  const slice = values.slice(start,Math.min(values.length,center + 6));
+  return slice.length > 2 ? slice : values;
+}
 
 function fallbackRelationships(selectedId: string): Relationship[] {
   const selectedIndex = FRAGMENTS.findIndex((fragment) => fragment.id === selectedId);
@@ -95,6 +123,10 @@ function Waveform({ values, active=false, large=false }: { values:number[]; acti
   return <div className={`wave ${active ? "active" : ""} ${large ? "large" : ""}`} aria-hidden="true">{values.map((height,index) => <i key={index} style={{ height:`${height}%` }} />)}</div>;
 }
 
+function ContinuousWaveform({ values, className="" }: { values:number[]; className?:string }) {
+  return <svg className={`continuous-wave ${className}`} viewBox="0 0 1000 160" preserveAspectRatio="none" aria-hidden="true"><path d={waveformPath(values)} /></svg>;
+}
+
 function TransformChips({ relationship }: { relationship:Relationship }) {
   return <div className="chips">{(relationship.transform?.labels ?? ["As recorded"]).map((label) => <span key={label}>{label}</span>)}</div>;
 }
@@ -128,12 +160,17 @@ export default function Home() {
   const [sourceQuery, setSourceQuery] = useState("");
   const [sourceSort, setSourceSort] = useState<{ column:SourceSortColumn; direction:SortDirection }>({ column:"date", direction:"desc" });
   const [sourceEditorOpen, setSourceEditorOpen] = useState(false);
+  const [sourceRanges, setSourceRanges] = useState<Record<string,EditableRange[]>>(initialSourceRanges);
+  const [draggedEdge, setDraggedEdge] = useState<DraggedEdge | null>(null);
+  const [magnifier, setMagnifier] = useState<{ x:number; time:number; edge:"start" | "end" } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const pairAudio = useRef<{ source:HTMLAudioElement; candidate:HTMLAudioElement } | null>(null);
   const previewAudio = useRef<HTMLAudioElement | null>(null);
+  const sourceWaveRef = useRef<HTMLDivElement>(null);
 
   const selected = fragmentById(selectedId);
   const selectedSource = sources.find((source) => source.id === selectedSourceId)!;
+  const selectedRanges = sourceRanges[selectedSourceId] ?? [];
 
   const stopAllAudio = () => {
     if (pairAudio.current) { pairAudio.current.source.pause(); pairAudio.current.candidate.pause(); pairAudio.current = null; }
@@ -163,6 +200,26 @@ export default function Home() {
     window.addEventListener("pointerup", finish, { once:true });
     return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); };
   }, [resizingConnections]);
+
+  useEffect(() => {
+    if (!draggedEdge) return;
+    const move = (event:PointerEvent) => {
+      const rect = sourceWaveRef.current?.getBoundingClientRect();
+      const source = sources.find((item) => item.id === draggedEdge.sourceId);
+      if (!rect || !source) return;
+      const x = Math.max(0,Math.min(rect.width,event.clientX - rect.left));
+      const time = x / rect.width * source.duration;
+      setSourceRanges((current) => ({ ...current,[source.id]:(current[source.id] ?? []).map((range) => {
+        if (range.id !== draggedEdge.rangeId) return range;
+        return draggedEdge.edge === "start" ? { ...range,start:Math.max(0,Math.min(time,range.end - .5)) } : { ...range,end:Math.min(source.duration,Math.max(time,range.start + .5)) };
+      }) }));
+      setMagnifier({ x,time,edge:draggedEdge.edge });
+    };
+    const finish = () => { setDraggedEdge(null); setMagnifier(null); };
+    window.addEventListener("pointermove",move);
+    window.addEventListener("pointerup",finish,{ once:true });
+    return () => { window.removeEventListener("pointermove",move); window.removeEventListener("pointerup",finish); };
+  }, [draggedEdge,sources]);
 
   const visibleFragments = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -211,6 +268,29 @@ export default function Home() {
     column,
     direction:current.column === column ? (current.direction === "asc" ? "desc" : "asc") : (["date","signal","duration","fragments"].includes(column) ? "desc" : "asc"),
   }));
+
+  const updateRangeEdge = (sourceId:string,rangeId:string,edge:"start" | "end",value:number) => {
+    const source=sources.find((item) => item.id === sourceId); if (!source) return;
+    setSourceRanges((current) => ({ ...current,[sourceId]:(current[sourceId] ?? []).map((range) => range.id !== rangeId ? range : edge === "start" ? { ...range,start:Math.max(0,Math.min(value,range.end - .5)) } : { ...range,end:Math.min(source.duration,Math.max(value,range.start + .5)) }) }));
+  };
+
+  const beginRangeDrag = (event:ReactPointerEvent,range:EditableRange,edge:"start" | "end") => {
+    event.preventDefault(); event.stopPropagation();
+    const rect=sourceWaveRef.current?.getBoundingClientRect();
+    const time=edge === "start" ? range.start : range.end;
+    setMagnifier({ x:rect ? time / selectedSource.duration * rect.width : 0,time,edge });
+    setDraggedEdge({ sourceId:selectedSourceId,rangeId:range.id,edge });
+  };
+
+  const updateSourceSensitivity = (value:number) => {
+    setSources((current) => current.map((source) => source.id === selectedSourceId ? { ...source,sensitivity:value } : source));
+    setSourceRanges((current) => {
+      const existing=current[selectedSourceId] ?? [];
+      const count=fragmentCountForSensitivity(value);
+      const next=count <= existing.length ? existing.slice(0,count) : [...existing,...Array.from({ length:count - existing.length },(_,offset) => rangeForIndex(selectedSource,existing.length + offset))];
+      return { ...current,[selectedSourceId]:next };
+    });
+  };
 
   const connections = useMemo<ScoredRelationship[]>(() => {
     const sourceRelationships = [...RELATIONSHIPS.filter((relationship) => relationship.source === selectedId || relationship.target === selectedId), ...fallbackRelationships(selectedId)];
@@ -276,7 +356,7 @@ export default function Home() {
   const resetDemo = () => {
     stopAllAudio(); setView("library"); setSelectedId("f01"); setQuery(""); setRoleFilter("All"); setSort({ column:"date", direction:"desc" });
     setContext("whole"); setRangeMode("reasonable"); setWeights({ ...DEFAULT_WEIGHTS }); setArchived(new Set()); setDuplicateExclusions(new Set());
-    setDuplicateGroup(null); setAudition(null); setConnectionsOpen(false); setAdvancedOpen(false); setConnectionsWidth(520); setSources(SOURCE_FILES.map((source) => ({ ...source }))); setSelectedSourceId("s1"); setSourceQuery(""); setSourceSort({ column:"date", direction:"desc" }); setSourceEditorOpen(false); notify("Demo restored to its opening state.");
+    setDuplicateGroup(null); setAudition(null); setConnectionsOpen(false); setAdvancedOpen(false); setConnectionsWidth(520); setSources(SOURCE_FILES.map((source) => ({ ...source }))); setSourceRanges(initialSourceRanges()); setSelectedSourceId("s1"); setSourceQuery(""); setSourceSort({ column:"date", direction:"desc" }); setSourceEditorOpen(false); setDraggedEdge(null); setMagnifier(null); notify("Demo restored to its opening state.");
   };
   const updateSource = (patch:Partial<SourceFile>) => setSources((current) => current.map((source) => source.id === selectedSourceId ? { ...source, ...patch } : source));
   const openFragment = (id:string) => { stopAllAudio(); setAudition(null); setSelectedId(id); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
@@ -356,14 +436,14 @@ export default function Home() {
       {view === "source" && <section className="page-view source-page">
         <div className={`source-workspace ${sourceEditorOpen ? "editor-open" : ""}`}>
           <div className="sources-panel">
-            <div className="panel-titlebar"><h1>Sources</h1></div>
+            <div className="panel-titlebar"><h1>Sources</h1><button className="import-button" onClick={() => notify("Import is simulated in this prototype.")}>＋ Import</button></div>
             <div className="sources-toolbar"><label className="search"><span aria-hidden="true">⌕</span><input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} placeholder="Search" aria-label="Search sources" /></label></div>
             <div className="source-table" role="table" aria-label="Source files">
               <div className="source-table-row source-table-header" role="row">{SOURCE_COLUMNS.map((column) => <span role="columnheader" aria-sort={sourceSort.column === column.id ? (sourceSort.direction === "asc" ? "ascending" : "descending") : "none"} key={column.id}><button onClick={() => changeSourceSort(column.id)}>{column.label}<i aria-hidden="true">{sourceSort.column === column.id ? (sourceSort.direction === "asc" ? "↑" : "↓") : "↕"}</i></button></span>)}</div>
               {visibleSources.map((source) => { const auditionId = source.fragmentIds[0]; return <div className={`source-table-row ${sourceEditorOpen && selectedSourceId === source.id ? "selected" : ""}`} role="row" tabIndex={0} key={source.id} onClick={() => { stopAllAudio(); setSelectedSourceId(source.id); setSourceEditorOpen(true); }} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); stopAllAudio(); setSelectedSourceId(source.id); setSourceEditorOpen(true); } }}>
                 <span className="source-name-cell" title={source.name}><b>{source.name}</b></span>
                 <button className={`wave-play ${previewingId === auditionId ? "playing" : ""}`} onClick={(event) => { event.stopPropagation(); previewSingle(fragmentById(auditionId)); }} aria-label={`${previewingId === auditionId ? "Stop" : "Play"} ${source.name}`}><Waveform values={source.waveform.slice(0,36)} active={previewingId === auditionId} /></button>
-                <span>{source.date}</span><span>{formatSeconds(source.duration)}</span><span title={source.format}>{source.format.split(" · ")[0]}</span><span title={source.device}>{source.device}</span><span>{source.fragmentIds.length}</span>
+                <span>{source.date}</span><span>{formatSeconds(source.duration)}</span><span title={source.format}>{source.format.split(" · ")[0]}</span><span title={source.device}>{source.device}</span><span>{sourceRanges[source.id]?.length ?? 0}</span>
               </div>; })}
               {visibleSources.length === 0 && <div className="empty-inline">No sources match that search.</div>}
             </div>
@@ -372,17 +452,24 @@ export default function Home() {
             <div className="source-editor-title"><h2>Fragmentation</h2><button className="panel-close" onClick={() => { stopAllAudio(); setSourceEditorOpen(false); }} aria-label="Close fragmentation panel">×</button></div>
             <div className="source-editor-head"><div><h3>{selectedSource.name}</h3><p>{selectedSource.format} · {selectedSource.device}</p></div><button className="soft-button" onClick={() => previewSingle(fragmentById(selectedSource.fragmentIds[0]))}>{previewingId === selectedSource.fragmentIds[0] ? "Ⅱ Stop" : "▶ Play"}</button></div>
             <div className="timeline-card">
+              <div className="fragment-lanes" style={{ height:`${selectedRanges.length * 23 + 4}px` }}>{selectedRanges.map((range,index) => <div className="fragment-lane" key={range.id} style={{ top:`${index * 23}px`,"--fragment-color":range.color } as CSSProperties}>
+                <div className="fragment-bar" style={{ left:`${range.start / selectedSource.duration * 100}%`,width:`${(range.end - range.start) / selectedSource.duration * 100}%` }}>
+                  <button className="range-handle start" onPointerDown={(event) => beginRangeDrag(event,range,"start")} onKeyDown={(event) => { const step=event.shiftKey ? 1 : .25; if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); updateRangeEdge(selectedSourceId,range.id,"start",range.start + (event.key === "ArrowLeft" ? -step : step)); } }} aria-label={`Adjust start of fragment ${index + 1}`} />
+                  <span>F{String(index + 1).padStart(2,"0")} · {formatSeconds(range.start)}–{formatSeconds(range.end)}</span>
+                  <button className="range-handle end" onPointerDown={(event) => beginRangeDrag(event,range,"end")} onKeyDown={(event) => { const step=event.shiftKey ? 1 : .25; if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); updateRangeEdge(selectedSourceId,range.id,"end",range.end + (event.key === "ArrowLeft" ? -step : step)); } }} aria-label={`Adjust end of fragment ${index + 1}`} />
+                </div>
+              </div>)}</div>
               <div className="timeline-labels"><span>0:00</span><span>{formatSeconds(selectedSource.duration / 2)}</span><span>{formatSeconds(selectedSource.duration)}</span></div>
-              <div className="source-wave-wrap"><Waveform values={selectedSource.waveform} large /><div className="selection-region" style={{ left:`${selectedSource.start / selectedSource.duration * 100}%`, width:`${(selectedSource.end - selectedSource.start) / selectedSource.duration * 100}%` }}><i className="handle start"/><i className="handle end"/></div>{Array.from({ length:Math.max(1,Math.round(selectedSource.sensitivity / 18)) }).map((_,index) => <i className="boundary" key={index} style={{ left:`${(index + 1) * 100 / (Math.max(1,Math.round(selectedSource.sensitivity / 18)) + 1)}%` }} />)}</div>
-              <div className="selection-copy"><span>Selected fragment</span><strong>{formatSeconds(selectedSource.start)} — {formatSeconds(selectedSource.end)}</strong><small>{Math.round(selectedSource.end - selectedSource.start)} seconds</small></div>
-              <div className="boundary-controls">
-                <label><span>Start point <output>{formatSeconds(selectedSource.start)}</output></span><input type="range" min="0" max={Math.max(1, selectedSource.end - 1)} value={selectedSource.start} onChange={(event) => updateSource({ start:Number(event.target.value) })} /></label>
-                <label><span>End point <output>{formatSeconds(selectedSource.end)}</output></span><input type="range" min={Math.min(selectedSource.duration - 1, selectedSource.start + 1)} max={selectedSource.duration} value={selectedSource.end} onChange={(event) => updateSource({ end:Number(event.target.value) })} /></label>
+              <div className="continuous-wave-wrap" ref={sourceWaveRef}>
+                <ContinuousWaveform values={selectedSource.waveform} />
+                {selectedRanges.map((range,index) => <div className="wave-range" key={range.id} style={{ left:`${range.start / selectedSource.duration * 100}%`,width:`${(range.end - range.start) / selectedSource.duration * 100}%`,"--fragment-color":range.color } as CSSProperties}><span>F{index + 1}</span></div>)}
+                {magnifier && draggedEdge?.sourceId === selectedSourceId && <div className="edge-magnifier" style={{ left:`${magnifier.x}px` }}><strong>{magnifier.edge} · {formatSeconds(magnifier.time)}</strong><ContinuousWaveform values={waveformSlice(selectedSource.waveform,magnifier.time,selectedSource.duration)} /></div>}
               </div>
+              <div className="fragment-summary"><strong>{selectedRanges.length} fragments</strong><span>Drag any colored bar edge to trim · Shift + arrow for 1 second</span></div>
             </div>
             <div className="source-lower">
-              <div className="sensitivity-card"><div><p className="eyebrow">Per-file control</p><h3>Fragmentation sensitivity</h3><p>Turn it up to notice smaller gestures. Turn it down to keep longer passages together.</p></div><div className="knob-control"><div className="knob" style={{ "--angle":`${-130 + selectedSource.sensitivity * 2.6}deg` } as CSSProperties}><i /></div><input aria-label="Fragmentation sensitivity" type="range" min="10" max="90" value={selectedSource.sensitivity} onChange={(event) => updateSource({ sensitivity:Number(event.target.value) })}/><strong>{selectedSource.sensitivity < 36 ? "Broad" : selectedSource.sensitivity > 66 ? "Sensitive" : "Balanced"}</strong><small>{Math.max(1,Math.round(selectedSource.sensitivity / 18))} fragments detected</small></div></div>
-              <div className="detected-card"><div className="detected-head"><h3>Fragments in this file</h3><button onClick={() => notify("Boundary changes saved for this demo session.")}>Save boundaries</button></div>{selectedSource.fragmentIds.map((id) => { const fragment=fragmentById(id); return <div className="detected-row" key={id}><Waveform values={fragment.waveform.slice(0,18)} /><span><b>{fragment.name}</b><small>{fragment.duration} · {fragment.role}</small></span><button onClick={() => openFragment(id)}>Open →</button></div>; })}</div>
+              <div className="sensitivity-card"><div><h3>Sensitivity</h3><p>Higher sensitivity surfaces shorter gestures and adds fragment ranges.</p></div><div className="knob-control"><div className="knob" style={{ "--angle":`${-130 + selectedSource.sensitivity * 2.6}deg` } as CSSProperties}><i /></div><input aria-label="Fragmentation sensitivity" type="range" min="10" max="90" value={selectedSource.sensitivity} onChange={(event) => updateSourceSensitivity(Number(event.target.value))}/><strong>{selectedSource.sensitivity < 36 ? "Broad" : selectedSource.sensitivity > 66 ? "Sensitive" : "Balanced"}</strong><small>{selectedRanges.length} fragments detected</small></div></div>
+              <div className="detected-card"><div className="detected-head"><h3>Fragments</h3><button onClick={() => notify("Boundary changes saved for this demo session.")}>Save boundaries</button></div>{selectedRanges.map((range,index) => { const id=selectedSource.fragmentIds[index]; const fragment=id ? fragmentById(id) : null; return <div className="detected-row" key={range.id}><i className="range-swatch" style={{ background:range.color }} /><span><b>{fragment?.name ?? `Untitled fragment ${index + 1}`}</b><small>{formatSeconds(range.start)}–{formatSeconds(range.end)} · {Math.round(range.end - range.start)} sec</small></span>{fragment ? <button onClick={() => openFragment(id)}>Open →</button> : <em>New</em>}</div>; })}</div>
             </div>
           </aside>}
         </div>

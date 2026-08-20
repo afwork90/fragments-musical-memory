@@ -38,6 +38,9 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(page, /Fragmentation sensitivity/);
   assert.match(page, /advancedOpen/);
   assert.match(page, /wave-play/);
+  assert.match(page, /fragment-lanes/);
+  assert.match(page, /edge-magnifier/);
+  assert.match(page, /＋ Import/);
   assert.match(page, /Keep this for matching/);
   assert.ok(audioFiles.filter((name) => name.endsWith(".wav")).length >= 40);
   await assert.rejects(access(new URL("../app/_sites-preview/", import.meta.url)));
