@@ -16,7 +16,8 @@ import {
 
 type View = "library" | "source" | "map" | "archive";
 type RangeMode = "reasonable" | "experimental";
-type SortKey = "newest" | "oldest" | "tempo" | "name";
+type SortColumn = "name" | "source" | "signal" | "date" | "duration" | "key" | "tempo" | "role" | "takes";
+type SortDirection = "asc" | "desc";
 type ScoredRelationship = Relationship & { score: number; otherId: string };
 
 const CONTEXTS: { id: SearchContext; label: string }[] = [
@@ -24,6 +25,11 @@ const CONTEXTS: { id: SearchContext; label: string }[] = [
   { id: "harmony", label: "Harmony" }, { id: "bass", label: "Bass" },
 ];
 const ROLES: ("All" | MusicalRole)[] = ["All", "Melody", "Rhythm", "Harmony", "Bass", "Voice", "Texture"];
+const LIBRARY_COLUMNS: { id:SortColumn; label:string }[] = [
+  { id:"name", label:"Fragment" }, { id:"source", label:"Source" }, { id:"signal", label:"Signal" },
+  { id:"date", label:"Recorded" }, { id:"duration", label:"Length" }, { id:"key", label:"Key" },
+  { id:"tempo", label:"BPM" }, { id:"role", label:"Role" }, { id:"takes", label:"Takes" },
+];
 const GRAPH_POSITIONS = [
   [15,20],[38,16],[64,22],[80,14],[24,42],[49,39],[71,44],[89,36],[12,66],[33,62],[55,66],[76,61],[91,70],[21,84],[44,83],[67,85],[82,88],[54,19],
 ];
@@ -31,6 +37,7 @@ const GRAPH_POSITIONS = [
 const fragmentById = (id: string) => FRAGMENTS.find((fragment) => fragment.id === id)!;
 const otherIdFor = (relationship: Relationship, selectedId: string) => relationship.source === selectedId ? relationship.target : relationship.source;
 const formatSeconds = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+const durationSeconds = (duration:string) => { const [minutes,seconds] = duration.split(":").map(Number); return minutes * 60 + seconds; };
 
 function fallbackRelationships(selectedId: string): Relationship[] {
   const selectedIndex = FRAGMENTS.findIndex((fragment) => fragment.id === selectedId);
@@ -91,7 +98,7 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState("f01");
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<(typeof ROLES)[number]>("All");
-  const [sortKey, setSortKey] = useState<SortKey>("newest");
+  const [sort, setSort] = useState<{ column:SortColumn; direction:SortDirection }>({ column:"date", direction:"desc" });
   const [context, setContext] = useState<SearchContext>("whole");
   const [rangeMode, setRangeMode] = useState<RangeMode>("reasonable");
   const [weights, setWeights] = useState<SearchWeights>({ ...DEFAULT_WEIGHTS });
@@ -141,12 +148,25 @@ export default function Home() {
       .filter((fragment) => roleFilter === "All" || fragment.roles.includes(roleFilter))
       .filter((fragment) => !normalized || `${fragment.name} ${fragment.source} ${fragment.key} ${fragment.roles.join(" ")}`.toLowerCase().includes(normalized));
     return [...filtered].sort((a,b) => {
-      if (sortKey === "newest") return b.date.localeCompare(a.date);
-      if (sortKey === "oldest") return a.date.localeCompare(b.date);
-      if (sortKey === "tempo") return a.bpm - b.bpm;
-      return a.name.localeCompare(b.name);
+      const takeCount = (fragment:Fragment) => fragment.duplicateGroup ? FRAGMENTS.filter((item) => item.duplicateGroup === fragment.duplicateGroup && item.id !== fragment.id && !archived.has(item.id) && !duplicateExclusions.has(item.id)).length : 0;
+      let comparison = 0;
+      if (sort.column === "name") comparison = a.name.localeCompare(b.name);
+      if (sort.column === "source") comparison = a.source.localeCompare(b.source);
+      if (sort.column === "signal") comparison = a.brightness - b.brightness;
+      if (sort.column === "date") comparison = a.date.localeCompare(b.date);
+      if (sort.column === "duration") comparison = durationSeconds(a.duration) - durationSeconds(b.duration);
+      if (sort.column === "key") comparison = a.key.localeCompare(b.key);
+      if (sort.column === "tempo") comparison = a.bpm - b.bpm;
+      if (sort.column === "role") comparison = a.role.localeCompare(b.role);
+      if (sort.column === "takes") comparison = takeCount(a) - takeCount(b);
+      return sort.direction === "asc" ? comparison : -comparison;
     });
-  }, [query, roleFilter, sortKey, archived]);
+  }, [query, roleFilter, sort, archived, duplicateExclusions]);
+
+  const changeSort = (column:SortColumn) => setSort((current) => ({
+    column,
+    direction:current.column === column ? (current.direction === "asc" ? "desc" : "asc") : (["date","signal","tempo","takes"].includes(column) ? "desc" : "asc"),
+  }));
 
   const connections = useMemo<ScoredRelationship[]>(() => {
     const sourceRelationships = [...RELATIONSHIPS.filter((relationship) => relationship.source === selectedId || relationship.target === selectedId), ...fallbackRelationships(selectedId)];
@@ -210,7 +230,7 @@ export default function Home() {
     setArchived((current) => new Set([...current, ...others])); setSelectedId(id); setDuplicateGroup(null); notify("Kept this take for matching and archived the rest.");
   };
   const resetDemo = () => {
-    stopAllAudio(); setView("library"); setSelectedId("f01"); setQuery(""); setRoleFilter("All"); setSortKey("newest");
+    stopAllAudio(); setView("library"); setSelectedId("f01"); setQuery(""); setRoleFilter("All"); setSort({ column:"date", direction:"desc" });
     setContext("whole"); setRangeMode("reasonable"); setWeights({ ...DEFAULT_WEIGHTS }); setArchived(new Set()); setDuplicateExclusions(new Set());
     setDuplicateGroup(null); setAudition(null); setSources(SOURCE_FILES.map((source) => ({ ...source }))); setSelectedSourceId("s1"); notify("Demo restored to its opening state.");
   };
@@ -239,18 +259,21 @@ export default function Home() {
           </div>
           <div className="toolbar">
             <div className="filter-row" aria-label="Filter by musical role">{ROLES.map((role) => <button key={role} className={roleFilter === role ? "filter-active" : ""} onClick={() => setRoleFilter(role)}>{role === "All" ? "All fragments" : role}</button>)}</div>
-            <label className="sort-select">Sort <select value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="tempo">Tempo</option><option value="name">Name</option></select></label>
+            <span className="table-density-note">{visibleFragments.length} rows · select a column to sort</span>
           </div>
           <div className="table" role="table" aria-label="Fragment library">
-            <div className="table-row table-header" role="row"><span>Name</span><span>Shape</span><span>Recorded</span><span>Key</span><span>Tempo</span><span>Role</span></div>
+            <div className="table-row table-header" role="row">{LIBRARY_COLUMNS.map((column) => <span role="columnheader" aria-sort={sort.column === column.id ? (sort.direction === "asc" ? "ascending" : "descending") : "none"} key={column.id}><button onClick={() => changeSort(column.id)} aria-label={`Sort by ${column.label}${sort.column === column.id ? `, currently ${sort.direction === "asc" ? "ascending" : "descending"}` : ""}`}>{column.label}<i aria-hidden="true">{sort.column === column.id ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}</i></button></span>)}</div>
             {visibleFragments.map((fragment) => {
               const relatedTakes = fragment.duplicateGroup ? FRAGMENTS.filter((item) => item.duplicateGroup === fragment.duplicateGroup && item.id !== fragment.id && !archived.has(item.id) && !duplicateExclusions.has(item.id)).length : 0;
               return <div key={fragment.id} className={`table-row fragment-row ${selectedId === fragment.id ? "selected" : ""}`} role="row" tabIndex={0} onClick={() => setSelectedId(fragment.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedId(fragment.id); }}>
-                <span className="track-name"><b>{fragment.name}</b><small>{fragment.source}</small>{relatedTakes > 0 && <button className="take-link" onClick={(event) => { event.stopPropagation(); setDuplicateGroup(fragment.duplicateGroup!); }}>◉ {relatedTakes} related takes</button>}</span>
+                <span className="track-name"><b>{fragment.name}</b></span>
+                <span className="source-cell" title={fragment.source}>{fragment.source}</span>
                 <Waveform values={fragment.waveform} active={selectedId === fragment.id} />
-                <span><b>{fragment.dateLabel}</b><small>{fragment.duration}</small></span>
-                <span className="key-cell">{fragment.key}{fragment.alternateKeys.length > 0 && <small title={`Also: ${fragment.alternateKeys.join(", ")}`}>+ {fragment.alternateKeys.length} interpretation{fragment.alternateKeys.length > 1 ? "s" : ""}</small>}</span>
-                <span>{fragment.bpm} BPM</span><span><em>{fragment.role}</em></span>
+                <span className="date-cell">{fragment.dateLabel}</span>
+                <span className="duration-cell">{fragment.duration}</span>
+                <span className="key-cell" title={fragment.alternateKeys.length ? `Also: ${fragment.alternateKeys.join(", ")}` : fragment.key}>{fragment.key}{fragment.alternateKeys.length > 0 && <small>+{fragment.alternateKeys.length}</small>}</span>
+                <span className="tempo-cell">{fragment.bpm}</span><span className="role-cell"><em>{fragment.role}</em></span>
+                <span className="takes-cell">{relatedTakes > 0 ? <button className="take-link" onClick={(event) => { event.stopPropagation(); setDuplicateGroup(fragment.duplicateGroup!); }}>{relatedTakes + 1}</button> : "—"}</span>
               </div>;
             })}
             {visibleFragments.length === 0 && <div className="empty-inline">No fragments match that search.</div>}
@@ -264,12 +287,19 @@ export default function Home() {
           <div className="context-switch" aria-label="Search musical object">{CONTEXTS.map((item) => <button key={item.id} className={context === item.id ? "active" : ""} onClick={() => setContext(item.id)}>{item.label}</button>)}</div>
           {selected.objects && context !== "whole" && <div className="object-note"><span>Isolated {context}</span><small>Prepared musical-object view</small></div>}
           <div className="range-toggle"><button className={rangeMode === "reasonable" ? "active" : ""} onClick={() => setRangeMode("reasonable")}>Reasonable</button><button className={rangeMode === "experimental" ? "active experimental" : ""} onClick={() => setRangeMode("experimental")}>Experimental</button></div>
-          <div className="match-list">{connections.map((relationship,index) => {
+          <div className="connection-table" role="table" aria-label={`Connections for ${selected.name}`}>
+            <div className="connection-row connection-header" role="row"><span>Fit</span><span>Fragment</span><span>Key</span><span>BPM</span><span>Role</span><span>Change</span><span aria-label="Audition" /></div>
+            {connections.map((relationship,index) => {
             const target = fragmentById(relationship.otherId);
-            return <article className={`match-card ${index === 0 ? "featured" : ""}`} key={relationship.id}>
-              <div className="score"><strong>{relationship.score}</strong><small>connection</small></div>
-              <div className="match-main">{target.id === "f02" && selectedId === "f01" && <span className="rediscovered">Rediscovered from 2018</span>}<h3>{target.name}</h3><p>{relationship.reason}</p><TransformChips relationship={relationship} /><button className="audition" onClick={() => { setAudition(relationship); setTransformed(true); }}>▶ Audition together</button></div>
-            </article>;
+            return <div className={`connection-row ${index === 0 ? "featured" : ""}`} role="row" key={relationship.id}>
+              <span className="connection-fit"><strong>{relationship.score}</strong><small>%</small></span>
+              <span className="connection-name">{target.id === "f02" && selectedId === "f01" && <i>Rediscovered · 2018</i>}<b>{target.name}</b><small title={relationship.reason}>{relationship.reason}</small></span>
+              <span className="connection-key" title={target.alternateKeys.length ? `${target.key}; also ${target.alternateKeys.join(", ")}` : target.key}>{target.key}</span>
+              <span className="connection-tempo">{target.bpm}</span>
+              <span className="connection-role">{target.role}</span>
+              <span className="connection-change"><TransformChips relationship={relationship} /></span>
+              <button className="audition" onClick={() => { setAudition(relationship); setTransformed(true); }} aria-label={`Audition ${target.name} with ${selected.name}`}>▶</button>
+            </div>;
           })}</div>
           <div className="shape-search">
             <div className="shape-title"><div><span>Shape the search</span><small>Move toward what matters now</small></div><button onClick={() => setWeights({ ...DEFAULT_WEIGHTS })}>Balanced</button></div>
