@@ -20,8 +20,8 @@ test("server-renders the Fragments prototype", async () => {
   const html = await response.text();
   assert.match(html, /<title>Fragments — Rediscover your musical memory<\/title>/i);
   assert.match(html, /Fragments/);
-  assert.match(html, /Your fragments/);
-  assert.match(html, /Source material/);
+  assert.match(html, />Fragments</);
+  assert.match(html, /Sources/);
   assert.match(html, /2,418 ideas indexed/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
@@ -36,7 +36,8 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(data, /Kitchen hum \/ winter/);
   assert.match(data, /f02_match\.wav/);
   assert.match(page, /Fragmentation sensitivity/);
-  assert.match(page, /Lean into rhythm/);
+  assert.match(page, /advancedOpen/);
+  assert.match(page, /wave-play/);
   assert.match(page, /Keep this for matching/);
   assert.ok(audioFiles.filter((name) => name.endsWith(".wav")).length >= 40);
   await assert.rejects(access(new URL("../app/_sites-preview/", import.meta.url)));

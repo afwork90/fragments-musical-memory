@@ -18,6 +18,7 @@ type View = "library" | "source" | "map" | "archive";
 type RangeMode = "reasonable" | "experimental";
 type SortColumn = "name" | "source" | "signal" | "date" | "duration" | "key" | "tempo" | "role" | "takes";
 type SortDirection = "asc" | "desc";
+type SourceSortColumn = "name" | "signal" | "date" | "duration" | "format" | "device" | "fragments";
 type ScoredRelationship = Relationship & { score: number; otherId: string };
 
 const CONTEXTS: { id: SearchContext; label: string }[] = [
@@ -29,6 +30,11 @@ const LIBRARY_COLUMNS: { id:SortColumn; label:string }[] = [
   { id:"name", label:"Fragment" }, { id:"source", label:"Source" }, { id:"signal", label:"Signal" },
   { id:"date", label:"Recorded" }, { id:"duration", label:"Length" }, { id:"key", label:"Key" },
   { id:"tempo", label:"BPM" }, { id:"role", label:"Role" }, { id:"takes", label:"Takes" },
+];
+const SOURCE_COLUMNS: { id:SourceSortColumn; label:string }[] = [
+  { id:"name", label:"Source" }, { id:"signal", label:"Signal" }, { id:"date", label:"Recorded" },
+  { id:"duration", label:"Length" }, { id:"format", label:"Format" }, { id:"device", label:"Device" },
+  { id:"fragments", label:"Fragments" },
 ];
 const GRAPH_POSITIONS = [
   [15,20],[38,16],[64,22],[80,14],[24,42],[49,39],[71,44],[89,36],[12,66],[33,62],[55,66],[76,61],[91,70],[21,84],[44,83],[67,85],[82,88],[54,19],
@@ -115,6 +121,13 @@ export default function Home() {
   const [selectedSourceId, setSelectedSourceId] = useState("s1");
   const [previewingId, setPreviewingId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [connectionsWidth, setConnectionsWidth] = useState(520);
+  const [resizingConnections, setResizingConnections] = useState(false);
+  const [sourceQuery, setSourceQuery] = useState("");
+  const [sourceSort, setSourceSort] = useState<{ column:SourceSortColumn; direction:SortDirection }>({ column:"date", direction:"desc" });
+  const [sourceEditorOpen, setSourceEditorOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const pairAudio = useRef<{ source:HTMLAudioElement; candidate:HTMLAudioElement } | null>(null);
   const previewAudio = useRef<HTMLAudioElement | null>(null);
@@ -128,7 +141,7 @@ export default function Home() {
     setPlaying(false); setPreviewingId(null);
   };
 
-  const navigate = (next:View) => { stopAllAudio(); setAudition(null); setView(next); };
+  const navigate = (next:View) => { stopAllAudio(); setAudition(null); setConnectionsOpen(false); setAdvancedOpen(false); setSourceEditorOpen(false); setView(next); };
   const notify = (message:string) => { setToast(message); window.setTimeout(() => setToast(null), 2400); };
 
   useEffect(() => {
@@ -141,6 +154,15 @@ export default function Home() {
   }, []);
 
   useEffect(() => () => stopAllAudio(), []);
+
+  useEffect(() => {
+    if (!resizingConnections) return;
+    const resize = (event:PointerEvent) => setConnectionsWidth(Math.max(420, Math.min(760, window.innerWidth - event.clientX)));
+    const finish = () => setResizingConnections(false);
+    window.addEventListener("pointermove", resize);
+    window.addEventListener("pointerup", finish, { once:true });
+    return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); };
+  }, [resizingConnections]);
 
   const visibleFragments = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -166,6 +188,28 @@ export default function Home() {
   const changeSort = (column:SortColumn) => setSort((current) => ({
     column,
     direction:current.column === column ? (current.direction === "asc" ? "desc" : "asc") : (["date","signal","tempo","takes"].includes(column) ? "desc" : "asc"),
+  }));
+
+  const visibleSources = useMemo(() => {
+    const normalized = sourceQuery.trim().toLowerCase();
+    return sources
+      .filter((source) => !normalized || `${source.name} ${source.date} ${source.format} ${source.device}`.toLowerCase().includes(normalized))
+      .sort((a,b) => {
+        let comparison = 0;
+        if (sourceSort.column === "name") comparison = a.name.localeCompare(b.name);
+        if (sourceSort.column === "signal") comparison = a.waveform.reduce((sum,value) => sum + value,0) - b.waveform.reduce((sum,value) => sum + value,0);
+        if (sourceSort.column === "date") comparison = Date.parse(a.date) - Date.parse(b.date);
+        if (sourceSort.column === "duration") comparison = a.duration - b.duration;
+        if (sourceSort.column === "format") comparison = a.format.localeCompare(b.format);
+        if (sourceSort.column === "device") comparison = a.device.localeCompare(b.device);
+        if (sourceSort.column === "fragments") comparison = a.fragmentIds.length - b.fragmentIds.length;
+        return sourceSort.direction === "asc" ? comparison : -comparison;
+      });
+  }, [sources, sourceQuery, sourceSort]);
+
+  const changeSourceSort = (column:SourceSortColumn) => setSourceSort((current) => ({
+    column,
+    direction:current.column === column ? (current.direction === "asc" ? "desc" : "asc") : (["date","signal","duration","fragments"].includes(column) ? "desc" : "asc"),
   }));
 
   const connections = useMemo<ScoredRelationship[]>(() => {
@@ -232,10 +276,11 @@ export default function Home() {
   const resetDemo = () => {
     stopAllAudio(); setView("library"); setSelectedId("f01"); setQuery(""); setRoleFilter("All"); setSort({ column:"date", direction:"desc" });
     setContext("whole"); setRangeMode("reasonable"); setWeights({ ...DEFAULT_WEIGHTS }); setArchived(new Set()); setDuplicateExclusions(new Set());
-    setDuplicateGroup(null); setAudition(null); setSources(SOURCE_FILES.map((source) => ({ ...source }))); setSelectedSourceId("s1"); notify("Demo restored to its opening state.");
+    setDuplicateGroup(null); setAudition(null); setConnectionsOpen(false); setAdvancedOpen(false); setConnectionsWidth(520); setSources(SOURCE_FILES.map((source) => ({ ...source }))); setSelectedSourceId("s1"); setSourceQuery(""); setSourceSort({ column:"date", direction:"desc" }); setSourceEditorOpen(false); notify("Demo restored to its opening state.");
   };
   const updateSource = (patch:Partial<SourceFile>) => setSources((current) => current.map((source) => source.id === selectedSourceId ? { ...source, ...patch } : source));
-  const openFragment = (id:string) => { setSelectedId(id); navigate("library"); };
+  const openFragment = (id:string) => { stopAllAudio(); setAudition(null); setSelectedId(id); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
+  const closeConnections = () => { stopAllAudio(); setAudition(null); setConnectionsOpen(false); setAdvancedOpen(false); };
 
   return (
     <main className="app-shell">
@@ -243,7 +288,7 @@ export default function Home() {
         <button className="brand" onClick={() => navigate("library")} aria-label="Fragments home"><span className="brand-mark">F</span><span>Fragments</span></button>
         <nav aria-label="Primary">
           <button className={view === "library" ? "nav-active" : ""} onClick={() => navigate("library")}>Library</button>
-          <button className={view === "source" ? "nav-active" : ""} onClick={() => navigate("source")}>Source material</button>
+          <button className={view === "source" ? "nav-active" : ""} onClick={() => navigate("source")}>Sources</button>
           <button className={view === "map" ? "nav-active" : ""} onClick={() => navigate("map")}>Map</button>
           <button className={view === "archive" ? "nav-active" : ""} onClick={() => navigate("archive")}>Archive {archived.size > 0 && <b>{archived.size}</b>}</button>
         </nav>
@@ -251,24 +296,21 @@ export default function Home() {
         <button className="reset" onClick={resetDemo}>↺ Reset demo</button>
       </header>
 
-      {view === "library" && <section className="workspace">
+      {view === "library" && <section className={`workspace ${connectionsOpen ? "connections-open" : ""} ${resizingConnections ? "resizing" : ""}`} style={{ "--connections-width":`${connectionsWidth}px` } as CSSProperties}>
         <div className="library">
-          <div className="library-head">
-            <div><p className="eyebrow">Musical memory</p><h1>Your fragments</h1><p>{visibleFragments.length} surfaced from ten years of unfinished ideas</p></div>
-            <label className="search"><span aria-hidden="true">⌕</span><input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search names, keys, moods…" aria-label="Search fragments" /><kbd>⌘ K</kbd></label>
-          </div>
+          <div className="panel-titlebar"><h1>Fragments</h1></div>
           <div className="toolbar">
             <div className="filter-row" aria-label="Filter by musical role">{ROLES.map((role) => <button key={role} className={roleFilter === role ? "filter-active" : ""} onClick={() => setRoleFilter(role)}>{role === "All" ? "All fragments" : role}</button>)}</div>
-            <span className="table-density-note">{visibleFragments.length} rows · select a column to sort</span>
+            <label className="search"><span aria-hidden="true">⌕</span><input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" aria-label="Search fragments" /><kbd>⌘ K</kbd></label>
           </div>
           <div className="table" role="table" aria-label="Fragment library">
             <div className="table-row table-header" role="row">{LIBRARY_COLUMNS.map((column) => <span role="columnheader" aria-sort={sort.column === column.id ? (sort.direction === "asc" ? "ascending" : "descending") : "none"} key={column.id}><button onClick={() => changeSort(column.id)} aria-label={`Sort by ${column.label}${sort.column === column.id ? `, currently ${sort.direction === "asc" ? "ascending" : "descending"}` : ""}`}>{column.label}<i aria-hidden="true">{sort.column === column.id ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}</i></button></span>)}</div>
             {visibleFragments.map((fragment) => {
               const relatedTakes = fragment.duplicateGroup ? FRAGMENTS.filter((item) => item.duplicateGroup === fragment.duplicateGroup && item.id !== fragment.id && !archived.has(item.id) && !duplicateExclusions.has(item.id)).length : 0;
-              return <div key={fragment.id} className={`table-row fragment-row ${selectedId === fragment.id ? "selected" : ""}`} role="row" tabIndex={0} onClick={() => setSelectedId(fragment.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedId(fragment.id); }}>
+              return <div key={fragment.id} className={`table-row fragment-row ${connectionsOpen && selectedId === fragment.id ? "selected" : ""}`} role="row" tabIndex={0} onClick={() => openFragment(fragment.id)} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openFragment(fragment.id); } }}>
                 <span className="track-name"><b>{fragment.name}</b></span>
                 <span className="source-cell" title={fragment.source}>{fragment.source}</span>
-                <Waveform values={fragment.waveform} active={selectedId === fragment.id} />
+                <button className={`wave-play ${previewingId === fragment.id ? "playing" : ""}`} onClick={(event) => { event.stopPropagation(); previewSingle(fragment); }} aria-label={`${previewingId === fragment.id ? "Stop" : "Play"} ${fragment.name}`}><Waveform values={fragment.waveform} active={previewingId === fragment.id} /></button>
                 <span className="date-cell">{fragment.dateLabel}</span>
                 <span className="duration-cell">{fragment.duration}</span>
                 <span className="key-cell" title={fragment.alternateKeys.length ? `Also: ${fragment.alternateKeys.join(", ")}` : fragment.key}>{fragment.key}{fragment.alternateKeys.length > 0 && <small>+{fragment.alternateKeys.length}</small>}</span>
@@ -280,13 +322,20 @@ export default function Home() {
           </div>
         </div>
 
-        <aside className="connections">
-          <div className="panel-kicker"><span className="pulse" /> Connections</div>
-          <h2>What could this become?</h2>
-          <p className="selected-caption">Searching from <strong>{selected.name}</strong></p>
-          <div className="context-switch" aria-label="Search musical object">{CONTEXTS.map((item) => <button key={item.id} className={context === item.id ? "active" : ""} onClick={() => setContext(item.id)}>{item.label}</button>)}</div>
+        {connectionsOpen && <aside className="connections">
+          <div className="panel-resizer" role="separator" aria-label="Resize connections panel" aria-orientation="vertical" aria-valuemin={420} aria-valuemax={760} aria-valuenow={connectionsWidth} tabIndex={0} onPointerDown={(event) => { event.preventDefault(); setResizingConnections(true); }} onDoubleClick={() => setConnectionsWidth(520)} onKeyDown={(event) => { if (event.key === "ArrowLeft") { event.preventDefault(); setConnectionsWidth((width) => Math.min(760,width + 20)); } if (event.key === "ArrowRight") { event.preventDefault(); setConnectionsWidth((width) => Math.max(420,width - 20)); } }}><span /></div>
+          <div className="connections-head"><h2>Connections</h2><div><button className={`advanced-toggle ${advancedOpen ? "active" : ""}`} onClick={() => setAdvancedOpen((current) => !current)} aria-expanded={advancedOpen}>Advanced</button><button className="panel-close" onClick={closeConnections} aria-label="Close connections">×</button></div></div>
+          <p className="selected-caption"><span>From</span><strong>{selected.name}</strong></p>
+          <div className="connection-controls">
+            <div className="context-switch" aria-label="Search musical object">{CONTEXTS.map((item) => <button key={item.id} className={context === item.id ? "active" : ""} onClick={() => setContext(item.id)}>{item.label}</button>)}</div>
+            <div className="range-toggle"><button className={rangeMode === "reasonable" ? "active" : ""} onClick={() => setRangeMode("reasonable")}>Reasonable</button><button className={rangeMode === "experimental" ? "active experimental" : ""} onClick={() => setRangeMode("experimental")}>Experimental</button></div>
+            {advancedOpen && <div className="advanced-popover">
+              <div className="shape-title"><div><span>Weights</span></div><button onClick={() => setWeights({ ...DEFAULT_WEIGHTS })}>Balanced</button></div>
+              <div className="weight-presets"><button onClick={() => setWeights({ rhythm:100,harmony:16,melody:12,timbre:42 })}>Rhythm</button><button onClick={() => setWeights({ rhythm:18,harmony:100,melody:74,timbre:22 })}>Harmony</button></div>
+              {(Object.keys(weights) as (keyof SearchWeights)[]).map((key) => <label className="weight-row" key={key}><span>{key}</span><input type="range" min="0" max="100" value={weights[key]} onChange={(event) => setWeights((current) => ({ ...current, [key]:Number(event.target.value) }))} /><output>{weights[key]}</output></label>)}
+            </div>}
+          </div>
           {selected.objects && context !== "whole" && <div className="object-note"><span>Isolated {context}</span><small>Prepared musical-object view</small></div>}
-          <div className="range-toggle"><button className={rangeMode === "reasonable" ? "active" : ""} onClick={() => setRangeMode("reasonable")}>Reasonable</button><button className={rangeMode === "experimental" ? "active experimental" : ""} onClick={() => setRangeMode("experimental")}>Experimental</button></div>
           <div className="connection-table" role="table" aria-label={`Connections for ${selected.name}`}>
             <div className="connection-row connection-header" role="row"><span>Fit</span><span>Fragment</span><span>Key</span><span>BPM</span><span>Role</span><span>Change</span><span aria-label="Audition" /></div>
             {connections.map((relationship,index) => {
@@ -301,20 +350,27 @@ export default function Home() {
               <button className="audition" onClick={() => { setAudition(relationship); setTransformed(true); }} aria-label={`Audition ${target.name} with ${selected.name}`}>▶</button>
             </div>;
           })}</div>
-          <div className="shape-search">
-            <div className="shape-title"><div><span>Shape the search</span><small>Move toward what matters now</small></div><button onClick={() => setWeights({ ...DEFAULT_WEIGHTS })}>Balanced</button></div>
-            <div className="weight-presets"><button onClick={() => setWeights({ rhythm:100,harmony:16,melody:12,timbre:42 })}>Lean into rhythm</button><button onClick={() => setWeights({ rhythm:18,harmony:100,melody:74,timbre:22 })}>Follow harmony</button></div>
-            {(Object.keys(weights) as (keyof SearchWeights)[]).map((key) => <label className="weight-row" key={key}><span>{key}</span><input type="range" min="0" max="100" value={weights[key]} onChange={(event) => setWeights((current) => ({ ...current, [key]:Number(event.target.value) }))} /><output>{weights[key]}</output></label>)}
-          </div>
-        </aside>
+        </aside>}
       </section>}
 
       {view === "source" && <section className="page-view source-page">
-        <div className="page-heading"><div><p className="eyebrow">Before the fragments</p><h1>Source material</h1><p>Review the original files and adjust where ideas begin and end.</p></div><div className="source-summary"><strong>387</strong><span>recordings<br/>scanned</span><strong>2,418</strong><span>fragments<br/>surfaced</span></div></div>
-        <div className="source-layout">
-          <aside className="source-list"><div className="source-list-head"><span>Original files</span><small>{sources.length} shown</small></div>{sources.map((source) => <button key={source.id} className={selectedSourceId === source.id ? "active" : ""} onClick={() => { stopAllAudio(); setSelectedSourceId(source.id); }}><span className="file-icon">⌁</span><span><b>{source.name}</b><small>{source.date} · {formatSeconds(source.duration)}</small><em>{Math.max(1,Math.round(source.sensitivity / 18))} fragments found</em></span></button>)}</aside>
-          <div className="source-editor">
-            <div className="source-editor-head"><div><p className="eyebrow">Selected recording</p><h2>{selectedSource.name}</h2><p>{selectedSource.format} · {selectedSource.device}</p></div><button className="soft-button" onClick={() => previewSingle(fragmentById(selectedSource.fragmentIds[0]))}>{previewingId === selectedSource.fragmentIds[0] ? "Ⅱ Stop recording" : "▶ Play recording"}</button></div>
+        <div className={`source-workspace ${sourceEditorOpen ? "editor-open" : ""}`}>
+          <div className="sources-panel">
+            <div className="panel-titlebar"><h1>Sources</h1></div>
+            <div className="sources-toolbar"><label className="search"><span aria-hidden="true">⌕</span><input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} placeholder="Search" aria-label="Search sources" /></label></div>
+            <div className="source-table" role="table" aria-label="Source files">
+              <div className="source-table-row source-table-header" role="row">{SOURCE_COLUMNS.map((column) => <span role="columnheader" aria-sort={sourceSort.column === column.id ? (sourceSort.direction === "asc" ? "ascending" : "descending") : "none"} key={column.id}><button onClick={() => changeSourceSort(column.id)}>{column.label}<i aria-hidden="true">{sourceSort.column === column.id ? (sourceSort.direction === "asc" ? "↑" : "↓") : "↕"}</i></button></span>)}</div>
+              {visibleSources.map((source) => { const auditionId = source.fragmentIds[0]; return <div className={`source-table-row ${sourceEditorOpen && selectedSourceId === source.id ? "selected" : ""}`} role="row" tabIndex={0} key={source.id} onClick={() => { stopAllAudio(); setSelectedSourceId(source.id); setSourceEditorOpen(true); }} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); stopAllAudio(); setSelectedSourceId(source.id); setSourceEditorOpen(true); } }}>
+                <span className="source-name-cell" title={source.name}><b>{source.name}</b></span>
+                <button className={`wave-play ${previewingId === auditionId ? "playing" : ""}`} onClick={(event) => { event.stopPropagation(); previewSingle(fragmentById(auditionId)); }} aria-label={`${previewingId === auditionId ? "Stop" : "Play"} ${source.name}`}><Waveform values={source.waveform.slice(0,36)} active={previewingId === auditionId} /></button>
+                <span>{source.date}</span><span>{formatSeconds(source.duration)}</span><span title={source.format}>{source.format.split(" · ")[0]}</span><span title={source.device}>{source.device}</span><span>{source.fragmentIds.length}</span>
+              </div>; })}
+              {visibleSources.length === 0 && <div className="empty-inline">No sources match that search.</div>}
+            </div>
+          </div>
+          {sourceEditorOpen && <aside className="source-editor">
+            <div className="source-editor-title"><h2>Fragmentation</h2><button className="panel-close" onClick={() => { stopAllAudio(); setSourceEditorOpen(false); }} aria-label="Close fragmentation panel">×</button></div>
+            <div className="source-editor-head"><div><h3>{selectedSource.name}</h3><p>{selectedSource.format} · {selectedSource.device}</p></div><button className="soft-button" onClick={() => previewSingle(fragmentById(selectedSource.fragmentIds[0]))}>{previewingId === selectedSource.fragmentIds[0] ? "Ⅱ Stop" : "▶ Play"}</button></div>
             <div className="timeline-card">
               <div className="timeline-labels"><span>0:00</span><span>{formatSeconds(selectedSource.duration / 2)}</span><span>{formatSeconds(selectedSource.duration)}</span></div>
               <div className="source-wave-wrap"><Waveform values={selectedSource.waveform} large /><div className="selection-region" style={{ left:`${selectedSource.start / selectedSource.duration * 100}%`, width:`${(selectedSource.end - selectedSource.start) / selectedSource.duration * 100}%` }}><i className="handle start"/><i className="handle end"/></div>{Array.from({ length:Math.max(1,Math.round(selectedSource.sensitivity / 18)) }).map((_,index) => <i className="boundary" key={index} style={{ left:`${(index + 1) * 100 / (Math.max(1,Math.round(selectedSource.sensitivity / 18)) + 1)}%` }} />)}</div>
@@ -328,12 +384,12 @@ export default function Home() {
               <div className="sensitivity-card"><div><p className="eyebrow">Per-file control</p><h3>Fragmentation sensitivity</h3><p>Turn it up to notice smaller gestures. Turn it down to keep longer passages together.</p></div><div className="knob-control"><div className="knob" style={{ "--angle":`${-130 + selectedSource.sensitivity * 2.6}deg` } as CSSProperties}><i /></div><input aria-label="Fragmentation sensitivity" type="range" min="10" max="90" value={selectedSource.sensitivity} onChange={(event) => updateSource({ sensitivity:Number(event.target.value) })}/><strong>{selectedSource.sensitivity < 36 ? "Broad" : selectedSource.sensitivity > 66 ? "Sensitive" : "Balanced"}</strong><small>{Math.max(1,Math.round(selectedSource.sensitivity / 18))} fragments detected</small></div></div>
               <div className="detected-card"><div className="detected-head"><h3>Fragments in this file</h3><button onClick={() => notify("Boundary changes saved for this demo session.")}>Save boundaries</button></div>{selectedSource.fragmentIds.map((id) => { const fragment=fragmentById(id); return <div className="detected-row" key={id}><Waveform values={fragment.waveform.slice(0,18)} /><span><b>{fragment.name}</b><small>{fragment.duration} · {fragment.role}</small></span><button onClick={() => openFragment(id)}>Open →</button></div>; })}</div>
             </div>
-          </div>
+          </aside>}
         </div>
       </section>}
 
       {view === "map" && <section className="page-view map-page">
-        <div className="page-heading map-heading"><div><p className="eyebrow">Connected archive</p><h1>Your musical memory, mapped</h1><p>Clusters are close matches. Amber links cross time through a transformation.</p></div><div className="map-legend"><span><i className="dot violet"/>Direct affinity</span><span><i className="line amber"/>Transformed bridge</span><span><i className="dot lime"/>Selected idea</span></div></div>
+        <div className="panel-titlebar map-heading"><h1>Map</h1><div className="map-legend"><span><i className="dot violet"/>Direct affinity</span><span><i className="line amber"/>Transformed bridge</span><span><i className="dot lime"/>Selected idea</span></div></div>
         <div className="graph-board">
           <div className="cluster-label cluster-one">VOICE & MELODY</div><div className="cluster-label cluster-two">POCKET & RHYTHM</div><div className="cluster-label cluster-three">HARMONIC WORLDS</div>
           {RELATIONSHIPS.slice(0,18).map((relationship) => {
@@ -343,17 +399,16 @@ export default function Home() {
             return <i key={relationship.id} className={`graph-line ${relationship.transformationCost > .1 ? "bridge" : ""}`} style={{ left:`${ax}%`, top:`${ay}%`, width:`${width}%`, transform:`rotate(${angle}deg)` }} />;
           })}
           {FRAGMENTS.slice(0,18).map((fragment,index) => archived.has(fragment.id) ? null : <button key={fragment.id} className={`graph-node role-${fragment.role.toLowerCase()} ${selectedId === fragment.id ? "selected" : ""}`} style={{ left:`${GRAPH_POSITIONS[index][0]}%`, top:`${GRAPH_POSITIONS[index][1]}%` }} onClick={() => openFragment(fragment.id)} aria-label={`Open ${fragment.name}`}><i/><span>{fragment.name}</span><small>{fragment.date.slice(0,4)} · {fragment.role}</small></button>)}
-          <div className="graph-center-copy"><span>10 years</span><strong>One evolving musical memory</strong><small>Select any node to follow its connections</small></div>
         </div>
       </section>}
 
       {view === "archive" && <section className="page-view archive-page">
-        <div className="page-heading"><div><p className="eyebrow">Still yours</p><h1>Archive</h1><p>Hidden from ordinary matching, never deleted.</p></div></div>
+        <div className="panel-titlebar"><h1>Archive</h1></div>
         {archived.size === 0 ? <div className="empty-state"><span>◌</span><h2>Nothing archived yet</h2><p>When you tidy alternate takes, they remain safely recoverable here.</p><button onClick={() => navigate("library")}>Return to library</button></div> : <div className="archive-list">{FRAGMENTS.filter((fragment) => archived.has(fragment.id)).map((fragment) => <div className="archive-row" key={fragment.id}><Waveform values={fragment.waveform}/><span><b>{fragment.name}</b><small>{fragment.source} · {fragment.dateLabel}</small></span><em>{fragment.role}</em><button onClick={() => restoreFragment(fragment.id)}>↟ Restore to matching</button></div>)}</div>}
       </section>}
 
       {audition && auditionTarget && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setAudition(null); stopAllAudio(); } }}><section className="audition-modal" role="dialog" aria-modal="true" aria-label="Audition connection">
-        <header><div><p className="eyebrow">Audition connection</p><h2>Hear what was waiting</h2></div><button className="modal-close" onClick={() => { setAudition(null); stopAllAudio(); }} aria-label="Close audition">×</button></header>
+        <header><h2>Audition</h2><button className="modal-close" onClick={() => { setAudition(null); stopAllAudio(); }} aria-label="Close audition">×</button></header>
         <div className="audition-story"><span>{selected.dateLabel}</span><i>+</i><span>{auditionTarget.dateLabel}</span><strong>{scoreRelationship(audition,weights,context,rangeMode)}% connection</strong></div>
         <div className="compare-toggle"><button className={!transformed ? "active" : ""} onClick={() => setTransformed(false)}>Original relationship</button><button className={transformed ? "active" : ""} onClick={() => setTransformed(true)}>Suggested transformation <TransformChips relationship={audition}/></button></div>
         <div className="track-stack">
@@ -365,7 +420,7 @@ export default function Home() {
       </section></div>}
 
       {duplicateGroup && <div className="modal-backdrop" role="presentation"><section className="duplicate-modal" role="dialog" aria-modal="true" aria-label="Manage related takes">
-        <header><div><p className="eyebrow">Optional tidy-up</p><h2>{selectedDuplicates.length} related takes</h2><p>Fragments noticed these on its own. Keep all of them, or choose what participates in matching.</p></div><button className="modal-close" onClick={() => { setDuplicateGroup(null); stopAllAudio(); }}>×</button></header>
+        <header><h2>Takes</h2><button className="modal-close" onClick={() => { setDuplicateGroup(null); stopAllAudio(); }} aria-label="Close takes">×</button></header>
         <div className="duplicate-list">{selectedDuplicates.map((fragment,index) => <div className={`duplicate-row ${fragment.id === selectedId ? "current" : ""}`} key={fragment.id}><button className="round-play" onClick={() => previewSingle(fragment)}>{previewingId === fragment.id ? "Ⅱ" : "▶"}</button><Waveform values={fragment.waveform} active={previewingId === fragment.id}/><span><b>{fragment.name}</b><small>{fragment.dateLabel} · {fragment.duration} {index === 0 && "· strongest recording"}</small></span><div className="duplicate-actions"><button onClick={() => { setDuplicateExclusions((current) => new Set([...current,fragment.id])); notify("Marked as a separate idea."); }}>Not a duplicate</button><button onClick={() => archiveFragment(fragment.id)}>Archive</button></div><button className="keep-button" onClick={() => keepTake(fragment.id)}>Keep this for matching</button></div>)}</div>
         <footer><span>No cleanup is required. Fragments will keep working either way.</span><button onClick={() => setDuplicateGroup(null)}>Done</button></footer>
       </section></div>}
