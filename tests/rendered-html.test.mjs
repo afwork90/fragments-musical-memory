@@ -44,12 +44,18 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(page, /fragment-lanes/);
   assert.match(page, /edge-magnifier/);
   assert.match(page, /＋ Import/);
+  assert.match(page, /＋ Add fragment/);
+  assert.match(page, /No authored connections for this fragment/);
   assert.match(page, /Keep this for matching/);
+  assert.doesNotMatch(page, /Audition connection|<span>Status<\/span>/);
   assert.match(data, /FragmentRef/);
   assert.match(data, /MatchTolerances/);
   assert.match(data, /sourceId/);
   assert.match(workflow, /Importing.*Segmenting.*Extracting metadata.*Matching.*Ready/s);
   assert.match(workflow, /Play A|\["A","B","A→B","B→A","Together"\]/);
+  assert.match(workflow, /Previous candidate/);
+  assert.match(workflow, /scan-playhead/);
+  assert.doesNotMatch(workflow, /Why it connects|Download always works/);
   assert.match(workflow, /This fragment no longer matches the original search/);
   assert.match(workflow, /Drag into DAW/);
   assert.ok(audioFiles.filter((name) => name.endsWith(".wav")).length >= 40);

@@ -47,6 +47,7 @@ const SOURCE_COLUMNS: { id:SourceSortColumn; label:string }[] = [
 ];
 const RANGE_COLORS = ["#a99cff","#74d8ff","#ffbc65","#c8fa78","#ff849b","#75e2c2"];
 const OPENING_SOURCE_ID = SOURCE_FILES.find((source) => !source.imported)!.id;
+const CONNECTED_FRAGMENT_IDS = new Set(RELATIONSHIPS.flatMap((relationship) => [relationship.source,relationship.target]));
 const GRAPH_POSITIONS = [
   [15,20],[38,16],[64,22],[80,14],[24,42],[49,39],[71,44],[89,36],[12,66],[33,62],[55,66],[76,61],[91,70],[21,84],[44,83],[67,85],[82,88],[54,19],
 ];
@@ -81,30 +82,6 @@ function waveformSlice(values:number[],time:number,duration:number) {
   const start = Math.max(0,center - 5);
   const slice = values.slice(start,Math.min(values.length,center + 6));
   return slice.length > 2 ? slice : values;
-}
-
-function fallbackRelationships(selectedId: string): Relationship[] {
-  const selectedIndex = FRAGMENTS.findIndex((fragment) => fragment.id === selectedId);
-  const authoredTargets = new Set(RELATIONSHIPS.filter((relationship) => relationship.source === selectedId || relationship.target === selectedId).map((relationship) => otherIdFor(relationship, selectedId)));
-  return FRAGMENTS
-    .filter((fragment) => fragment.id !== selectedId && !authoredTargets.has(fragment.id))
-    .slice(0, 10)
-    .map((fragment, index) => {
-      const targetIndex = FRAGMENTS.findIndex((item) => item.id === fragment.id);
-      const seed = (selectedIndex + 4) * (targetIndex + 7) + index * 13;
-      const metric = (offset: number) => .38 + ((seed * offset + offset * 17) % 52) / 100;
-      return {
-        id: `fallback-${selectedId}-${fragment.id}`,
-        source: selectedId,
-        target: fragment.id,
-        base: metric(3),
-        metrics: { rhythm:metric(5), harmony:metric(7), melody:metric(11), timbre:metric(13), tempo:metric(17), pitch:metric(19), brightness:metric(23) },
-        transformationCost: index > 6 ? .18 : .04 + (index % 3) * .02,
-        reason: ["A shared contour appears beneath the recording texture.", "The accents leave complementary space.", "An alternate key lens reveals a useful overlap."][index % 3],
-        transform: { labels:index % 3 === 0 ? ["As recorded"] : index % 3 === 1 ? ["+2 BPM"] : ["−1 st"], asset:fragment.audio },
-        experimental: index > 6,
-      };
-    });
 }
 
 function scoreRelationship(relationship: Relationship, weights: SearchWeights, context: SearchContext, mode: RangeMode) {
@@ -154,12 +131,6 @@ export default function Home() {
   const [archived, setArchived] = useState<Set<string>>(new Set());
   const [duplicateExclusions, setDuplicateExclusions] = useState<Set<string>>(new Set());
   const [duplicateGroup, setDuplicateGroup] = useState<string | null>(null);
-  const [audition, setAudition] = useState<Relationship | null>(null);
-  const [transformed, setTransformed] = useState(true);
-  const [playing, setPlaying] = useState(false);
-  const [sourceVolume, setSourceVolume] = useState(72);
-  const [candidateVolume, setCandidateVolume] = useState(78);
-  const [muted, setMuted] = useState({ source:false, candidate:false });
   const [sources, setSources] = useState<SourceFile[]>(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));
   const [selectedSourceId, setSelectedSourceId] = useState(OPENING_SOURCE_ID);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
@@ -183,9 +154,9 @@ export default function Home() {
   const [relationshipStatuses,setRelationshipStatuses] = useState<Record<string,RelationshipStatus>>({});
   const returnScroll = useRef(0);
   const searchRef = useRef<HTMLInputElement>(null);
-  const pairAudio = useRef<{ source:HTMLAudioElement; candidate:HTMLAudioElement } | null>(null);
   const previewAudio = useRef<HTMLAudioElement | null>(null);
   const sourceWaveRef = useRef<HTMLDivElement>(null);
+  const sensitivityDrag = useRef<{ y:number; value:number } | null>(null);
 
   const activeFragments = useMemo(() => FRAGMENTS.filter((fragment) => importComplete || !IMPORTED_FRAGMENT_IDS.includes(fragment.id)).map((fragment) => ({ ...fragment,...fragmentOverrides[fragment.id] })),[importComplete,fragmentOverrides]);
   const activeFragmentById = (id:string) => activeFragments.find((fragment) => fragment.id === id) ?? ({ ...fragmentById(id),...fragmentOverrides[id] });
@@ -194,18 +165,17 @@ export default function Home() {
   const selectedRanges = sourceRanges[selectedSourceId] ?? [];
 
   const stopAllAudio = () => {
-    if (pairAudio.current) { pairAudio.current.source.pause(); pairAudio.current.candidate.pause(); pairAudio.current = null; }
     if (previewAudio.current) { previewAudio.current.pause(); previewAudio.current = null; }
-    setPlaying(false); setPreviewingId(null);
+    setPreviewingId(null);
   };
 
-  const navigate = (next:View) => { stopAllAudio(); setAudition(null); setConnectionsOpen(false); setAdvancedOpen(false); setSourceEditorOpen(false); setView(next); };
+  const navigate = (next:View) => { stopAllAudio(); setConnectionsOpen(false); setAdvancedOpen(false); setSourceEditorOpen(false); setView(next); };
   const notify = (message:string) => { setToast(message); window.setTimeout(() => setToast(null), 2400); };
 
   useEffect(() => {
     const handler = (event:KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); navigate("library"); window.setTimeout(() => searchRef.current?.focus(), 0); }
-      if (event.key === "Escape") { setAudition(null); setDuplicateGroup(null); stopAllAudio(); }
+      if (event.key === "Escape") { setDuplicateGroup(null); stopAllAudio(); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -322,8 +292,29 @@ export default function Home() {
     });
   };
 
+  const beginSensitivityDrag = (event:ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    sensitivityDrag.current={ y:event.clientY,value:selectedSource.sensitivity };
+  };
+  const moveSensitivityDrag = (event:ReactPointerEvent<HTMLButtonElement>) => {
+    if (!sensitivityDrag.current) return;
+    updateSourceSensitivity(Math.max(10,Math.min(90,Math.round(sensitivityDrag.current.value + (sensitivityDrag.current.y - event.clientY) * .75))));
+  };
+  const finishSensitivityDrag = (event:ReactPointerEvent<HTMLButtonElement>) => {
+    sensitivityDrag.current=null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const addManualFragment = () => {
+    const index=selectedRanges.length;
+    const next={ ...rangeForIndex(selectedSource,index),id:`${selectedSource.id}-manual-${Date.now()}` };
+    setSourceRanges((current) => ({ ...current,[selectedSource.id]:[...(current[selectedSource.id] ?? []),next] }));
+    notify(`Fragment ${index + 1} added. Adjust its range above.`);
+  };
+
   const connections = useMemo<ScoredRelationship[]>(() => {
-    const sourceRelationships = [...RELATIONSHIPS.filter((relationship) => relationship.source === selectedId || relationship.target === selectedId), ...fallbackRelationships(selectedId)];
+    const sourceRelationships = RELATIONSHIPS.filter((relationship) => relationship.source === selectedId || relationship.target === selectedId);
     const seen = new Set<string>();
     return sourceRelationships
       .map((relationship) => {
@@ -361,28 +352,6 @@ export default function Home() {
     audio.play().catch(() => notify("Playback needs one more click in this browser."));
   };
 
-  const auditionTarget = audition ? activeFragmentById(otherIdFor(audition, selectedId)) : null;
-  const sourceAsset = selected.objects?.[context] ?? selected.audio;
-  const candidateAsset = audition && auditionTarget ? (transformed && audition.source === selectedId ? audition.transform?.asset : auditionTarget.objects?.[context] ?? auditionTarget.audio) : "";
-
-  const togglePairPlayback = () => {
-    if (!audition || !auditionTarget) return;
-    if (playing && pairAudio.current) { pairAudio.current.source.pause(); pairAudio.current.candidate.pause(); setPlaying(false); return; }
-    if (!pairAudio.current) {
-      const source = new Audio(sourceAsset); const candidate = new Audio(candidateAsset);
-      source.loop = true; candidate.loop = true; pairAudio.current = { source, candidate };
-    }
-    const pair = pairAudio.current; pair.source.currentTime = 0; pair.candidate.currentTime = 0;
-    pair.source.volume = muted.source ? 0 : sourceVolume / 100; pair.candidate.volume = muted.candidate ? 0 : candidateVolume / 100;
-    Promise.all([pair.source.play(), pair.candidate.play()]).then(() => setPlaying(true)).catch(() => notify("Playback needs one more click in this browser."));
-  };
-
-  useEffect(() => {
-    if (!pairAudio.current) return;
-    pairAudio.current.source.volume = muted.source ? 0 : sourceVolume / 100;
-    pairAudio.current.candidate.volume = muted.candidate ? 0 : candidateVolume / 100;
-  }, [sourceVolume, candidateVolume, muted]);
-
   const archiveFragment = (id:string) => {
     stopAllAudio(); setArchived((current) => new Set([...current, id]));
     if (id === selectedId) setSelectedId("f01");
@@ -398,10 +367,11 @@ export default function Home() {
   const resetDemo = () => {
     stopAllAudio(); setView("library"); setSelectedId("f02"); setQuery(""); setRoleFilter("All"); setSort({ column:"date", direction:"desc" });
     setContext("whole"); setRangeMode("reasonable"); setWeights({ ...DEFAULT_WEIGHTS }); setTolerances({ ...DEFAULT_TOLERANCES });setArchived(new Set()); setDuplicateExclusions(new Set());
-    setDuplicateGroup(null); setAudition(null); setConnectionsOpen(false); setAdvancedOpen(false); setConnectionsWidth(520); setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source }))); setSourceRanges(initialSourceRanges()); setSelectedSourceId(OPENING_SOURCE_ID); setSourceQuery(""); setSourceSort({ column:"date", direction:"desc" }); setSourceEditorOpen(false); setDraggedEdge(null); setMagnifier(null);setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setExportRelationship(null);setRelationshipStatuses({}); notify("Demo restored to 24 fragments before import.");
+    setDuplicateGroup(null); setConnectionsOpen(false); setAdvancedOpen(false); setConnectionsWidth(520); setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source }))); setSourceRanges(initialSourceRanges()); setSelectedSourceId(OPENING_SOURCE_ID); setSourceQuery(""); setSourceSort({ column:"date", direction:"desc" }); setSourceEditorOpen(false); setDraggedEdge(null); setMagnifier(null);setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setExportRelationship(null);setRelationshipStatuses({}); notify("Demo restored to 24 fragments before import.");
   };
-  const openFragment = (id:string) => { stopAllAudio(); setAudition(null); setSelectedId(id); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
-  const closeConnections = () => { stopAllAudio(); setAudition(null); setConnectionsOpen(false); setAdvancedOpen(false); };
+  const openFragment = (id:string) => { stopAllAudio(); setSelectedId(id); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
+  const closeConnections = () => { stopAllAudio(); setConnectionsOpen(false); setAdvancedOpen(false); };
+  const editSourceForFragment = (id:string) => { const fragment=activeFragmentById(id);stopAllAudio();setSelectedSourceId(fragment.sourceId);setSourceEditorOpen(true);setConnectionsOpen(false);setAdvancedOpen(false);setView("source"); };
   const completeImport = () => {
     setImportComplete(true);setImportOpen(false);setSources(SOURCE_FILES.map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(STAGED_SOURCE_ID);
     setView("library");setQuery("Balcony");setSelectedId("f01");setConnectionsOpen(false);notify("4 fragment references added. Select one to find connections.");
@@ -443,7 +413,7 @@ export default function Home() {
             <div className="table-row table-header" role="row">{LIBRARY_COLUMNS.map((column) => <span role="columnheader" aria-sort={sort.column === column.id ? (sort.direction === "asc" ? "ascending" : "descending") : "none"} key={column.id}><button onClick={() => changeSort(column.id)} aria-label={`Sort by ${column.label}${sort.column === column.id ? `, currently ${sort.direction === "asc" ? "ascending" : "descending"}` : ""}`}>{column.label}<i aria-hidden="true">{sort.column === column.id ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}</i></button></span>)}</div>
             {visibleFragments.map((fragment) => {
               const relatedTakes = fragment.duplicateGroup ? FRAGMENTS.filter((item) => item.duplicateGroup === fragment.duplicateGroup && item.id !== fragment.id && !archived.has(item.id) && !duplicateExclusions.has(item.id)).length : 0;
-              return <div key={fragment.id} className={`table-row fragment-row ${connectionsOpen && selectedId === fragment.id ? "selected" : ""}`} role="row" tabIndex={0} onClick={() => openFragment(fragment.id)} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openFragment(fragment.id); } }}>
+              return <div key={fragment.id} className={`table-row fragment-row ${connectionsOpen && selectedId === fragment.id ? "selected" : ""} ${CONNECTED_FRAGMENT_IDS.has(fragment.id) ? "" : "no-connections"}`} role="row" tabIndex={0} onClick={() => openFragment(fragment.id)} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openFragment(fragment.id); } }}>
                 <span className="track-name"><b>{fragment.name}</b></span>
                 <span className="source-cell" title={sourceNameFor(fragment)}>{sourceNameFor(fragment)}</span>
                 <button className={`wave-play ${previewingId === fragment.id ? "playing" : ""}`} onClick={(event) => { event.stopPropagation(); previewSingle(fragment); }} aria-label={`${previewingId === fragment.id ? "Stop" : "Play"} ${fragment.name}`}><Waveform values={fragment.waveform} active={previewingId === fragment.id} /></button>
@@ -463,7 +433,7 @@ export default function Home() {
         {connectionsOpen && <aside className="connections">
           <button type="button" className="panel-resizer" role="slider" aria-label="Resize connections panel" aria-orientation="vertical" aria-valuemin={420} aria-valuemax={760} aria-valuenow={connectionsWidth} onPointerDown={(event) => { event.preventDefault(); setResizingConnections(true); }} onDoubleClick={() => setConnectionsWidth(520)} onKeyDown={(event) => { if (event.key === "ArrowLeft") { event.preventDefault(); setConnectionsWidth((width) => Math.min(760,width + 20)); } if (event.key === "ArrowRight") { event.preventDefault(); setConnectionsWidth((width) => Math.max(420,width - 20)); } }}><span /></button>
           <div className="connections-head"><h2>Connections</h2><div><button className={`advanced-toggle ${advancedOpen ? "active" : ""}`} onClick={() => setAdvancedOpen((current) => !current)} aria-expanded={advancedOpen}>Advanced</button><button className="panel-close" onClick={closeConnections} aria-label="Close connections">×</button></div></div>
-          <p className="selected-caption"><span>From</span><strong>{selected.name}</strong></p>
+          <p className="selected-caption"><span>From</span><strong>{selected.name}</strong><button onClick={() => editSourceForFragment(selected.id)}>Edit source</button></p>
           <div className="connection-controls">
             <div className="context-switch" aria-label="Search musical object">{CONTEXTS.map((item) => <button key={item.id} className={context === item.id ? "active" : ""} onClick={() => { stopAllAudio();setContext(item.id); }}>{item.label}</button>)}</div>
             {advancedOpen && <div className="advanced-popover">
@@ -476,10 +446,10 @@ export default function Home() {
           </div>
           {selected.objects && context !== "whole" && <div className="object-note"><span>Isolated {context}</span><small>Prepared musical-object view</small></div>}
           <div className="connection-table" role="table" aria-label={`Connections for ${selected.name}`}>
-            <div className="connection-row connection-header" role="row"><span>Fit</span><span>Fragment</span><span>Signal</span><span>Key</span><span>BPM</span><span>Role</span><span>Change</span><span>Status</span><span /></div>
+            <div className="connection-row connection-header" role="row"><span>Fit</span><span>Fragment</span><span>Signal</span><span>Key</span><span>BPM</span><span>Role</span><span>Change</span><span>Actions</span></div>
             {connections.map((relationship,index) => {
-            const target = activeFragmentById(relationship.otherId);const relationshipStatus=relationshipStatuses[relationship.id];
-            return <div className={`connection-row ${index === 0 ? "featured" : ""}`} role="button" aria-label={`Open comparison with ${target.name}`} tabIndex={0} key={relationship.id} onClick={() => { stopAllAudio();setAudition(relationship);setTransformed(true);markRelationship(relationship,relationshipStatus ?? "auditioned"); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault();stopAllAudio();setAudition(relationship);setTransformed(true); } }}>
+            const target = activeFragmentById(relationship.otherId);
+            return <div className={`connection-row ${index === 0 ? "featured" : ""}`} role="row" key={relationship.id}>
               <span className="connection-fit"><strong>{relationship.score}</strong><small>%</small></span>
               <span className="connection-name">{target.id === "f02" && selectedId === "f01" && <i>Rediscovered · 2018</i>}<b>{target.name}</b><small title={relationship.reason}>{relationship.reason}</small></span>
               <button className={`wave-play connection-wave ${previewingId === target.id ? "playing" : ""}`} onClick={(event) => { event.stopPropagation();previewSingle(target);markRelationship(relationship,"auditioned"); }} aria-label={`${previewingId === target.id ? "Stop" : "Play"} ${target.name}`}><Waveform values={target.waveform} active={previewingId === target.id}/></button>
@@ -487,18 +457,17 @@ export default function Home() {
               <span className="connection-tempo">{target.bpm}</span>
               <span className="connection-role">{target.role}</span>
               <span className="connection-change"><TransformChips relationship={relationship} /></span>
-              <span>{relationshipStatus && <em className={`relationship-badge ${relationshipStatus}`}>{relationshipStatus}</em>}</span>
-              <button className="combine-button" onClick={(event) => { event.stopPropagation();openCombine(relationship); }} aria-label={`Combine ${target.name} with ${selected.name}`}>Combine</button>
+              <span className="connection-actions"><button className="connection-edit-button" onClick={() => editSourceForFragment(target.id)} aria-label={`Edit source for ${target.name}`}>Edit source</button><button className="combine-button" onClick={() => openCombine(relationship)} aria-label={`Combine ${target.name} with ${selected.name}`}>Combine</button></span>
             </div>;
-          })}</div>
+          })}{connections.length === 0 && <div className="connection-empty">No authored connections for this fragment.</div>}</div>
         </aside>}
       </section>}
 
       {!combineCandidates && view === "source" && <section className="page-view source-page">
         <div className={`source-workspace ${sourceEditorOpen ? "editor-open" : ""}`}>
           <div className="sources-panel">
-            <div className="panel-titlebar"><h1>Sources</h1><button className="import-button" onClick={() => importComplete ? notify("The staged recording is already imported. Reset to replay it.") : setImportOpen(true)}>{importComplete ? "✓ Imported" : "＋ Import"}</button></div>
-            <div className="sources-toolbar"><label className="search"><span aria-hidden="true">⌕</span><input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} placeholder="Search" aria-label="Search sources" /></label></div>
+            <div className="panel-titlebar"><h1>Sources</h1></div>
+            <div className="sources-toolbar"><button className="import-button" onClick={() => importComplete ? notify("The staged recording is already imported. Reset to replay it.") : setImportOpen(true)}>{importComplete ? "✓ Imported" : "＋ Import"}</button><label className="search"><span aria-hidden="true">⌕</span><input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} placeholder="Search" aria-label="Search sources" /></label></div>
             <div className="source-table" role="table" aria-label="Source files">
               <div className="source-table-row source-table-header" role="row">{SOURCE_COLUMNS.map((column) => <span role="columnheader" aria-sort={sourceSort.column === column.id ? (sourceSort.direction === "asc" ? "ascending" : "descending") : "none"} key={column.id}><button onClick={() => changeSourceSort(column.id)}>{column.label}<i aria-hidden="true">{sourceSort.column === column.id ? (sourceSort.direction === "asc" ? "↑" : "↓") : "↕"}</i></button></span>)}</div>
               {visibleSources.map((source) => { const auditionId = source.fragmentIds[0]; return <div className={`source-table-row ${sourceEditorOpen && selectedSourceId === source.id ? "selected" : ""}`} role="row" tabIndex={0} key={source.id} onClick={() => { stopAllAudio(); setSelectedSourceId(source.id); setSourceEditorOpen(true); }} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); stopAllAudio(); setSelectedSourceId(source.id); setSourceEditorOpen(true); } }}>
@@ -513,13 +482,13 @@ export default function Home() {
             <div className="source-editor-title"><h2>Fragmentation</h2><button className="panel-close" onClick={() => { stopAllAudio(); setSourceEditorOpen(false); }} aria-label="Close fragmentation panel">×</button></div>
             <div className="source-editor-head"><div><h3>{selectedSource.name}</h3><p>{selectedSource.format} · {selectedSource.device}</p></div><button className="soft-button" onClick={() => previewSingle(fragmentById(selectedSource.fragmentIds[0]))}>{previewingId === selectedSource.fragmentIds[0] ? "Ⅱ Stop" : "▶ Play"}</button></div>
             <div className="timeline-card">
-              <div className="fragment-lanes" style={{ height:`${selectedRanges.length * 23 + 4}px` }}>{selectedRanges.map((range,index) => <div className="fragment-lane" key={range.id} style={{ top:`${index * 23}px`,"--fragment-color":range.color } as CSSProperties}>
+              <div className="fragment-lanes-scroll"><div className="fragment-lanes" style={{ height:`${selectedRanges.length * 23 + 4}px` }}>{selectedRanges.map((range,index) => <div className="fragment-lane" key={range.id} style={{ top:`${index * 23}px`,"--fragment-color":range.color } as CSSProperties}>
                 <div className="fragment-bar" style={{ left:`${range.start / selectedSource.duration * 100}%`,width:`${(range.end - range.start) / selectedSource.duration * 100}%` }}>
                   <button className="range-handle start" onPointerDown={(event) => beginRangeDrag(event,range,"start")} onKeyDown={(event) => { const step=event.shiftKey ? 1 : .25; if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); updateRangeEdge(selectedSourceId,range.id,"start",range.start + (event.key === "ArrowLeft" ? -step : step)); } }} aria-label={`Adjust start of fragment ${index + 1}`} />
                   <span>F{String(index + 1).padStart(2,"0")} · {formatSeconds(range.start)}–{formatSeconds(range.end)}</span>
                   <button className="range-handle end" onPointerDown={(event) => beginRangeDrag(event,range,"end")} onKeyDown={(event) => { const step=event.shiftKey ? 1 : .25; if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); updateRangeEdge(selectedSourceId,range.id,"end",range.end + (event.key === "ArrowLeft" ? -step : step)); } }} aria-label={`Adjust end of fragment ${index + 1}`} />
                 </div>
-              </div>)}</div>
+              </div>)}</div></div>
               <div className="timeline-labels"><span>0:00</span><span>{formatSeconds(selectedSource.duration / 2)}</span><span>{formatSeconds(selectedSource.duration)}</span></div>
               <div className="continuous-wave-wrap" ref={sourceWaveRef}>
                 <ContinuousWaveform values={selectedSource.waveform} />
@@ -529,8 +498,8 @@ export default function Home() {
               <div className="fragment-summary"><strong>{selectedRanges.length} fragments</strong><span>Drag any colored bar edge to trim · Shift + arrow for 1 second</span></div>
             </div>
             <div className="source-lower">
-              <div className="sensitivity-card"><div><h3>Sensitivity</h3><p>Higher sensitivity surfaces shorter gestures and adds fragment ranges.</p></div><div className="knob-control"><div className="knob" style={{ "--angle":`${-130 + selectedSource.sensitivity * 2.6}deg` } as CSSProperties}><i /></div><input aria-label="Fragmentation sensitivity" type="range" min="10" max="90" value={selectedSource.sensitivity} onChange={(event) => updateSourceSensitivity(Number(event.target.value))}/><strong>{selectedSource.sensitivity < 36 ? "Broad" : selectedSource.sensitivity > 66 ? "Sensitive" : "Balanced"}</strong><small>{selectedRanges.length} fragments detected</small></div></div>
-              <div className="detected-card"><div className="detected-head"><h3>Fragments</h3><button onClick={saveSourceBoundaries}>Save boundaries</button></div>{selectedRanges.map((range,index) => { const id=selectedSource.fragmentIds[index]; const fragment=id ? activeFragmentById(id) : null; return <div className="detected-row" key={range.id}><i className="range-swatch" style={{ background:range.color }} /><span><b>{fragment?.name ?? `Untitled fragment ${index + 1}`}</b><small>{formatSeconds(range.start)}–{formatSeconds(range.end)} · {Math.round(range.end - range.start)} sec</small></span>{fragment ? <button onClick={() => openFragment(id)}>Open →</button> : <em>New</em>}</div>; })}</div>
+              <div className="sensitivity-card"><div><h3>Sensitivity</h3><p>Higher sensitivity surfaces shorter gestures and adds fragment ranges.</p></div><div className="knob-control"><button className="knob" role="slider" aria-label="Fragmentation sensitivity" aria-valuemin={10} aria-valuemax={90} aria-valuenow={selectedSource.sensitivity} style={{ "--angle":`${-130 + selectedSource.sensitivity * 2.6}deg` } as CSSProperties} onPointerDown={beginSensitivityDrag} onPointerMove={moveSensitivityDrag} onPointerUp={finishSensitivityDrag} onPointerCancel={finishSensitivityDrag} onKeyDown={(event) => { if (event.key === "ArrowUp" || event.key === "ArrowRight") { event.preventDefault();updateSourceSensitivity(Math.min(90,selectedSource.sensitivity + 4)); } if (event.key === "ArrowDown" || event.key === "ArrowLeft") { event.preventDefault();updateSourceSensitivity(Math.max(10,selectedSource.sensitivity - 4)); } }}><i /></button><strong>{selectedSource.sensitivity < 36 ? "Broad" : selectedSource.sensitivity > 66 ? "Sensitive" : "Balanced"}</strong></div></div>
+              <div className="detected-card"><div className="detected-head"><h3>Fragments</h3><div className="detected-actions"><button onClick={addManualFragment}>＋ Add fragment</button><button onClick={saveSourceBoundaries}>Save boundaries</button></div></div>{selectedRanges.map((range,index) => { const id=selectedSource.fragmentIds[index]; const fragment=id ? activeFragmentById(id) : null; return <div className="detected-row" key={range.id}><i className="range-swatch" style={{ background:range.color }} /><span><b>{fragment?.name ?? `Untitled fragment ${index + 1}`}</b><small>{formatSeconds(range.start)}–{formatSeconds(range.end)} · {Math.round(range.end - range.start)} sec</small></span>{fragment ? <button onClick={() => openFragment(id)}>Open →</button> : <em>New</em>}</div>; })}</div>
             </div>
           </aside>}
         </div>
@@ -554,18 +523,6 @@ export default function Home() {
         <div className="panel-titlebar"><h1>Archive</h1></div>
         {archived.size === 0 ? <div className="empty-state"><span>◌</span><h2>Nothing archived yet</h2><p>When you tidy alternate takes, they remain safely recoverable here.</p><button onClick={() => navigate("library")}>Return to library</button></div> : <div className="archive-list">{activeFragments.filter((fragment) => archived.has(fragment.id)).map((fragment) => <div className="archive-row" key={fragment.id}><Waveform values={fragment.waveform}/><span><b>{fragment.name}</b><small>{sourceNameFor(fragment)} · {fragment.dateLabel}</small></span><em>{fragment.role}</em><button onClick={() => restoreFragment(fragment.id)}>↟ Restore to matching</button></div>)}</div>}
       </section>}
-
-      {audition && auditionTarget && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setAudition(null); stopAllAudio(); } }}><section className="audition-modal" role="dialog" aria-modal="true" aria-label="Audition connection">
-        <header><h2>Audition</h2><button className="modal-close" onClick={() => { setAudition(null); stopAllAudio(); }} aria-label="Close audition">×</button></header>
-        <div className="audition-story"><span>{selected.dateLabel}</span><i>+</i><span>{auditionTarget.dateLabel}</span><strong>{scoreRelationship(audition,weights,context,rangeMode)}% connection</strong></div>
-        <div className="compare-toggle"><button className={!transformed ? "active" : ""} onClick={() => { stopAllAudio();setTransformed(false); }}>Original relationship</button><button className={transformed ? "active" : ""} onClick={() => { stopAllAudio();setTransformed(true); }}>Suggested transformation <TransformChips relationship={audition}/></button></div>
-        <div className="track-stack">
-          <div className="audition-track"><button className={`mute ${muted.source ? "off" : ""}`} onClick={() => setMuted((current) => ({ ...current, source:!current.source }))}>{muted.source ? "○" : "●"}<small>{muted.source ? "Muted" : "On"}</small></button><div className="track-body"><span className="track-label">ANCHOR · {context}</span><h3>{selected.name}</h3><Waveform values={selected.waveform} active={playing}/></div><label className="volume">Mix<input aria-label="Anchor volume" type="range" min="0" max="100" value={sourceVolume} onChange={(event) => setSourceVolume(Number(event.target.value))}/><output>{sourceVolume}</output></label></div>
-          <div className="audition-track candidate"><button className={`mute ${muted.candidate ? "off" : ""}`} onClick={() => setMuted((current) => ({ ...current, candidate:!current.candidate }))}>{muted.candidate ? "○" : "●"}<small>{muted.candidate ? "Muted" : "On"}</small></button><div className="track-body"><span className="track-label">CONNECTION · {transformed ? "TRANSFORMED" : "ORIGINAL"}</span><h3>{auditionTarget.name}</h3><Waveform values={auditionTarget.waveform.slice().reverse()} active={playing}/></div><label className="volume">Mix<input aria-label="Connection volume" type="range" min="0" max="100" value={candidateVolume} onChange={(event) => setCandidateVolume(Number(event.target.value))}/><output>{candidateVolume}</output></label></div>
-        </div>
-        <div className={`transport ${playing ? "playing" : ""}`}><button onClick={togglePairPlayback}>{playing ? "Ⅱ" : "▶"}</button><div><span className="playhead"/><i/><i/><i/><i/></div><time>{playing ? "playing loop" : "0:00 / 0:06"}</time></div>
-        <div className="audition-insight"><span>Why it connects</span><p>{audition.reason}</p>{transformed ? <TransformChips relationship={audition}/> : <small>Original recordings — no transformation applied</small>}</div>
-      </section></div>}
 
       {duplicateGroup && <div className="modal-backdrop" role="presentation"><section className="duplicate-modal" role="dialog" aria-modal="true" aria-label="Manage related takes">
         <header><h2>Takes</h2><button className="modal-close" onClick={() => { setDuplicateGroup(null); stopAllAudio(); }} aria-label="Close takes">×</button></header>
