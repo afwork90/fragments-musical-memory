@@ -22,14 +22,17 @@ test("server-renders the Fragments prototype", async () => {
   assert.match(html, /Fragments/);
   assert.match(html, />Fragments</);
   assert.match(html, /Sources/);
-  assert.match(html, /2,418 ideas indexed/);
+  assert.match(html, /24(?:<!-- -->)? surfaced · 2,418 indexed/);
+  assert.match(html, /Bars\/Beats/);
+  assert.match(html, /Confidence/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 
 test("ships the complete staged musical corpus and interface data", async () => {
-  const [data, page, audioFiles] = await Promise.all([
+  const [data, page, workflow, audioFiles] = await Promise.all([
     readFile(new URL("../app/prototype-data.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/hero-workflow.tsx", import.meta.url), "utf8"),
     readdir(new URL("../public/audio/", import.meta.url)),
   ]);
   assert.match(data, /Balcony guitar, 1:14am/);
@@ -42,6 +45,13 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(page, /edge-magnifier/);
   assert.match(page, /＋ Import/);
   assert.match(page, /Keep this for matching/);
+  assert.match(data, /FragmentRef/);
+  assert.match(data, /MatchTolerances/);
+  assert.match(data, /sourceId/);
+  assert.match(workflow, /Importing.*Segmenting.*Extracting metadata.*Matching.*Ready/s);
+  assert.match(workflow, /Play A|\["A","B","A→B","B→A","Together"\]/);
+  assert.match(workflow, /This fragment no longer matches the original search/);
+  assert.match(workflow, /Drag into DAW/);
   assert.ok(audioFiles.filter((name) => name.endsWith(".wav")).length >= 40);
   await assert.rejects(access(new URL("../app/_sites-preview/", import.meta.url)));
 });
