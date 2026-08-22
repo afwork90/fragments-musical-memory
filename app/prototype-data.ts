@@ -141,7 +141,7 @@ const rawFragments: Omit<Fragment, "waveform" | "audio" | "sourceId" | "start" |
   { id:"f25", name:"Open-tuning sketch", source:"Acoustic repairs.m4a", date:"2018-06-03", dateLabel:"Jun 03, 2018", duration:"0:25", key:"D major", alternateKeys:["G major"], bpm:86, role:"Harmony", roles:["Harmony","Melody"], brightness:66, duplicateGroup:"acoustic-repairs" },
   { id:"f26", name:"Neon arpeggio", source:"Juno fragments.wav", date:"2020-12-29", dateLabel:"Dec 29, 2020", duration:"0:12", key:"F♯ minor", alternateKeys:["A major"], bpm:116, role:"Melody", roles:["Melody","Harmony"], brightness:86, duplicateGroup:"juno-session" },
   { id:"f27", name:"Last-train melody", source:"Subway ideas.m4a", date:"2023-01-18", dateLabel:"Jan 18, 2023", duration:"0:11", key:"Likely E minor", alternateKeys:["G major"], bpm:94, role:"Melody", roles:["Melody"], brightness:59 },
-  { id:"f28", name:"Window-fan drone", source:"Room tone archive.wav", date:"2019-07-28", dateLabel:"Jul 28, 2019", duration:"0:33", key:"A?", alternateKeys:["No stable key"], bpm:64, role:"Texture", roles:["Texture"], brightness:19 },
+  { id:"f28", name:"Balcony guitar — clean pass, take 2", source:"Balcony clean.wav", date:"2026-08-19", dateLabel:"Aug 19, 2026", duration:"0:20", key:"A minor", alternateKeys:["C major"], bpm:92, role:"Harmony", roles:["Harmony","Rhythm"], brightness:54, duplicateGroup:"balcony" },
 ];
 
 const IMPORT_SOURCE_NAME = "Balcony ideas — Aug 20.m4a";
@@ -182,7 +182,7 @@ export const RELATIONSHIPS: Relationship[] = [
   rel("r11","f04","f13",.86,{rhythm:.72,harmony:.95,melody:.78,timbre:.89,tempo:.87,pitch:.82,brightness:.81},.04,"The organ extends the same suspended chord motion.",{pitch:2,labels:["+2 st"],asset:"/audio/f13.wav"}),
   rel("r12","f06","f20",.91,{rhythm:.94,harmony:.89,melody:.66,timbre:.95,tempo:.97,pitch:.99,brightness:.91},.01,"Two bass figures share a patient off-beat resolution.",{bpm:2,labels:["+2 BPM"],asset:"/audio/f20.wav"}),
   rel("r13","f11","f19",.88,{rhythm:.77,harmony:.90,melody:.91,timbre:.96,tempo:.92,pitch:.86,brightness:.93},.04,"The stairwell harmony sits naturally beneath the wordless chorus.",{pitch:-1,labels:["−1 st"],asset:"/audio/f19.wav"}),
-  rel("r14","f12","f28",.90,{rhythm:.58,harmony:.76,melody:.42,timbre:.99,tempo:.71,pitch:.63,brightness:.95},.0,"Room noise and amplifier rain form one continuous atmosphere.",{labels:["As recorded"],asset:"/audio/f28.wav"}),
+  rel("r14","f12","f21",.90,{rhythm:.58,harmony:.76,melody:.42,timbre:.99,tempo:.71,pitch:.63,brightness:.95},.0,"Room noise and rehearsal spill form one continuous atmosphere.",{labels:["As recorded"],asset:"/audio/f21.wav"}),
   rel("r15","f14","f27",.87,{rhythm:.82,harmony:.84,melody:.97,timbre:.73,tempo:.93,pitch:.88,brightness:.76},.06,"The train melody answers the whistle with the same rising interval.",{beatOffset:2,labels:["+2 beats"],asset:"/audio/f27.wav"}),
   rel("r16","f15","f17",.85,{rhythm:.96,harmony:.38,melody:.22,timbre:.88,tempo:.84,pitch:.50,brightness:.92},.05,"Mechanical clicks become a complementary percussion layer.",{bpm:-12,labels:["−12 BPM"],asset:"/audio/f17.wav"}),
   rel("r17","f16","f25",.92,{rhythm:.89,harmony:.98,melody:.91,timbre:.97,tempo:.91,pitch:.99,brightness:.94},.0,"These are different ideas from the same open-tuning session.",{labels:["As recorded"],asset:"/audio/f25.wav"}),

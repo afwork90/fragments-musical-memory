@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_WEIGHTS,
   DEFAULT_TOLERANCES,
@@ -18,7 +18,8 @@ import {
   SearchWeights,
   SourceFile,
 } from "./prototype-data";
-import { CombineCandidate, CombineWorkspace, CorrectionOverlay, ExportSheet, ImportSheet } from "./hero-workflow";
+import { CombineCandidate, CombineWorkspace, ExportSheet, ImportSheet } from "./hero-workflow";
+import { EditableRange, FragmentationWorkbench } from "./fragmentation-workbench";
 
 type View = "library" | "source" | "map" | "archive";
 type RangeMode = "reasonable" | "experimental";
@@ -26,8 +27,8 @@ type SortColumn = "name" | "source" | "signal" | "date" | "start" | "end" | "dur
 type SortDirection = "asc" | "desc";
 type SourceSortColumn = "name" | "signal" | "date" | "duration" | "type" | "profile" | "format" | "device" | "fragments";
 type ScoredRelationship = Relationship & { score: number; otherId: string };
-type EditableRange = { id:string; start:number; end:number; color:string };
-type DraggedEdge = { sourceId:string; rangeId:string; edge:"start" | "end" };
+type ReturnSnapshot = { kind:"source-edit" | "map-full";view:View;selectedId:string;selectedSourceId:string;connectionsOpen:boolean;advancedOpen:boolean;mapSelectedId:string | null;scrollY:number };
+type CorrectionPhase = "edit" | "recompute" | "prompt";
 
 const CONTEXTS: { id: SearchContext; label: string }[] = [
   { id: "whole", label: "Whole" }, { id: "melody", label: "Melody" }, { id: "rhythm", label: "Rhythm" },
@@ -61,7 +62,7 @@ const fragmentCountForSensitivity = (sensitivity:number) => Math.max(1,Math.min(
 
 function rangeForIndex(source:SourceFile,index:number):EditableRange {
   const referenced=FRAGMENTS.find((fragment) => fragment.id === source.fragmentIds[index]);
-  if (referenced) return { id:`${source.id}-range-${index + 1}`,start:referenced.start,end:referenced.end,color:RANGE_COLORS[index % RANGE_COLORS.length] };
+  if (referenced) return { id:`${source.id}-range-${index + 1}`,fragmentId:referenced.id,start:referenced.start,end:referenced.end,color:RANGE_COLORS[index % RANGE_COLORS.length] };
   if (index === 0) return { id:`${source.id}-range-1`, start:source.start, end:source.end, color:RANGE_COLORS[0] };
   const length = Math.max(8,Math.min(32,source.duration * (.12 + (index % 3) * .025)));
   const proposed = source.start + index * source.duration * .105 - (index % 2 ? source.duration * .028 : 0);
@@ -70,20 +71,6 @@ function rangeForIndex(source:SourceFile,index:number):EditableRange {
 }
 
 const initialSourceRanges = () => Object.fromEntries(SOURCE_FILES.map((source) => [source.id,Array.from({ length:fragmentCountForSensitivity(source.sensitivity) },(_,index) => rangeForIndex(source,index))]));
-
-function waveformPath(values:number[],width=1000,height=160) {
-  const middle = height / 2;
-  const upper = values.map((value,index) => `${index ? "L" : "M"}${index / Math.max(1,values.length - 1) * width},${middle - value / 100 * middle * .88}`).join(" ");
-  const lower = [...values].reverse().map((value,reverseIndex) => { const index=values.length - 1 - reverseIndex; return `L${index / Math.max(1,values.length - 1) * width},${middle + value / 100 * middle * .88}`; }).join(" ");
-  return `${upper} ${lower} Z`;
-}
-
-function waveformSlice(values:number[],time:number,duration:number) {
-  const center = Math.round(time / duration * (values.length - 1));
-  const start = Math.max(0,center - 5);
-  const slice = values.slice(start,Math.min(values.length,center + 6));
-  return slice.length > 2 ? slice : values;
-}
 
 function scoreRelationship(relationship: Relationship, weights: SearchWeights, context: SearchContext, mode: RangeMode) {
   const multipliers: Record<SearchContext, SearchWeights> = {
@@ -109,10 +96,6 @@ function scoreRelationship(relationship: Relationship, weights: SearchWeights, c
 
 function Waveform({ values, active=false, large=false }: { values:number[]; active?:boolean; large?:boolean }) {
   return <div className={`wave ${active ? "active" : ""} ${large ? "large" : ""}`} aria-hidden="true">{values.map((height,index) => <i key={index} style={{ height:`${height}%` }} />)}</div>;
-}
-
-function ContinuousWaveform({ values, className="" }: { values:number[]; className?:string }) {
-  return <svg className={`continuous-wave ${className}`} viewBox="0 0 1000 160" preserveAspectRatio="none" aria-hidden="true"><path d={waveformPath(values)} /></svg>;
 }
 
 function TransformChips({ relationship }: { relationship:Relationship }) {
@@ -144,23 +127,24 @@ export default function Home() {
   const [sourceSort, setSourceSort] = useState<{ column:SourceSortColumn; direction:SortDirection }>({ column:"date", direction:"desc" });
   const [sourceEditorOpen, setSourceEditorOpen] = useState(false);
   const [sourceRanges, setSourceRanges] = useState<Record<string,EditableRange[]>>(initialSourceRanges);
-  const [draggedEdge, setDraggedEdge] = useState<DraggedEdge | null>(null);
-  const [magnifier, setMagnifier] = useState<{ x:number; time:number; edge:"start" | "end" } | null>(null);
   const [importOpen,setImportOpen] = useState(false);
   const [importComplete,setImportComplete] = useState(false);
   const [fragmentOverrides,setFragmentOverrides] = useState<Record<string,Partial<Fragment>>>({});
   const [combineCandidates,setCombineCandidates] = useState<CombineCandidate[] | null>(null);
   const [correctionRelationship,setCorrectionRelationship] = useState<CombineCandidate | null>(null);
+  const [correctionPhase,setCorrectionPhase] = useState<CorrectionPhase>("edit");
+  const [correctionOriginal,setCorrectionOriginal] = useState<Pick<Fragment,"duration" | "key" | "bpm" | "bars" | "beats" | "confidence" | "analysisRevision"> | null>(null);
+  const [combineDraftRanges,setCombineDraftRanges] = useState<EditableRange[] | null>(null);
+  const [combineDraftSensitivity,setCombineDraftSensitivity] = useState<number | null>(null);
   const [exportRelationship,setExportRelationship] = useState<CombineCandidate | null>(null);
   const [relationshipStatuses,setRelationshipStatuses] = useState<Record<string,RelationshipStatus>>({ ...INITIAL_RELATIONSHIP_STATUSES });
   const [manualRelationshipIds,setManualRelationshipIds] = useState<Set<string>>(() => new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));
   const [mapSelectedId,setMapSelectedId] = useState<string | null>(null);
   const [hoveredMapId,setHoveredMapId] = useState<string | null>(null);
   const returnScroll = useRef(0);
+  const returnStack = useRef<ReturnSnapshot[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
   const previewAudio = useRef<HTMLAudioElement | null>(null);
-  const sourceWaveRef = useRef<HTMLDivElement>(null);
-  const sensitivityDrag = useRef<{ y:number; value:number } | null>(null);
 
   const activeFragments = useMemo(() => FRAGMENTS.filter((fragment) => importComplete || !IMPORTED_FRAGMENT_IDS.includes(fragment.id)).map((fragment) => ({ ...fragment,...fragmentOverrides[fragment.id] })),[importComplete,fragmentOverrides]);
   const activeFragmentById = (id:string) => activeFragments.find((fragment) => fragment.id === id) ?? ({ ...fragmentById(id),...fragmentOverrides[id] });
@@ -173,7 +157,7 @@ export default function Home() {
     setPreviewingId(null);
   };
 
-  const navigate = (next:View) => { stopAllAudio(); setConnectionsOpen(false); setAdvancedOpen(false); setSourceEditorOpen(false);if (next !== "map") setMapSelectedId(null); setView(next); };
+  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");if (next !== "map") setMapSelectedId(null);setView(next); };
   const notify = (message:string) => { setToast(message); window.setTimeout(() => setToast(null), 2400); };
 
   useEffect(() => {
@@ -197,26 +181,6 @@ export default function Home() {
     window.addEventListener("pointerup", finish, { once:true });
     return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); };
   }, [resizingConnections]);
-
-  useEffect(() => {
-    if (!draggedEdge) return;
-    const move = (event:PointerEvent) => {
-      const rect = sourceWaveRef.current?.getBoundingClientRect();
-      const source = sources.find((item) => item.id === draggedEdge.sourceId);
-      if (!rect || !source) return;
-      const x = Math.max(0,Math.min(rect.width,event.clientX - rect.left));
-      const time = x / rect.width * source.duration;
-      setSourceRanges((current) => ({ ...current,[source.id]:(current[source.id] ?? []).map((range) => {
-        if (range.id !== draggedEdge.rangeId) return range;
-        return draggedEdge.edge === "start" ? { ...range,start:Math.max(0,Math.min(time,range.end - .5)) } : { ...range,end:Math.min(source.duration,Math.max(time,range.start + .5)) };
-      }) }));
-      setMagnifier({ x,time,edge:draggedEdge.edge });
-    };
-    const finish = () => { setDraggedEdge(null); setMagnifier(null); };
-    window.addEventListener("pointermove",move);
-    window.addEventListener("pointerup",finish,{ once:true });
-    return () => { window.removeEventListener("pointermove",move); window.removeEventListener("pointerup",finish); };
-  }, [draggedEdge,sources]);
 
   const rankedConnectionsFor = (sourceId:string,limit=6):ScoredRelationship[] => {
     const sourceFragment=activeFragmentById(sourceId);
@@ -309,53 +273,39 @@ export default function Home() {
     direction:current.column === column ? (current.direction === "asc" ? "desc" : "asc") : (["date","signal","duration","fragments"].includes(column) ? "desc" : "asc"),
   }));
 
-  const updateRangeEdge = (sourceId:string,rangeId:string,edge:"start" | "end",value:number) => {
-    const source=sources.find((item) => item.id === sourceId); if (!source) return;
-    setSourceRanges((current) => ({ ...current,[sourceId]:(current[sourceId] ?? []).map((range) => range.id !== rangeId ? range : edge === "start" ? { ...range,start:Math.max(0,Math.min(value,range.end - .5)) } : { ...range,end:Math.min(source.duration,Math.max(value,range.start + .5)) }) }));
-  };
-
-  const beginRangeDrag = (event:ReactPointerEvent,range:EditableRange,edge:"start" | "end") => {
-    event.preventDefault(); event.stopPropagation();
-    const rect=sourceWaveRef.current?.getBoundingClientRect();
-    const time=edge === "start" ? range.start : range.end;
-    setMagnifier({ x:rect ? time / selectedSource.duration * rect.width : 0,time,edge });
-    setDraggedEdge({ sourceId:selectedSourceId,rangeId:range.id,edge });
+  const resizeRangesForSensitivity = (ranges:EditableRange[],source:SourceFile,value:number) => {
+    const count=fragmentCountForSensitivity(value);
+    return count <= ranges.length ? ranges.slice(0,count) : [...ranges,...Array.from({ length:count - ranges.length },(_,offset) => rangeForIndex(source,ranges.length + offset))];
   };
 
   const updateSourceSensitivity = (value:number) => {
     setSources((current) => current.map((source) => source.id === selectedSourceId ? { ...source,sensitivity:value } : source));
-    setSourceRanges((current) => {
-      const existing=current[selectedSourceId] ?? [];
-      const count=fragmentCountForSensitivity(value);
-      const next=count <= existing.length ? existing.slice(0,count) : [...existing,...Array.from({ length:count - existing.length },(_,offset) => rangeForIndex(selectedSource,existing.length + offset))];
-      return { ...current,[selectedSourceId]:next };
-    });
-  };
-
-  const beginSensitivityDrag = (event:ReactPointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    sensitivityDrag.current={ y:event.clientY,value:selectedSource.sensitivity };
-  };
-  const moveSensitivityDrag = (event:ReactPointerEvent<HTMLButtonElement>) => {
-    if (!sensitivityDrag.current) return;
-    updateSourceSensitivity(Math.max(10,Math.min(90,Math.round(sensitivityDrag.current.value + (sensitivityDrag.current.y - event.clientY) * .75))));
-  };
-  const finishSensitivityDrag = (event:ReactPointerEvent<HTMLButtonElement>) => {
-    sensitivityDrag.current=null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setSourceRanges((current) => ({ ...current,[selectedSourceId]:resizeRangesForSensitivity(current[selectedSourceId] ?? [],selectedSource,value) }));
   };
 
   const addManualFragment = () => {
     const index=selectedRanges.length;
-    const next={ ...rangeForIndex(selectedSource,index),id:`${selectedSource.id}-manual-${Date.now()}` };
+    const next={ ...rangeForIndex(selectedSource,index),fragmentId:undefined,id:`${selectedSource.id}-manual-${Date.now()}` };
     setSourceRanges((current) => ({ ...current,[selectedSource.id]:[...(current[selectedSource.id] ?? []),next] }));
     notify(`Fragment ${index + 1} added. Adjust its range above.`);
   };
 
+  const addCombineFragment = () => {
+    if (!combineDraftRanges) return;
+    const index=combineDraftRanges.length;
+    const next={ ...rangeForIndex(selectedSource,index),fragmentId:undefined,id:`${selectedSource.id}-manual-${Date.now()}` };
+    setCombineDraftRanges([...combineDraftRanges,next]);
+    notify(`Fragment ${index + 1} added. Adjust its ruler above.`);
+  };
+
+  const updateCombineSensitivity = (value:number) => {
+    setCombineDraftSensitivity(value);
+    setCombineDraftRanges((current) => resizeRangesForSensitivity(current ?? selectedRanges,selectedSource,value));
+  };
+
   const connections=rankedConnectionsFor(selectedId);
 
-  const selectedDuplicates = duplicateGroup ? activeFragments.filter((fragment) => fragment.duplicateGroup === duplicateGroup && !duplicateExclusions.has(fragment.id)) : [];
+  const selectedDuplicates = duplicateGroup ? activeFragments.filter((fragment) => fragment.duplicateGroup === duplicateGroup && !duplicateExclusions.has(fragment.id) && !archived.has(fragment.id)) : [];
 
   const previewSingle = (fragment:Fragment) => {
     if (previewingId === fragment.id && previewAudio.current) { previewAudio.current.pause(); previewAudio.current = null; setPreviewingId(null); return; }
@@ -366,42 +316,73 @@ export default function Home() {
 
   const archiveFragment = (id:string) => {
     stopAllAudio(); setArchived((current) => new Set([...current, id]));
-    if (id === selectedId) setSelectedId("f01");
+    if (id === selectedId) setSelectedId(activeFragments.find((fragment) => fragment.id !== id && !archived.has(fragment.id))?.id ?? "f02");
     notify("Archived from ordinary matching. You can restore it anytime.");
   };
   const restoreFragment = (id:string) => { setArchived((current) => { const next = new Set(current); next.delete(id); return next; }); notify("Fragment restored to matching."); };
   const keepTake = (id:string) => {
     const group = fragmentById(id).duplicateGroup;
     if (!group) return;
-    const others = FRAGMENTS.filter((fragment) => fragment.duplicateGroup === group && fragment.id !== id).map((fragment) => fragment.id);
+    const others = activeFragments.filter((fragment) => fragment.duplicateGroup === group && fragment.id !== id && !duplicateExclusions.has(fragment.id)).map((fragment) => fragment.id);
     setArchived((current) => new Set([...current, ...others])); setSelectedId(id); setDuplicateGroup(null); notify("Kept this take for matching and archived the rest.");
   };
   const resetDemo = () => {
     stopAllAudio(); setView("library"); setSelectedId("f02"); setQuery(""); setRoleFilter("All"); setSort({ column:"date", direction:"desc" });
     setContext("whole"); setRangeMode("reasonable"); setWeights({ ...DEFAULT_WEIGHTS }); setTolerances({ ...DEFAULT_TOLERANCES });setArchived(new Set()); setDuplicateExclusions(new Set());
-    setDuplicateGroup(null); setConnectionsOpen(false); setAdvancedOpen(false); setConnectionsWidth(520); setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source }))); setSourceRanges(initialSourceRanges()); setSelectedSourceId(OPENING_SOURCE_ID); setSourceQuery(""); setSourceSort({ column:"date", direction:"desc" }); setSourceEditorOpen(false); setDraggedEdge(null); setMagnifier(null);setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null); notify("Demo restored to 24 fragments before import.");
+    returnStack.current=[];setDuplicateGroup(null);setConnectionsOpen(false);setAdvancedOpen(false);setConnectionsWidth(520);setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(OPENING_SOURCE_ID);setSourceQuery("");setSourceSort({ column:"date",direction:"desc" });setSourceEditorOpen(false);setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null);notify("Demo restored to 24 fragments before import.");
+  };
+  const pushReturn = (kind:ReturnSnapshot["kind"]) => returnStack.current.push({ kind,view,selectedId,selectedSourceId,connectionsOpen,advancedOpen,mapSelectedId,scrollY:window.scrollY });
+  const restoreReturn = (kind:ReturnSnapshot["kind"]) => {
+    const snapshot=returnStack.current.at(-1);
+    if (!snapshot || snapshot.kind !== kind) return false;
+    returnStack.current.pop();stopAllAudio();setView(snapshot.view);setSelectedId(snapshot.selectedId);setSelectedSourceId(snapshot.selectedSourceId);setConnectionsOpen(snapshot.connectionsOpen);setAdvancedOpen(snapshot.advancedOpen);setMapSelectedId(snapshot.mapSelectedId);setSourceEditorOpen(false);window.setTimeout(() => window.scrollTo({ top:snapshot.scrollY }),0);return true;
   };
   const openFragment = (id:string) => { stopAllAudio(); setSelectedId(id); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
-  const closeConnections = () => { stopAllAudio(); setConnectionsOpen(false); setAdvancedOpen(false); };
-  const editSourceForFragment = (id:string) => { const fragment=activeFragmentById(id);stopAllAudio();setSelectedSourceId(fragment.sourceId);setSourceEditorOpen(true);setConnectionsOpen(false);setAdvancedOpen(false);setView("source"); };
+  const openFragmentFromMap = (id:string) => { pushReturn("map-full");openFragment(id); };
+  const closeConnections = () => { if (restoreReturn("map-full")) return;stopAllAudio();setConnectionsOpen(false);setAdvancedOpen(false); };
+  const closeSourceEditor = () => {
+    if (correctionRelationship) { setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);return; }
+    if (restoreReturn("source-edit")) return;
+    stopAllAudio();setSourceEditorOpen(false);
+  };
+  const editSourceForFragment = (id:string) => { const fragment=activeFragmentById(id);pushReturn("source-edit");stopAllAudio();setSelectedSourceId(fragment.sourceId);setSourceEditorOpen(true);setConnectionsOpen(false);setAdvancedOpen(false);setView("source"); };
   const completeImport = () => {
     setImportComplete(true);setImportOpen(false);setSources(SOURCE_FILES.map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(STAGED_SOURCE_ID);
     setView("library");setQuery("Balcony");setSelectedId("f01");setConnectionsOpen(false);notify("4 fragment references added. Select one to find connections.");
   };
   const openCombine = (relationship:ScoredRelationship) => { stopAllAudio();returnScroll.current=window.scrollY;setRelationshipStatuses((current) => ({ ...current,[relationship.id]:current[relationship.id] ?? "auditioned" }));setCombineCandidates([relationship,...connections.filter((item) => item.id !== relationship.id)].slice(0,3));window.scrollTo({ top:0 }); };
-  const closeCombine = () => { stopAllAudio();setCorrectionRelationship(null);setExportRelationship(null);setCombineCandidates(null);window.setTimeout(() => window.scrollTo({ top:returnScroll.current }),0); };
+  const closeCombine = () => { stopAllAudio();setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setCombineCandidates(null);window.setTimeout(() => window.scrollTo({ top:returnScroll.current }),0); };
   const markRelationship = (relationship:CombineCandidate,status:RelationshipStatus) => setRelationshipStatuses((current) => ({ ...current,[relationship.id]:status }));
-  const rejectRelationship = (relationship:CombineCandidate) => { markRelationship(relationship,"rejected");setCombineCandidates((current) => current ? current.filter((item) => item.id !== relationship.id) : current);notify("Candidate rejected for this session."); };
+  const rejectRelationship = (relationship:CombineCandidate) => { const next=(combineCandidates ?? []).filter((item) => item.id !== relationship.id);markRelationship(relationship,"rejected");setCombineCandidates(next.length ? next : null);if (!next.length) window.setTimeout(() => window.scrollTo({ top:returnScroll.current }),0);notify(next.length ? "Candidate rejected for this session." : "Last candidate rejected. Returned to the search."); };
+  const beginCombineSourceEdit = (relationship:CombineCandidate) => {
+    const candidate=activeFragmentById(relationship.otherId);const source=sources.find((item) => item.id === candidate.sourceId) ?? SOURCE_FILES.find((item) => item.id === candidate.sourceId)!;
+    stopAllAudio();setSelectedSourceId(source.id);setCombineDraftRanges((sourceRanges[source.id] ?? []).map((range) => ({ ...range })));setCombineDraftSensitivity(source.sensitivity);setCorrectionOriginal({ duration:candidate.duration,key:candidate.key,bpm:candidate.bpm,bars:candidate.bars,beats:candidate.beats,confidence:candidate.confidence,analysisRevision:candidate.analysisRevision });setCorrectionPhase("edit");setCorrectionRelationship(relationship);setSourceEditorOpen(true);
+  };
   const saveSourceBoundaries = () => {
     const patches:Record<string,Partial<Fragment>>={};
-    selectedRanges.forEach((range,index) => { const id=selectedSource.fragmentIds[index];if (!id) return;const fragment=activeFragmentById(id);patches[id]={ start:range.start,end:range.end,duration:formatSeconds(range.end-range.start),analysisRevision:fragment.analysisRevision + 1 }; });
+    selectedRanges.forEach((range) => { const id=range.fragmentId;if (!id) return;const fragment=activeFragmentById(id);patches[id]={ start:range.start,end:range.end,duration:formatSeconds(range.end-range.start),analysisRevision:fragment.analysisRevision + 1 }; });
     setFragmentOverrides((current) => ({ ...current,...patches }));notify("Boundaries saved; library references updated.");
   };
+  const saveCombineSourceBoundaries = () => {
+    if (!correctionRelationship || !combineDraftRanges) return;
+    const candidate=activeFragmentById(correctionRelationship.otherId);const patches:Record<string,Partial<Fragment>>={};
+    combineDraftRanges.forEach((range) => { const id=range.fragmentId;if (!id) return;const fragment=activeFragmentById(id);patches[id]={ start:range.start,end:range.end,duration:formatSeconds(range.end-range.start),analysisRevision:fragment.analysisRevision + 1 }; });
+    const candidateRange=combineDraftRanges.find((range) => range.fragmentId === candidate.id);
+    patches[candidate.id]={ ...patches[candidate.id],start:candidateRange?.start ?? candidate.start,end:candidateRange?.end ?? candidate.end,duration:formatSeconds((candidateRange?.end ?? candidate.end) - (candidateRange?.start ?? candidate.start)),key:"C minor",bpm:90,bars:3,beats:17,confidence:.93,analysisRevision:candidate.analysisRevision + 1 };
+    setSourceRanges((current) => ({ ...current,[selectedSource.id]:combineDraftRanges.map((range) => ({ ...range })) }));setSources((current) => current.map((source) => source.id === selectedSource.id ? { ...source,sensitivity:combineDraftSensitivity ?? source.sensitivity } : source));setFragmentOverrides((current) => ({ ...current,...patches }));setCombineCandidates((current) => current?.map((item) => item.id === correctionRelationship.id ? { ...item,score:76,transform:item.transform ? { ...item.transform,bpm:2,labels:["−3 st","+2 BPM"] } : item.transform } : item) ?? null);setCorrectionPhase("recompute");window.setTimeout(() => setCorrectionPhase("prompt"),900);
+  };
+  const keepCorrectionLink = () => { if (!correctionRelationship) return;setManualRelationshipIds((current) => new Set([...current,correctionRelationship.id]));markRelationship(correctionRelationship,"manual");setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCombineDraftRanges(null);setCombineDraftSensitivity(null);notify("Manual relationship preserved in this comparison."); };
+  const rejectCorrectionLink = () => { if (!correctionRelationship) return;const relationship=correctionRelationship;setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCombineDraftRanges(null);setCombineDraftSensitivity(null);rejectRelationship(relationship); };
   const mapFragment=mapSelectedId ? activeFragments.find((fragment) => fragment.id === mapSelectedId) ?? null : null;
   const mapConnections=mapFragment ? rankedConnectionsFor(mapFragment.id,4) : [];
   const mapLinks=mapFragment ? linkSummaryFor(mapFragment.id) : { total:0,manual:0 };
   const mapTakes=mapFragment?.duplicateGroup ? activeFragments.filter((fragment) => fragment.duplicateGroup === mapFragment.duplicateGroup && fragment.id !== mapFragment.id && !archived.has(fragment.id) && !duplicateExclusions.has(fragment.id)).length : 0;
   const graphY=(value:number) => 8 + value * .68;
+  const editorRanges=correctionRelationship ? (combineDraftRanges ?? []) : selectedRanges;
+  const editorSensitivity=correctionRelationship ? (combineDraftSensitivity ?? selectedSource.sensitivity) : selectedSource.sensitivity;
+  const correctedRange=correctionRelationship ? editorRanges.find((range) => range.fragmentId === correctionRelationship.otherId) : null;
+  const correctionFooter=correctionRelationship && correctionPhase === "recompute" ? <div className="recompute workbench-result"><i/><strong>Recomputing metadata and active match…</strong><span>Revision {(correctionOriginal?.analysisRevision ?? 1) + 1}</span></div> : correctionRelationship && correctionPhase === "prompt" && correctionOriginal ? <div className="correction-result workbench-result"><div className="metadata-diff"><span>Field</span><span>Before</span><span>After</span>{[["Duration",correctionOriginal.duration,formatSeconds((correctedRange?.end ?? 0) - (correctedRange?.start ?? 0))],["Key",correctionOriginal.key,"C minor"],["BPM",correctionOriginal.bpm,"90"],["Bars",correctionOriginal.bars,"3"],["Beats",correctionOriginal.beats,"17"],["Confidence",`${Math.round(correctionOriginal.confidence * 100)}%`,`93%`],["Match",`${correctionRelationship.score}%`,`76%`]].map((row) => row.map((cell,index) => <span className={index === 2 ? "changed" : ""} key={`${row[0]}-${index}`}>{cell}</span>))}</div><div className="link-prompt"><span className="relationship-badge manual">criteria changed</span><h3>This fragment no longer matches the original search. Keep it linked to this comparison?</h3><p>The boundary correction is saved either way. A manual link preserves your musical judgment.</p><div><button onClick={rejectCorrectionLink}>Reject and show next</button><button className="primary-button" onClick={keepCorrectionLink}>Yes, keep linked</button></div></div></div> : null;
+  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => correctionRelationship ? setCombineDraftRanges(ranges) : setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges }))} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);openFragment(id); }} saveLabel={correctionRelationship ? "Save & recompute" : "Save boundaries"} footerContent={correctionFooter}/> : null;
 
   return (
     <main className="app-shell">
@@ -417,7 +398,20 @@ export default function Home() {
         <button className="reset" onClick={resetDemo}>↺ Reset demo</button>
       </header>
 
-      {combineCandidates && <CombineWorkspace anchor={selected} candidates={combineCandidates} fragments={activeFragments} statuses={relationshipStatuses} onClose={closeCombine} onEdit={setCorrectionRelationship} onExport={setExportRelationship} onSave={(relationship) => { markRelationship(relationship,"preferred");notify("Combination saved as Preferred."); }} onReject={rejectRelationship} onAuditioned={(relationship) => { if (!relationshipStatuses[relationship.id]) markRelationship(relationship,"auditioned"); }}/>} 
+      {combineCandidates && <CombineWorkspace
+        key={combineCandidates.map((item) => item.id).join(":")}
+        anchor={selected}
+        candidates={combineCandidates}
+        fragments={activeFragments}
+        statuses={relationshipStatuses}
+        onClose={closeCombine}
+        onEdit={beginCombineSourceEdit}
+        onExport={setExportRelationship}
+        onSave={(relationship) => { markRelationship(relationship,"preferred");notify("Combination saved as Preferred."); }}
+        onReject={rejectRelationship}
+        onAuditioned={(relationship) => { if (!relationshipStatuses[relationship.id]) markRelationship(relationship,"auditioned"); }}
+      />}
+      {combineCandidates && correctionRelationship && sourceEditorOpen && <div className="source-editor-overlay" role="dialog" aria-modal="true" aria-label="Edit source boundaries">{fragmentationPanel}</div>}
 
       {!combineCandidates && view === "library" && <section className={`workspace ${connectionsOpen ? "connections-open" : ""} ${resizingConnections ? "resizing" : ""}`} style={{ "--connections-width":`${connectionsWidth}px` } as CSSProperties}>
         <div className="library">
@@ -442,7 +436,7 @@ export default function Home() {
                 <span className="key-cell" title={fragment.alternateKeys.length ? `Also: ${fragment.alternateKeys.join(", ")}` : fragment.key}>{fragment.key}{fragment.alternateKeys.length > 0 && <small>+{fragment.alternateKeys.length}</small>}</span>
                 <span className="tempo-cell">{fragment.bpm}</span><span className="confidence-cell">{Math.round(fragment.confidence * 100)}%</span><span className="tags-cell" title={fragment.userTags.join(", ")}>{fragment.userTags.join(" · ")}</span><span className="role-cell"><em>{fragment.role}</em></span>
                 <span className="links-cell"><b>{links.total}</b>{links.manual > 0 && <em>Manual links {links.manual}</em>}</span>
-                <span className="takes-cell">{relatedTakes > 0 ? <button className="take-link" onClick={(event) => { event.stopPropagation(); setDuplicateGroup(fragment.duplicateGroup!); }}>{relatedTakes + 1}</button> : "—"}</span>
+                <span className="takes-cell">{relatedTakes > 0 ? <button className="take-link" onClick={(event) => { event.stopPropagation();setSelectedId(fragment.id);setDuplicateGroup(fragment.duplicateGroup!); }}>{relatedTakes + 1}</button> : "—"}</span>
               </div>;
             })}
             {visibleFragments.length === 0 && <div className="empty-inline">No fragments match that search.</div>}
@@ -497,30 +491,7 @@ export default function Home() {
               {visibleSources.length === 0 && <div className="empty-inline">No sources match that search.</div>}
             </div>
           </div>
-          {sourceEditorOpen && <aside className="source-editor">
-            <div className="source-editor-title"><h2>Fragmentation</h2><button className="panel-close" onClick={() => { stopAllAudio(); setSourceEditorOpen(false); }} aria-label="Close fragmentation panel">×</button></div>
-            <div className="source-editor-head"><div><h3>{selectedSource.name}</h3><p>{selectedSource.format} · {selectedSource.device}</p></div><button className="soft-button" onClick={() => previewSingle(fragmentById(selectedSource.fragmentIds[0]))}>{previewingId === selectedSource.fragmentIds[0] ? "Ⅱ Stop" : "▶ Play"}</button></div>
-            <div className="timeline-card">
-              <div className="fragment-lanes-scroll"><div className="fragment-lanes" style={{ height:`${selectedRanges.length * 23 + 4}px` }}>{selectedRanges.map((range,index) => <div className="fragment-lane" key={range.id} style={{ top:`${index * 23}px`,"--fragment-color":range.color } as CSSProperties}>
-                <div className="fragment-bar" style={{ left:`${range.start / selectedSource.duration * 100}%`,width:`${(range.end - range.start) / selectedSource.duration * 100}%` }}>
-                  <button className="range-handle start" onPointerDown={(event) => beginRangeDrag(event,range,"start")} onKeyDown={(event) => { const step=event.shiftKey ? 1 : .25; if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); updateRangeEdge(selectedSourceId,range.id,"start",range.start + (event.key === "ArrowLeft" ? -step : step)); } }} aria-label={`Adjust start of fragment ${index + 1}`} />
-                  <span>F{String(index + 1).padStart(2,"0")} · {formatSeconds(range.start)}–{formatSeconds(range.end)}</span>
-                  <button className="range-handle end" onPointerDown={(event) => beginRangeDrag(event,range,"end")} onKeyDown={(event) => { const step=event.shiftKey ? 1 : .25; if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); updateRangeEdge(selectedSourceId,range.id,"end",range.end + (event.key === "ArrowLeft" ? -step : step)); } }} aria-label={`Adjust end of fragment ${index + 1}`} />
-                </div>
-              </div>)}</div></div>
-              <div className="timeline-labels"><span>0:00</span><span>{formatSeconds(selectedSource.duration / 2)}</span><span>{formatSeconds(selectedSource.duration)}</span></div>
-              <div className="continuous-wave-wrap" ref={sourceWaveRef}>
-                <ContinuousWaveform values={selectedSource.waveform} />
-                {selectedRanges.map((range,index) => { const fragmentId=selectedSource.fragmentIds[index];return <div className={`wave-range ${fragmentId && previewingId === fragmentId ? "auditioning" : ""}`} key={range.id} style={{ left:`${range.start / selectedSource.duration * 100}%`,width:`${(range.end - range.start) / selectedSource.duration * 100}%`,"--fragment-color":range.color } as CSSProperties}><span>F{index + 1}</span>{fragmentId && previewingId === fragmentId && <i className="fragment-scan-playhead" />}</div>; })}
-                {magnifier && draggedEdge?.sourceId === selectedSourceId && <div className="edge-magnifier" style={{ left:`${magnifier.x}px` }}><strong>{magnifier.edge} · {formatSeconds(magnifier.time)}</strong><ContinuousWaveform values={waveformSlice(selectedSource.waveform,magnifier.time,selectedSource.duration)} /></div>}
-              </div>
-              <div className="fragment-summary"><strong>{selectedRanges.length} fragments</strong><span>Drag any colored bar edge to trim · Shift + arrow for 1 second</span></div>
-            </div>
-            <div className="source-lower">
-              <div className="sensitivity-card"><div><h3>Sensitivity</h3><p>Higher sensitivity surfaces shorter gestures and adds fragment ranges.</p></div><div className="knob-control"><button className="knob" role="slider" aria-label="Fragmentation sensitivity" aria-valuemin={10} aria-valuemax={90} aria-valuenow={selectedSource.sensitivity} style={{ "--angle":`${-130 + (selectedSource.sensitivity - 10) / 80 * 260}deg`,"--sweep":`${(selectedSource.sensitivity - 10) / 80 * 260}deg` } as CSSProperties} onPointerDown={beginSensitivityDrag} onPointerMove={moveSensitivityDrag} onPointerUp={finishSensitivityDrag} onPointerCancel={finishSensitivityDrag} onKeyDown={(event) => { if (event.key === "ArrowUp" || event.key === "ArrowRight") { event.preventDefault();updateSourceSensitivity(Math.min(90,selectedSource.sensitivity + 4)); } if (event.key === "ArrowDown" || event.key === "ArrowLeft") { event.preventDefault();updateSourceSensitivity(Math.max(10,selectedSource.sensitivity - 4)); } }}><i /></button><strong>{selectedSource.sensitivity < 36 ? "Broad" : selectedSource.sensitivity > 66 ? "Sensitive" : "Balanced"}</strong></div></div>
-              <div className="detected-card"><div className="detected-head"><h3>Fragments</h3><div className="detected-actions"><button onClick={addManualFragment}>＋ Add fragment</button><button onClick={saveSourceBoundaries}>Save boundaries</button></div></div>{selectedRanges.map((range,index) => { const id=selectedSource.fragmentIds[index]; const fragment=id ? activeFragmentById(id) : null; return <div className="detected-row" key={range.id}><i className="range-swatch" style={{ background:range.color }} />{fragment ? <button className={`fragment-audition ${previewingId === id ? "playing" : ""}`} onClick={() => previewSingle(fragment)} aria-label={`${previewingId === id ? "Stop" : "Play"} fragment ${fragment.name}`}>{previewingId === id ? "Ⅱ" : "▶"}</button> : <button className="fragment-audition" disabled aria-label="Save this fragment before auditioning">▶</button>}<span><b>{fragment?.name ?? `Untitled fragment ${index + 1}`}</b><small>{formatSeconds(range.start)}–{formatSeconds(range.end)} · {Math.round(range.end - range.start)} sec</small></span>{fragment ? <button onClick={() => openFragment(id)}>Open →</button> : <em>New</em>}</div>; })}</div>
-            </div>
-          </aside>}
+          {sourceEditorOpen && fragmentationPanel}
         </div>
       </section>}
 
@@ -538,7 +509,7 @@ export default function Home() {
           {mapFragment && <section className="map-inspector" aria-label={`Map details for ${mapFragment.name}`}>
             <button className="map-inspector-close" onClick={() => { stopAllAudio();setMapSelectedId(null); }} aria-label="Close map details">×</button>
             <div className="map-fragment-mini" role="row"><button className={`wave-play ${previewingId === mapFragment.id ? "playing" : ""}`} onClick={() => previewSingle(mapFragment)} aria-label={`${previewingId === mapFragment.id ? "Stop" : "Play"} ${mapFragment.name}`}><Waveform values={mapFragment.waveform} active={previewingId === mapFragment.id}/></button><span><b>{mapFragment.name}</b><small>{sourceNameFor(mapFragment)}</small></span><em>{mapFragment.key}</em><em>{mapFragment.bpm} BPM</em><em>{mapFragment.role}</em><span className="map-link-count"><b>{mapLinks.total} links</b>{mapLinks.manual > 0 && <i>Manual links {mapLinks.manual}</i>}</span><span>{mapTakes > 0 ? `${mapTakes + 1} takes` : "—"}</span></div>
-            <div className="map-connections-mini"><header><b>Connections</b><button onClick={() => openFragment(mapFragment.id)}>Open full view →</button></header>{mapConnections.map((relationship) => { const target=activeFragmentById(relationship.otherId);return <div className="map-connection-mini" key={relationship.id}><strong>{relationship.score}%</strong><button className={`wave-play ${previewingId === target.id ? "playing" : ""}`} onClick={() => previewSingle(target)} aria-label={`${previewingId === target.id ? "Stop" : "Play"} ${target.name}`}><Waveform values={target.waveform} active={previewingId === target.id}/></button><button className="map-target" onClick={() => { stopAllAudio();setSelectedId(target.id);setMapSelectedId(target.id); }}>{target.name}</button><TransformChips relationship={relationship}/></div>;})}{mapConnections.length === 0 && <p>No active connections under the current criteria.</p>}</div>
+            <div className="map-connections-mini"><header><b>Connections</b><button onClick={() => openFragmentFromMap(mapFragment.id)}>Open full view →</button></header>{mapConnections.map((relationship) => { const target=activeFragmentById(relationship.otherId);return <div className="map-connection-mini" key={relationship.id}><strong>{relationship.score}%</strong><button className={`wave-play ${previewingId === target.id ? "playing" : ""}`} onClick={() => previewSingle(target)} aria-label={`${previewingId === target.id ? "Stop" : "Play"} ${target.name}`}><Waveform values={target.waveform} active={previewingId === target.id}/></button><button className="map-target" onClick={() => { stopAllAudio();setSelectedId(target.id);setMapSelectedId(target.id); }}>{target.name}</button><TransformChips relationship={relationship}/></div>;})}{mapConnections.length === 0 && <p>No active connections under the current criteria.</p>}</div>
           </section>}
         </div>
       </section>}
@@ -555,7 +526,6 @@ export default function Home() {
       </section></div>}
 
       {importOpen && <ImportSheet source={SOURCE_FILES.find((source) => source.id === STAGED_SOURCE_ID)!} onCancel={() => setImportOpen(false)} onComplete={completeImport}/>} 
-      {correctionRelationship && (() => { const candidate=activeFragmentById(correctionRelationship.otherId);const source=sources.find((item) => item.id === candidate.sourceId) ?? SOURCE_FILES.find((item) => item.id === candidate.sourceId)!;const surrounding=activeFragments.filter((fragment) => fragment.sourceId === source.id);return <CorrectionOverlay candidate={candidate} source={source} surrounding={surrounding} score={correctionRelationship.score} onCancel={() => setCorrectionRelationship(null)} onApply={(patch) => { setFragmentOverrides((current) => ({ ...current,[candidate.id]:{ ...current[candidate.id],...patch } }));setCombineCandidates((current) => current?.map((item) => item.id === correctionRelationship.id ? { ...item,score:76,transform:item.transform ? { ...item.transform,bpm:2,labels:["−3 st","+2 BPM"] } : item.transform } : item) ?? null); }} onKeep={() => { setManualRelationshipIds((current) => new Set([...current,correctionRelationship.id]));markRelationship(correctionRelationship,"manual");setCorrectionRelationship(null);notify("Manual relationship preserved in this comparison."); }} onDrop={() => { rejectRelationship(correctionRelationship);setCorrectionRelationship(null); }}/>; })()}
       {exportRelationship && (() => { const candidate=activeFragmentById(exportRelationship.otherId);return <ExportSheet anchor={selected} candidate={candidate} relationship={exportRelationship} onClose={() => setExportRelationship(null)} onSaved={() => { markRelationship(exportRelationship,"preferred");setExportRelationship(null);notify("Package ready and relationship marked Preferred."); }}/>; })()}
 
       {toast && <div className="toast" role="status"><span>✓</span>{toast}</div>}

@@ -179,7 +179,7 @@ h1 { font-size:34px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .source-editor-head h3 { margin:0 0 4px; font-size:12px; letter-spacing:-.01em; }
 .source-editor-head p { margin:0; color:var(--muted); font-size:9px; }
 .soft-button { border:1px solid #a99cff49; border-radius:8px; color:#c8c2ec; background:#a99cff0e; padding:9px 12px; font-size:9px; }
-.timeline-card { padding:20px; border:1px solid var(--line); border-radius:13px; background:#0d0c10; }
+.timeline-card { position:relative; padding:20px; border:1px solid var(--line); border-radius:13px; background:#0d0c10; }
 .timeline-labels { display:flex; justify-content:space-between; color:#55535c; font:8px var(--font-geist-mono); }
 .fragment-lanes { position:relative; width:100%; margin-bottom:5px; border-bottom:1px solid #2a2730; background:linear-gradient(90deg,#ffffff05 1px,transparent 1px); background-size:10% 100%; }
 .fragment-lane { position:absolute; left:0; right:0; height:19px; --fragment-color:var(--violet); }
@@ -470,3 +470,21 @@ h1 { font-size:34px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 @media(max-width:1000px){.map-inspector{grid-template-columns:1fr}.map-fragment-mini{grid-template-columns:70px minmax(100px,1fr) 70px 46px 52px minmax(86px,auto) 38px}.graph-board{min-height:790px}}
 @media(max-width:600px){.table-row{min-width:1560px}.map-inspector{left:6px;right:6px;bottom:6px;grid-template-columns:1fr;padding:8px 33px 8px 8px}.map-fragment-mini{grid-template-columns:64px 1fr 55px 45px}.map-fragment-mini>:nth-child(n+5){display:none}.map-connection-mini{grid-template-columns:32px 55px 1fr}.map-connection-mini .chips{display:none}.correction-edge-magnifier{width:140px}.correction-range-handle{width:21px}}
 @media(prefers-reduced-motion:reduce){.fragment-scan-playhead{animation:none;left:50%!important}}
+
+/* One fragmentation workbench, shared by Sources and Combine */
+.source-editor-overlay { position:fixed;z-index:160;inset:70px 0 0;overflow:hidden;background:#09080cf2;backdrop-filter:blur(8px); }
+.source-editor-overlay .fragmentation-workbench { width:100%;height:100%;max-height:none;border-left:0;padding:15px 22px 65px;background:#17161cf7;box-shadow:0 -18px 65px #0009; }
+.source-editor-overlay .timeline-card { margin-top:4px; }
+.source-editor-overlay .source-lower { grid-template-columns:minmax(340px,.75fr) minmax(460px,1.25fr); }
+.fragment-lane.focused .fragment-bar { z-index:5;outline:1px solid #efffd1;outline-offset:2px;box-shadow:0 0 18px color-mix(in srgb,var(--fragment-color) 50%,transparent); }
+.detected-row.focused { background:#c8fa7808;box-shadow:inset 2px 0 var(--lime); }
+.ruler-edge-magnifier { position:absolute;z-index:45;top:-67px;width:180px;height:70px;transform:translateX(-50%);overflow:hidden;border:1px solid var(--lime);border-radius:6px;background:#0a090df7;box-shadow:0 12px 35px #000c,0 0 18px #c8fa7824;pointer-events:none; }
+.ruler-edge-magnifier:after { content:"";position:absolute;z-index:3;left:50%;top:20px;bottom:0;width:1px;background:var(--lime);box-shadow:0 0 7px var(--lime); }
+.ruler-edge-magnifier strong { position:absolute;z-index:4;left:6px;top:4px;color:var(--lime);text-transform:uppercase;font:6px var(--font-geist-mono); }
+.ruler-edge-magnifier .continuous-wave { position:absolute;left:5px;right:5px;bottom:3px;width:calc(100% - 10px);height:47px; }
+.ruler-edge-magnifier .continuous-wave path { fill:#9b97a4;stroke:#d6d3dc;opacity:.95; }
+.workbench-result { margin-top:15px;border:1px solid #35313b;border-radius:8px;background:#0e0d12;overflow:hidden; }
+.workbench-result.recompute { min-height:105px; }
+.fragmentation-workbench>.correction-result { padding:14px; }
+@media(max-width:1120px){.source-editor-overlay .source-lower{grid-template-columns:1fr 1fr}}
+@media(max-width:700px){.source-editor-overlay{inset:110px 0 0}.source-editor-overlay .source-lower{grid-template-columns:1fr}.source-editor-overlay .fragmentation-workbench{padding:10px 10px 55px}.ruler-edge-magnifier{width:145px}.fragmentation-workbench>.correction-result{grid-template-columns:1fr}}

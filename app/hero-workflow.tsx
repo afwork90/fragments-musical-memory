@@ -15,20 +15,11 @@ type TransformDraft = { semitones:number; bpm:number; timing:"normal" | "half-ti
 
 const PIPELINE = ["Importing","Segmenting","Extracting metadata","Matching","Ready"] as const;
 const COLORS = ["#a99cff","#74d8ff","#ffbc65","#c8fa78"];
-const fmt = (seconds:number) => `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2,"0")}`;
-
 function wavePath(values:number[],width=1000,height=160) {
   const middle=height / 2;
   const upper=values.map((value,index) => `${index ? "L" : "M"}${index / Math.max(1,values.length - 1) * width},${middle - value / 100 * middle * .88}`).join(" ");
   const lower=[...values].reverse().map((value,reverseIndex) => { const index=values.length - 1 - reverseIndex; return `L${index / Math.max(1,values.length - 1) * width},${middle + value / 100 * middle * .88}`; }).join(" ");
   return `${upper} ${lower} Z`;
-}
-
-function waveSlice(values:number[],time:number,duration:number) {
-  const center=Math.round(time / Math.max(1,duration) * (values.length - 1));
-  const start=Math.max(0,center - 6);
-  const slice=values.slice(start,Math.min(values.length,center + 7));
-  return slice.length > 2 ? slice : values;
 }
 
 function RealWave({ values,active=false }: { values:number[]; active?:boolean }) {
@@ -70,8 +61,8 @@ export function CombineWorkspace({ anchor,candidates,fragments,statuses,onClose,
 }) {
   const [activeId,setActiveId]=useState(candidates[0]?.id ?? "");
   const relationship=candidates.find((item) => item.id === activeId) ?? candidates[0];
-  const candidate=fragments.find((item) => item.id === relationship?.otherId)!;
-  const recommendation=useMemo(() => recommendationFor(relationship,candidate),[relationship,candidate]);
+  const candidate=fragments.find((item) => item.id === relationship?.otherId);
+  const recommendation=useMemo<TransformDraft>(() => relationship && candidate ? recommendationFor(relationship,candidate) : { semitones:0,bpm:90,timing:"normal",beatOffset:0,repeat:1,transformed:true },[relationship,candidate]);
   const [transform,setTransform]=useState<TransformDraft>(recommendation);
   const [playing,setPlaying]=useState("");
   const [playPhase,setPlayPhase]=useState<"" | "a" | "b" | "both">("");
@@ -83,8 +74,9 @@ export function CombineWorkspace({ anchor,candidates,fragments,statuses,onClose,
   const stop=() => { audios.current.forEach((audio) => { audio.pause();audio.currentTime=0; });audios.current=[];timers.current.forEach(window.clearTimeout);timers.current=[];setPlaying("");setPlayPhase(""); };
   useEffect(() => () => stop(),[]);
   const makeAudio=(asset:string,track:"a" | "b") => { const audio=new Audio(asset);audio.volume=mute[track] ? 0 : volume[track] / 100;audio.loop=loop[track];audios.current.push(audio);return audio; };
-  const candidateAsset=transform.transformed ? relationship.transform?.asset ?? candidate.audio : candidate.audio;
+  const candidateAsset=transform.transformed ? relationship?.transform?.asset ?? candidate?.audio ?? "" : candidate?.audio ?? "";
   const play=(mode:"A" | "B" | "A→B" | "B→A" | "Together") => {
+    if (!relationship || !candidate) return;
     stop();setPlaying(mode);onAuditioned(relationship);
     const a=makeAudio(anchor.audio,"a"),b=makeAudio(candidateAsset,"b");
     const safe=(audio:HTMLAudioElement) => audio.play().catch(() => { setPlaying("");setPlayPhase(""); });
@@ -118,39 +110,6 @@ export function CombineWorkspace({ anchor,candidates,fragments,statuses,onClose,
     </div>
     <footer className="combine-actions"><button onClick={() => { const next=candidates.find((item) => item.id !== relationship.id);if (next) chooseCandidate(next.id);onReject(relationship); }}>Reject</button><button onClick={() => onExport(relationship)}>Export</button><button className="primary-button" onClick={() => onSave(relationship)}>Save combination</button></footer>
   </section>;
-}
-
-export function CorrectionOverlay({ candidate,source,surrounding,score,onCancel,onApply,onKeep,onDrop }: { candidate:Fragment;source:SourceFile;surrounding:Fragment[];score:number;onCancel:()=>void;onApply:(patch:Partial<Fragment>)=>void;onKeep:()=>void;onDrop:()=>void }) {
-  const [original]=useState(() => ({ duration:candidate.duration,key:candidate.key,bpm:candidate.bpm,bars:candidate.bars,beats:candidate.beats,confidence:candidate.confidence,analysisRevision:candidate.analysisRevision }));
-  const [start,setStart]=useState(candidate.start + 1.2);
-  const [end,setEnd]=useState(candidate.end - 1.5);
-  const [phase,setPhase]=useState<"edit" | "recompute" | "prompt">("edit");
-  const [manualRanges,setManualRanges]=useState<{ id:string;name:string;start:number;end:number }[]>([]);
-  const [draggingEdge,setDraggingEdge]=useState<"start" | "end" | null>(null);
-  const [previewingId,setPreviewingId]=useState<string | null>(null);
-  const previewAudio=useRef<HTMLAudioElement | null>(null);
-  const waveRef=useRef<HTMLDivElement>(null);
-  const displayRanges=[...surrounding.map((fragment) => fragment.id === candidate.id ? { ...fragment,start,end } : fragment),...manualRanges];
-  const addFragment=() => { const index=displayRanges.length + 1;const length=Math.max(4,Math.min(14,source.duration * .07));const proposed=Math.min(source.duration - length,candidate.end + 2 + manualRanges.length * length * .65);setManualRanges((current) => [...current,{ id:`manual-${index}`,name:`Untitled fragment ${index}`,start:Math.max(0,proposed),end:Math.max(0,proposed) + length }]); };
-  const moveEdge=(event:React.PointerEvent<HTMLButtonElement>) => { if (!draggingEdge) return;const rect=waveRef.current?.getBoundingClientRect();if (!rect) return;const time=Math.max(0,Math.min(source.duration,(event.clientX - rect.left) / rect.width * source.duration));if (draggingEdge === "start") setStart(Math.min(time,end - .5));else setEnd(Math.max(time,start + .5)); };
-  const beginEdge=(event:React.PointerEvent<HTMLButtonElement>,edge:"start" | "end") => { event.preventDefault();event.currentTarget.setPointerCapture(event.pointerId);setDraggingEdge(edge); };
-  const finishEdge=(event:React.PointerEvent<HTMLButtonElement>) => { setDraggingEdge(null);if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); };
-  const stopPreview=() => { if (previewAudio.current) { previewAudio.current.pause();previewAudio.current.currentTime=0;previewAudio.current=null; }setPreviewingId(null); };
-  const preview=(fragment:Fragment) => { if (previewingId === fragment.id) { stopPreview();return; }stopPreview();const audio=new Audio(fragment.audio);audio.loop=true;audio.volume=.72;previewAudio.current=audio;setPreviewingId(fragment.id);audio.play().catch(() => setPreviewingId(null)); };
-  useEffect(() => () => { if (previewAudio.current) previewAudio.current.pause(); },[]);
-  const close=() => { stopPreview();onCancel(); };
-  const save=() => { stopPreview();onApply({ start,end,duration:fmt(end - start),key:"C minor",bpm:90,bars:3,beats:17,confidence:.93,analysisRevision:original.analysisRevision + 1 });setPhase("recompute");window.setTimeout(() => setPhase("prompt"),900); };
-  return <div className="correction-layer"><section className="correction-editor" role="dialog" aria-modal="true" aria-label="Edit source boundaries">
-    <header><div><span className="eyebrow">Fragmentation</span><h2>{source.name}</h2><p>Editing {candidate.name} while preserving source context</p></div><div className="correction-head-actions"><button className="correction-add" onClick={addFragment}>＋ Add fragment</button><button className="modal-close" onClick={close} aria-label="Discard boundary changes">×</button></div></header>
-    <div className="correction-timeline">
-      <div className="correction-lanes">{displayRanges.map((fragment,index) => { const playable="audio" in fragment;return <div className="correction-lane-row" key={fragment.id} style={{ top:`${index * 24}px` }}><div className="correction-fragment-bar" style={{ left:`${fragment.start / source.duration * 100}%`,width:`${(fragment.end - fragment.start) / source.duration * 100}%`,background:COLORS[index % COLORS.length] }}>{playable ? <button className={previewingId === fragment.id ? "playing" : ""} onClick={() => preview(fragment)} aria-label={`${previewingId === fragment.id ? "Stop" : "Play"} fragment ${fragment.name}`}>{previewingId === fragment.id ? "Ⅱ" : "▶"}</button> : <button disabled aria-label="Save this fragment before auditioning">▶</button>}<span>{fragment.name}</span></div></div>; })}</div>
-      <div className="correction-wave" ref={waveRef}><RealWave values={source.waveform}/>{displayRanges.map((fragment,index) => <i className={`correction-wave-range ${previewingId === fragment.id ? "auditioning" : ""}`} key={fragment.id} style={{ left:`${fragment.start / source.duration * 100}%`,width:`${(fragment.end - fragment.start) / source.duration * 100}%`,borderColor:COLORS[index % COLORS.length] }}>{previewingId === fragment.id && <span className="fragment-scan-playhead" />}</i>)}<div className="focus-range" style={{ left:`${start / source.duration * 100}%`,width:`${(end - start) / source.duration * 100}%` }}><b>{fmt(start)}–{fmt(end)}</b><button className="correction-range-handle start" aria-label="Magnify and adjust fragment start" onPointerDown={(event) => beginEdge(event,"start")} onPointerMove={moveEdge} onPointerUp={finishEdge} onPointerCancel={finishEdge}>⌕</button><button className="correction-range-handle end" aria-label="Magnify and adjust fragment end" onPointerDown={(event) => beginEdge(event,"end")} onPointerMove={moveEdge} onPointerUp={finishEdge} onPointerCancel={finishEdge}>⌕</button>{draggingEdge && <div className={`correction-edge-magnifier ${draggingEdge}`}><strong>{draggingEdge} · {fmt(draggingEdge === "start" ? start : end)}</strong><RealWave values={waveSlice(source.waveform,draggingEdge === "start" ? start : end,source.duration)}/></div>}</div></div>
-      <div className="boundary-controls"><label>Start <input aria-label="Fragment start" type="range" min={Math.max(0,candidate.start - 8)} max={candidate.end - 1} step="0.1" value={start} onChange={(event) => setStart(Math.min(Number(event.target.value),end - .5))}/><output>{fmt(start)}</output></label><label>End <input aria-label="Fragment end" type="range" min={candidate.start + 1} max={Math.min(source.duration,candidate.end + 8)} step="0.1" value={end} onChange={(event) => setEnd(Math.max(Number(event.target.value),start + .5))}/><output>{fmt(end)}</output></label></div>
-    </div>
-    {phase === "edit" && <footer><span>Drag either edge. The source and comparison remain in place.</span><button className="soft-button" onClick={close}>Discard</button><button className="primary-button" onClick={save}>Save & recompute</button></footer>}
-    {phase === "recompute" && <div className="recompute"><i/><strong>Recomputing metadata and active match…</strong><span>Revision {original.analysisRevision + 1}</span></div>}
-    {phase === "prompt" && <div className="correction-result"><div className="metadata-diff"><span>Field</span><span>Before</span><span>After</span>{[["Duration",original.duration,fmt(end-start)],["Key",original.key,"C minor"],["BPM",original.bpm,"90"],["Bars",original.bars,"3"],["Beats",original.beats,"17"],["Confidence",`${Math.round(original.confidence*100)}%`,`93%`],["Match",`${score}%`,`76%`]].map((row) => row.map((cell,index) => <span className={index === 2 ? "changed" : ""} key={`${row[0]}-${index}`}>{cell}</span>))}</div><div className="link-prompt"><span className="relationship-badge manual">criteria changed</span><h3>This fragment no longer matches the original search. Keep it linked to this comparison?</h3><p>The boundary correction is saved either way. A manual link preserves your musical judgment.</p><div><button onClick={() => { stopPreview();onDrop(); }}>No, next candidate</button><button className="primary-button" onClick={() => { stopPreview();onKeep(); }}>Yes, keep linked</button></div></div></div>}
-  </section></div>;
 }
 
 export function ExportSheet({ anchor,candidate,relationship,onClose,onSaved }: { anchor:Fragment;candidate:Fragment;relationship:CombineCandidate;onClose:()=>void;onSaved:()=>void }) {
