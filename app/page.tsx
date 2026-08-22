@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_WEIGHTS,
   DEFAULT_TOLERANCES,
@@ -20,14 +20,17 @@ import {
 } from "./prototype-data";
 import { CombineCandidate, CombineWorkspace, ExportSheet, ImportSheet } from "./hero-workflow";
 import { EditableRange, FragmentationWorkbench } from "./fragmentation-workbench";
+import { ColumnFilterPopover, LibraryColumnId, LibraryFilters, activeLibraryFilterCount, createLibraryFilters, libraryFilterIsActive } from "./library-filter-popover";
+import { MAP_WORLD, clampMapCamera, fitMapCamera, musicalMapPoint, panMapCamera, zoomMapCameraAt } from "./map-layout.mjs";
 
 type View = "library" | "source" | "map" | "archive";
 type RangeMode = "reasonable" | "experimental";
-type SortColumn = "name" | "source" | "signal" | "date" | "start" | "end" | "duration" | "bars" | "key" | "tempo" | "confidence" | "tags" | "role" | "links" | "takes";
+type SortColumn = LibraryColumnId;
 type SortDirection = "asc" | "desc";
 type SourceSortColumn = "name" | "signal" | "date" | "duration" | "type" | "profile" | "format" | "device" | "fragments";
 type ScoredRelationship = Relationship & { score: number; otherId: string };
-type ReturnSnapshot = { kind:"source-edit" | "map-full";view:View;selectedId:string;selectedSourceId:string;connectionsOpen:boolean;advancedOpen:boolean;mapSelectedId:string | null;scrollY:number };
+type MapCamera = { x:number;y:number;scale:number };
+type ReturnSnapshot = { kind:"source-edit" | "map-full";view:View;selectedId:string;selectedSourceId:string;connectionsOpen:boolean;advancedOpen:boolean;mapSelectedId:string | null;mapCamera:MapCamera;scrollY:number };
 type CorrectionPhase = "edit" | "recompute" | "prompt";
 
 const CONTEXTS: { id: SearchContext; label: string }[] = [
@@ -50,15 +53,13 @@ const RANGE_COLORS = ["#a99cff","#74d8ff","#ffbc65","#c8fa78","#ff849b","#75e2c2
 const OPENING_SOURCE_ID = SOURCE_FILES.find((source) => !source.imported)!.id;
 const INITIAL_RELATIONSHIP_STATUSES = Object.fromEntries(RELATIONSHIPS.filter((relationship) => relationship.status).map((relationship) => [relationship.id,relationship.status!])) as Record<string,RelationshipStatus>;
 const INITIAL_MANUAL_RELATIONSHIP_IDS = new Set(RELATIONSHIPS.filter((relationship) => relationship.status === "manual").map((relationship) => relationship.id));
-const GRAPH_POSITIONS = [
-  [15,20],[38,16],[64,22],[80,14],[24,42],[49,39],[71,44],[89,36],[12,66],[33,62],[55,66],[76,61],[91,70],[21,84],[44,83],[67,85],[82,88],[54,19],
-];
-
 const fragmentById = (id: string) => FRAGMENTS.find((fragment) => fragment.id === id)!;
 const sourceNameFor = (fragment:Fragment) => SOURCE_FILES.find((source) => source.id === fragment.sourceId)?.name ?? fragment.source;
 const otherIdFor = (relationship: Relationship, selectedId: string) => relationship.source === selectedId ? relationship.target : relationship.source;
 const formatSeconds = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 const fragmentCountForSensitivity = (sensitivity:number) => Math.max(1,Math.min(6,Math.floor((sensitivity - 10) / 16) + 1));
+const matchesNumericFilter = (actual:number,filter:LibraryFilters["tempo"]) => filter.value.trim() === "" || (filter.comparison === "gt" ? actual > Number(filter.value) : actual < Number(filter.value));
+const relationshipIsTransformed = (relationship:Relationship) => Boolean(relationship.transform && ((relationship.transform.pitch ?? 0) !== 0 || (relationship.transform.bpm ?? 0) !== 0 || relationship.transform.timing || (relationship.transform.beatOffset ?? 0) !== 0 || (relationship.transform.repeat ?? 1) !== 1 || relationship.transform.labels.some((label) => label !== "As recorded")));
 
 function rangeForIndex(source:SourceFile,index:number):EditableRange {
   const referenced=FRAGMENTS.find((fragment) => fragment.id === source.fragmentIds[index]);
@@ -106,7 +107,8 @@ export default function Home() {
   const [view, setView] = useState<View>("library");
   const [selectedId, setSelectedId] = useState("f02");
   const [query, setQuery] = useState("");
-  const [roleFilter, setRoleFilter] = useState<(typeof ROLES)[number]>("All");
+  const [libraryFilters,setLibraryFilters] = useState<LibraryFilters>(createLibraryFilters);
+  const [filterMenu,setFilterMenu] = useState<{ column:SortColumn;left:number;top:number;trigger:HTMLButtonElement } | null>(null);
   const [sort, setSort] = useState<{ column:SortColumn; direction:SortDirection }>({ column:"date", direction:"desc" });
   const [context, setContext] = useState<SearchContext>("whole");
   const [rangeMode, setRangeMode] = useState<RangeMode>("reasonable");
@@ -141,10 +143,21 @@ export default function Home() {
   const [manualRelationshipIds,setManualRelationshipIds] = useState<Set<string>>(() => new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));
   const [mapSelectedId,setMapSelectedId] = useState<string | null>(null);
   const [hoveredMapId,setHoveredMapId] = useState<string | null>(null);
+  const [mapCamera,setMapCamera] = useState<MapCamera>({ x:0,y:0,scale:1 });
+  const [mapPanning,setMapPanning] = useState(false);
   const returnScroll = useRef(0);
   const returnStack = useRef<ReturnSnapshot[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
   const previewAudio = useRef<HTMLAudioElement | null>(null);
+  const mapViewportRef = useRef<HTMLDivElement>(null);
+  const mapSizeRef = useRef({ width:0,height:0 });
+  const mapDragRef = useRef<{ pointerId:number;startX:number;startY:number;origin:MapCamera } | null>(null);
+  const mapInspectorCloseRef = useRef<HTMLButtonElement>(null);
+  const mapDidFit = useRef(false);
+  const filterMenuOpenRef=useRef(false);
+  const closeFilterMenu=useCallback(() => setFilterMenu(null),[]);
+
+  useEffect(() => { filterMenuOpenRef.current=Boolean(filterMenu); },[filterMenu]);
 
   const activeFragments = useMemo(() => FRAGMENTS.filter((fragment) => importComplete || !IMPORTED_FRAGMENT_IDS.includes(fragment.id)).map((fragment) => ({ ...fragment,...fragmentOverrides[fragment.id] })),[importComplete,fragmentOverrides]);
   const activeFragmentById = (id:string) => activeFragments.find((fragment) => fragment.id === id) ?? ({ ...fragmentById(id),...fragmentOverrides[id] });
@@ -157,13 +170,13 @@ export default function Home() {
     setPreviewingId(null);
   };
 
-  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");if (next !== "map") setMapSelectedId(null);setView(next); };
+  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setFilterMenu(null);setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");if (next !== "map") setMapSelectedId(null);setView(next); };
   const notify = (message:string) => { setToast(message); window.setTimeout(() => setToast(null), 2400); };
 
   useEffect(() => {
     const handler = (event:KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); navigate("library"); window.setTimeout(() => searchRef.current?.focus(), 0); }
-      if (event.key === "Escape") { setDuplicateGroup(null); stopAllAudio(); }
+      if (event.key === "Escape") { if (filterMenuOpenRef.current) return;setDuplicateGroup(null);setMapSelectedId(null);stopAllAudio(); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -181,6 +194,33 @@ export default function Home() {
     window.addEventListener("pointerup", finish, { once:true });
     return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); };
   }, [resizingConnections]);
+
+  useEffect(() => {
+    if (view !== "map") return;
+    const viewport=mapViewportRef.current;
+    if (!viewport) return;
+    const measure=() => {
+      const rect=viewport.getBoundingClientRect();
+      const size={ width:rect.width,height:rect.height };
+      if (!size.width || !size.height) return;
+      mapSizeRef.current=size;
+      if (!mapDidFit.current) { mapDidFit.current=true;setMapCamera(fitMapCamera(size)); }
+      else setMapCamera((camera) => clampMapCamera(camera,size));
+    };
+    const observer=new ResizeObserver(measure);
+    observer.observe(viewport);measure();
+    const wheel=(event:WheelEvent) => {
+      if (mapDragRef.current || (event.target as HTMLElement).closest(".map-inspector,.map-controls")) return;
+      event.preventDefault();
+      const rect=viewport.getBoundingClientRect();
+      const unit=event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1;
+      const delta=Math.max(-100,Math.min(100,event.deltaY * unit));
+      const cursor={ x:event.clientX - rect.left,y:event.clientY - rect.top };
+      setMapCamera((camera) => zoomMapCameraAt(camera,camera.scale * Math.exp(-delta * .002),cursor,mapSizeRef.current));
+    };
+    viewport.addEventListener("wheel",wheel,{ passive:false });
+    return () => { observer.disconnect();viewport.removeEventListener("wheel",wheel); };
+  },[view]);
 
   const rankedConnectionsFor = (sourceId:string,limit=6):ScoredRelationship[] => {
     const sourceFragment=activeFragmentById(sourceId);
@@ -219,12 +259,40 @@ export default function Home() {
     return { total:eligible.length,manual:eligible.filter((relationship) => manualRelationshipIds.has(relationship.id)).length };
   };
 
+  const relatedTakeCountFor=(fragment:Fragment) => fragment.duplicateGroup && !duplicateExclusions.has(fragment.id) ? activeFragments.filter((item) => item.duplicateGroup === fragment.duplicateGroup && item.id !== fragment.id && !archived.has(item.id) && !duplicateExclusions.has(item.id)).length : 0;
+  const filterableFragments=useMemo(() => activeFragments.filter((fragment) => !archived.has(fragment.id)),[activeFragments,archived]);
+  const keyFilterOptions=useMemo(() => Array.from(new Set(filterableFragments.flatMap((fragment) => [fragment.key,...fragment.alternateKeys]))).sort((a,b) => a.localeCompare(b)),[filterableFragments]);
+  const tagFilterOptions=useMemo(() => Array.from(new Set(filterableFragments.flatMap((fragment) => fragment.userTags))).sort((a,b) => a.localeCompare(b)),[filterableFragments]);
+  const libraryFilterCount=activeLibraryFilterCount(libraryFilters);
+  const matchesLibraryFilters=(fragment:Fragment) => {
+    const name=libraryFilters.name.trim().toLowerCase();
+    const source=libraryFilters.source.trim().toLowerCase();
+    if (name && !fragment.name.toLowerCase().includes(name)) return false;
+    if (source && !sourceNameFor(fragment).toLowerCase().includes(source)) return false;
+    if (!matchesNumericFilter(fragment.brightness,libraryFilters.signal)) return false;
+    if (libraryFilters.date.value) {
+      const comparison=fragment.date.localeCompare(libraryFilters.date.value);
+      if (libraryFilters.date.comparison === "after" ? comparison <= 0 : comparison >= 0) return false;
+    }
+    if (!matchesNumericFilter(fragment.start,libraryFilters.start) || !matchesNumericFilter(fragment.end,libraryFilters.end) || !matchesNumericFilter(fragment.end - fragment.start,libraryFilters.duration)) return false;
+    const barsOrBeats=libraryFilters.bars.metric === "bars" ? fragment.bars : fragment.beats;
+    if (!matchesNumericFilter(barsOrBeats,libraryFilters.bars)) return false;
+    if (libraryFilters.key.length && ![fragment.key,...fragment.alternateKeys].some((key) => libraryFilters.key.includes(key))) return false;
+    if (!matchesNumericFilter(fragment.bpm,libraryFilters.tempo) || !matchesNumericFilter(fragment.confidence * 100,libraryFilters.confidence)) return false;
+    if (libraryFilters.tags.length && !fragment.userTags.some((tag) => libraryFilters.tags.includes(tag))) return false;
+    if (libraryFilters.role.length && !libraryFilters.role.includes(fragment.role)) return false;
+    if (!matchesNumericFilter(linkSummaryFor(fragment.id).total,libraryFilters.links)) return false;
+    const relatedTakes=relatedTakeCountFor(fragment);
+    const takeCount=relatedTakes > 0 ? relatedTakes + 1 : 0;
+    return matchesNumericFilter(takeCount,libraryFilters.takes);
+  };
+
   const normalizedQuery=query.trim().toLowerCase();
   const visibleFragments=activeFragments.filter((fragment) => !archived.has(fragment.id))
-    .filter((fragment) => roleFilter === "All" || fragment.roles.includes(roleFilter))
     .filter((fragment) => !normalizedQuery || `${fragment.name} ${sourceNameFor(fragment)} ${fragment.key} ${fragment.roles.join(" ")} ${fragment.userTags.join(" ")}`.toLowerCase().includes(normalizedQuery))
+    .filter(matchesLibraryFilters)
     .sort((a,b) => {
-      const takeCount=(fragment:Fragment) => fragment.duplicateGroup ? activeFragments.filter((item) => item.duplicateGroup === fragment.duplicateGroup && item.id !== fragment.id && !archived.has(item.id) && !duplicateExclusions.has(item.id)).length : 0;
+      const takeCount=(fragment:Fragment) => relatedTakeCountFor(fragment);
       let comparison=0;
       if (sort.column === "name") comparison=a.name.localeCompare(b.name);
       if (sort.column === "source") comparison=sourceNameFor(a).localeCompare(sourceNameFor(b));
@@ -248,6 +316,12 @@ export default function Home() {
     column,
     direction:current.column === column ? (current.direction === "asc" ? "desc" : "asc") : (["date","signal","tempo","links","takes"].includes(column) ? "desc" : "asc"),
   }));
+
+  const openColumnFilter = (column:SortColumn,trigger:HTMLButtonElement) => {
+    if (filterMenu?.column === column) { setFilterMenu(null);return; }
+    const rect=trigger.getBoundingClientRect();
+    setFilterMenu({ column,left:rect.left,top:rect.bottom + 5,trigger });
+  };
 
   const visibleSources = useMemo(() => {
     const normalized = sourceQuery.trim().toLowerCase();
@@ -327,15 +401,15 @@ export default function Home() {
     setArchived((current) => new Set([...current, ...others])); setSelectedId(id); setDuplicateGroup(null); notify("Kept this take for matching and archived the rest.");
   };
   const resetDemo = () => {
-    stopAllAudio(); setView("library"); setSelectedId("f02"); setQuery(""); setRoleFilter("All"); setSort({ column:"date", direction:"desc" });
+    stopAllAudio(); setView("library"); setSelectedId("f02"); setQuery("");setLibraryFilters(createLibraryFilters());setFilterMenu(null);setSort({ column:"date", direction:"desc" });
     setContext("whole"); setRangeMode("reasonable"); setWeights({ ...DEFAULT_WEIGHTS }); setTolerances({ ...DEFAULT_TOLERANCES });setArchived(new Set()); setDuplicateExclusions(new Set());
-    returnStack.current=[];setDuplicateGroup(null);setConnectionsOpen(false);setAdvancedOpen(false);setConnectionsWidth(520);setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(OPENING_SOURCE_ID);setSourceQuery("");setSourceSort({ column:"date",direction:"desc" });setSourceEditorOpen(false);setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null);notify("Demo restored to 24 fragments before import.");
+    returnStack.current=[];setDuplicateGroup(null);setConnectionsOpen(false);setAdvancedOpen(false);setConnectionsWidth(520);setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(OPENING_SOURCE_ID);setSourceQuery("");setSourceSort({ column:"date",direction:"desc" });setSourceEditorOpen(false);setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null);setMapCamera({ x:0,y:0,scale:1 });mapDidFit.current=false;notify("Demo restored to 24 fragments before import.");
   };
-  const pushReturn = (kind:ReturnSnapshot["kind"]) => returnStack.current.push({ kind,view,selectedId,selectedSourceId,connectionsOpen,advancedOpen,mapSelectedId,scrollY:window.scrollY });
+  const pushReturn = (kind:ReturnSnapshot["kind"]) => returnStack.current.push({ kind,view,selectedId,selectedSourceId,connectionsOpen,advancedOpen,mapSelectedId,mapCamera:{ ...mapCamera },scrollY:window.scrollY });
   const restoreReturn = (kind:ReturnSnapshot["kind"]) => {
     const snapshot=returnStack.current.at(-1);
     if (!snapshot || snapshot.kind !== kind) return false;
-    returnStack.current.pop();stopAllAudio();setView(snapshot.view);setSelectedId(snapshot.selectedId);setSelectedSourceId(snapshot.selectedSourceId);setConnectionsOpen(snapshot.connectionsOpen);setAdvancedOpen(snapshot.advancedOpen);setMapSelectedId(snapshot.mapSelectedId);setSourceEditorOpen(false);window.setTimeout(() => window.scrollTo({ top:snapshot.scrollY }),0);return true;
+    returnStack.current.pop();stopAllAudio();setView(snapshot.view);setSelectedId(snapshot.selectedId);setSelectedSourceId(snapshot.selectedSourceId);setConnectionsOpen(snapshot.connectionsOpen);setAdvancedOpen(snapshot.advancedOpen);setMapSelectedId(snapshot.mapSelectedId);setMapCamera(snapshot.mapCamera);setSourceEditorOpen(false);window.setTimeout(() => window.scrollTo({ top:snapshot.scrollY }),0);return true;
   };
   const openFragment = (id:string) => { stopAllAudio(); setSelectedId(id); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
   const openFragmentFromMap = (id:string) => { pushReturn("map-full");openFragment(id); };
@@ -348,7 +422,7 @@ export default function Home() {
   const editSourceForFragment = (id:string) => { const fragment=activeFragmentById(id);pushReturn("source-edit");stopAllAudio();setSelectedSourceId(fragment.sourceId);setSourceEditorOpen(true);setConnectionsOpen(false);setAdvancedOpen(false);setView("source"); };
   const completeImport = () => {
     setImportComplete(true);setImportOpen(false);setSources(SOURCE_FILES.map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(STAGED_SOURCE_ID);
-    setView("library");setQuery("Balcony");setSelectedId("f01");setConnectionsOpen(false);notify("4 fragment references added. Select one to find connections.");
+    setView("library");setQuery("Balcony");setLibraryFilters(createLibraryFilters());setFilterMenu(null);setSelectedId("f01");setConnectionsOpen(false);notify("4 fragment references added. Select one to find connections.");
   };
   const openCombine = (relationship:ScoredRelationship) => { stopAllAudio();returnScroll.current=window.scrollY;setRelationshipStatuses((current) => ({ ...current,[relationship.id]:current[relationship.id] ?? "auditioned" }));setCombineCandidates([relationship,...connections.filter((item) => item.id !== relationship.id)].slice(0,3));window.scrollTo({ top:0 }); };
   const closeCombine = () => { stopAllAudio();setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setCombineCandidates(null);window.setTimeout(() => window.scrollTo({ top:returnScroll.current }),0); };
@@ -373,11 +447,69 @@ export default function Home() {
   };
   const keepCorrectionLink = () => { if (!correctionRelationship) return;setManualRelationshipIds((current) => new Set([...current,correctionRelationship.id]));markRelationship(correctionRelationship,"manual");setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCombineDraftRanges(null);setCombineDraftSensitivity(null);notify("Manual relationship preserved in this comparison."); };
   const rejectCorrectionLink = () => { if (!correctionRelationship) return;const relationship=correctionRelationship;setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCombineDraftRanges(null);setCombineDraftSensitivity(null);rejectRelationship(relationship); };
-  const mapFragment=mapSelectedId ? activeFragments.find((fragment) => fragment.id === mapSelectedId) ?? null : null;
-  const mapConnections=mapFragment ? rankedConnectionsFor(mapFragment.id,4) : [];
-  const mapLinks=mapFragment ? linkSummaryFor(mapFragment.id) : { total:0,manual:0 };
+  const mapFragments=activeFragments;
+  const mapPoints=useMemo(() => new Map(activeFragments.map((fragment) => [fragment.id,musicalMapPoint(fragment)])),[activeFragments]);
+  const mapTakeEdges=useMemo(() => { const firstByGroup=new Map<string,string>();const edges:{ source:string;target:string }[]=[];activeFragments.forEach((fragment) => { if (!fragment.duplicateGroup || archived.has(fragment.id) || duplicateExclusions.has(fragment.id)) return;const first=firstByGroup.get(fragment.duplicateGroup);if (first) edges.push({ source:first,target:fragment.id });else firstByGroup.set(fragment.duplicateGroup,fragment.id); });return edges; },[activeFragments,archived,duplicateExclusions]);
+  const mapRelationshipScores=new Map<string,number>();
+  mapFragments.filter((fragment) => !archived.has(fragment.id)).forEach((fragment) => rankedConnectionsFor(fragment.id,RELATIONSHIPS.length).forEach((relationship) => mapRelationshipScores.set(relationship.id,Math.max(mapRelationshipScores.get(relationship.id) ?? 0,relationship.score))));
+  const mapRelationships=RELATIONSHIPS.filter((relationship) => mapRelationshipScores.has(relationship.id) && !archived.has(relationship.source) && !archived.has(relationship.target) && relationshipStatuses[relationship.id] !== "rejected");
+  const mapDegreeFor=(id:string) => mapRelationships.filter((relationship) => relationship.source === id || relationship.target === id);
+  const mapFragment=mapSelectedId && !archived.has(mapSelectedId) ? activeFragments.find((fragment) => fragment.id === mapSelectedId) ?? null : null;
+  const mapConnections:ScoredRelationship[]=mapFragment ? mapDegreeFor(mapFragment.id).map((relationship) => ({ ...relationship,score:mapRelationshipScores.get(relationship.id) ?? Math.round(relationship.base * 100),otherId:otherIdFor(relationship,mapFragment.id) })).sort((a,b) => b.score - a.score).slice(0,4) : [];
+  const mapFragmentRelationships=mapFragment ? mapDegreeFor(mapFragment.id) : [];
+  const mapLinks=mapFragment ? { total:mapFragmentRelationships.length,manual:mapFragmentRelationships.filter((relationship) => manualRelationshipIds.has(relationship.id)).length } : { total:0,manual:0 };
   const mapTakes=mapFragment?.duplicateGroup ? activeFragments.filter((fragment) => fragment.duplicateGroup === mapFragment.duplicateGroup && fragment.id !== mapFragment.id && !archived.has(fragment.id) && !duplicateExclusions.has(fragment.id)).length : 0;
-  const graphY=(value:number) => 8 + value * .68;
+  const fitCurrentMap=() => { const size=mapSizeRef.current;if (size.width && size.height) setMapCamera(fitMapCamera(size)); };
+  const zoomMapBy=(factor:number) => {
+    const size=mapSizeRef.current;
+    if (!size.width || !size.height) return;
+    setMapCamera((camera) => zoomMapCameraAt(camera,camera.scale * factor,{ x:size.width / 2,y:size.height / 2 },size));
+  };
+  const beginMapPan=(event:ReactPointerEvent<HTMLDivElement>) => {
+    if (!event.isPrimary || mapDragRef.current || event.button !== 0 || (event.target as HTMLElement).closest("button,.map-inspector,.map-controls")) return;
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll:true });
+    mapDragRef.current={ pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,origin:mapCamera };
+    event.currentTarget.setPointerCapture(event.pointerId);setMapPanning(true);
+  };
+  const moveMapPan=(event:ReactPointerEvent<HTMLDivElement>) => {
+    const drag=mapDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setMapCamera(panMapCamera(drag.origin,event.clientX - drag.startX,event.clientY - drag.startY,mapSizeRef.current));
+  };
+  const endMapPan=(event:ReactPointerEvent<HTMLDivElement>) => {
+    if (mapDragRef.current?.pointerId !== event.pointerId) return;
+    mapDragRef.current=null;setMapPanning(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const handleMapKeyboard=(event:ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    const size=mapSizeRef.current;
+    if (["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","+","=","-","0","Home"].includes(event.key)) event.preventDefault();
+    if (event.key === "ArrowLeft") setMapCamera((camera) => panMapCamera(camera,40,0,size));
+    if (event.key === "ArrowRight") setMapCamera((camera) => panMapCamera(camera,-40,0,size));
+    if (event.key === "ArrowUp") setMapCamera((camera) => panMapCamera(camera,0,40,size));
+    if (event.key === "ArrowDown") setMapCamera((camera) => panMapCamera(camera,0,-40,size));
+    if (event.key === "+" || event.key === "=") zoomMapBy(1.25);
+    if (event.key === "-") zoomMapBy(.8);
+    if (event.key === "0" || event.key === "Home") fitCurrentMap();
+  };
+  const focusMapInspector=() => window.setTimeout(() => mapInspectorCloseRef.current?.focus({ preventScroll:true }),0);
+  const closeMapInspector=() => { const id=mapSelectedId;stopAllAudio();setMapSelectedId(null);if (id) window.setTimeout(() => document.querySelector<HTMLButtonElement>(`[data-map-node="${id}"]`)?.focus({ preventScroll:true }),0); };
+  const selectAndRevealMapNode=(id:string,moveFocus=false) => {
+    stopAllAudio();setSelectedId(id);setMapSelectedId(id);
+    const point=mapPoints.get(id),size=mapSizeRef.current;
+    if (moveFocus) focusMapInspector();
+    if (!point || !size.width || !size.height) return;
+    setMapCamera((camera) => {
+      const screenX=camera.x + point.x * camera.scale,screenY=camera.y + point.y * camera.scale;
+      const safeSize={ width:size.width,height:Math.max(280,size.height - 175) };
+      const left=42,right=Math.max(left,safeSize.width - 42),top=50,bottom=Math.max(top,safeSize.height - 24);
+      const dx=screenX < left ? left - screenX : screenX > right ? right - screenX : 0;
+      const dy=screenY < top ? top - screenY : screenY > bottom ? bottom - screenY : 0;
+      return dx || dy ? panMapCamera(camera,dx,dy,safeSize) : camera;
+    });
+  };
   const editorRanges=correctionRelationship ? (combineDraftRanges ?? []) : selectedRanges;
   const editorSensitivity=correctionRelationship ? (combineDraftSensitivity ?? selectedSource.sensitivity) : selectedSource.sensitivity;
   const correctedRange=correctionRelationship ? editorRanges.find((range) => range.fragmentId === correctionRelationship.otherId) : null;
@@ -417,18 +549,19 @@ export default function Home() {
         <div className="library">
           <div className="panel-titlebar"><h1>Fragments</h1></div>
           <div className="toolbar">
-            <div className="filter-row" aria-label="Filter by musical role">{ROLES.map((role) => <button key={role} className={roleFilter === role ? "filter-active" : ""} onClick={() => setRoleFilter(role)}>{role === "All" ? "All fragments" : role}</button>)}</div>
+            <div className="filter-row" aria-label="Quick filter by musical role">{ROLES.map((role) => { const active=role === "All" ? libraryFilters.role.length === 0 : libraryFilters.role.includes(role);return <button key={role} className={active ? "filter-active" : ""} aria-pressed={active} onClick={() => setLibraryFilters((current) => ({ ...current,role:role === "All" ? [] : current.role.includes(role) ? current.role.filter((item) => item !== role) : [...current.role,role] }))}>{role === "All" ? "All fragments" : role}</button>; })}</div>
+            {libraryFilterCount > 0 && <button className="filters-summary" onClick={() => { setLibraryFilters(createLibraryFilters());setFilterMenu(null); }} aria-label={`Clear ${libraryFilterCount} column filters`}>Filters {libraryFilterCount}<span>Clear</span></button>}
             <label className="search"><span aria-hidden="true">⌕</span><input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" aria-label="Search fragments" /><kbd>⌘ K</kbd></label>
           </div>
           <div className="table" role="table" aria-label="Fragment library">
-            <div className="table-row table-header" role="row">{LIBRARY_COLUMNS.map((column) => <span role="columnheader" aria-sort={sort.column === column.id ? (sort.direction === "asc" ? "ascending" : "descending") : "none"} key={column.id}><button onClick={() => changeSort(column.id)} aria-label={`Sort by ${column.label}${sort.column === column.id ? `, currently ${sort.direction === "asc" ? "ascending" : "descending"}` : ""}`}>{column.label}<i aria-hidden="true">{sort.column === column.id ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}</i></button></span>)}</div>
+            <div className="table-row table-header" role="row">{LIBRARY_COLUMNS.map((column) => { const filtered=libraryFilterIsActive(libraryFilters,column.id);const expanded=filterMenu?.column === column.id;return <span className={`column-head ${filtered ? "filtered" : ""}`} role="columnheader" aria-sort={sort.column === column.id ? (sort.direction === "asc" ? "ascending" : "descending") : "none"} key={column.id}><button className="column-sort" onClick={() => changeSort(column.id)} aria-label={`Sort by ${column.label}${sort.column === column.id ? `, currently ${sort.direction === "asc" ? "ascending" : "descending"}` : ""}`}>{column.label}<i aria-hidden="true">{sort.column === column.id ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}</i></button><button type="button" className={`column-filter-trigger ${filtered ? "active" : ""}`} data-column-filter={column.id} onClick={(event) => { event.stopPropagation();openColumnFilter(column.id,event.currentTarget); }} aria-label={`Filter by ${column.label}${filtered ? ", active" : ""}`} aria-haspopup="dialog" aria-expanded={expanded} aria-controls={expanded ? `filter-${column.id}` : undefined}><i aria-hidden="true"/></button></span>; })}</div>
             {visibleFragments.map((fragment) => {
-              const relatedTakes = fragment.duplicateGroup ? activeFragments.filter((item) => item.duplicateGroup === fragment.duplicateGroup && item.id !== fragment.id && !archived.has(item.id) && !duplicateExclusions.has(item.id)).length : 0;
+              const relatedTakes = relatedTakeCountFor(fragment);
               const links=linkSummaryFor(fragment.id);
               return <div key={fragment.id} className={`table-row fragment-row ${connectionsOpen && selectedId === fragment.id ? "selected" : ""} ${links.total > 0 ? "" : "no-connections"}`} role="row" tabIndex={0} onClick={() => openFragment(fragment.id)} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openFragment(fragment.id); } }}>
                 <span className="track-name"><b>{fragment.name}</b></span>
                 <span className="source-cell" title={sourceNameFor(fragment)}>{sourceNameFor(fragment)}</span>
-                <button className={`wave-play ${previewingId === fragment.id ? "playing" : ""}`} onClick={(event) => { event.stopPropagation(); previewSingle(fragment); }} aria-label={`${previewingId === fragment.id ? "Stop" : "Play"} ${fragment.name}`}><Waveform values={fragment.waveform} active={previewingId === fragment.id} /></button>
+                <button className={`wave-play ${previewingId === fragment.id ? "playing" : ""}`} title={`Signal brightness ${fragment.brightness} / 100`} onClick={(event) => { event.stopPropagation(); previewSingle(fragment); }} aria-label={`${previewingId === fragment.id ? "Stop" : "Play"} ${fragment.name}; signal brightness ${fragment.brightness} out of 100`}><Waveform values={fragment.waveform} active={previewingId === fragment.id} /></button>
                 <span className="date-cell">{fragment.dateLabel}</span>
                 <span>{formatSeconds(fragment.start)}</span><span>{formatSeconds(fragment.end)}</span>
                 <span className="duration-cell">{formatSeconds(fragment.end - fragment.start)}</span>
@@ -439,8 +572,9 @@ export default function Home() {
                 <span className="takes-cell">{relatedTakes > 0 ? <button className="take-link" onClick={(event) => { event.stopPropagation();setSelectedId(fragment.id);setDuplicateGroup(fragment.duplicateGroup!); }}>{relatedTakes + 1}</button> : "—"}</span>
               </div>;
             })}
-            {visibleFragments.length === 0 && <div className="empty-inline">No fragments match that search.</div>}
+            {visibleFragments.length === 0 && <div className="empty-inline">No fragments match the current search and filters.</div>}
           </div>
+          {filterMenu && <ColumnFilterPopover column={filterMenu.column} filters={libraryFilters} position={{ left:filterMenu.left,top:filterMenu.top }} triggerElement={filterMenu.trigger} keyOptions={keyFilterOptions} tagOptions={tagFilterOptions} roleOptions={ROLES.filter((role):role is MusicalRole => role !== "All")} resultCount={visibleFragments.length} totalCount={activeFragments.filter((fragment) => !archived.has(fragment.id)).length} onChange={setLibraryFilters} onClose={closeFilterMenu}/>}
         </div>
 
         {connectionsOpen && <aside className="connections">
@@ -496,20 +630,29 @@ export default function Home() {
       </section>}
 
       {!combineCandidates && view === "map" && <section className="page-view map-page">
-        <div className="panel-titlebar map-heading"><h1>Map</h1><div className="map-legend"><span><i className="dot violet"/>Direct affinity</span><span><i className="line amber"/>Transformed bridge</span><span><i className="dot lime"/>Selected idea</span></div></div>
-        <div className="graph-board">
-          <div className="cluster-label cluster-one">VOICE & MELODY</div><div className="cluster-label cluster-two">POCKET & RHYTHM</div><div className="cluster-label cluster-three">HARMONIC WORLDS</div>
-          {RELATIONSHIPS.map((relationship) => {
-            const aIndex=activeFragments.slice(0,18).findIndex((fragment) => fragment.id === relationship.source); const bIndex=activeFragments.slice(0,18).findIndex((fragment) => fragment.id === relationship.target);
-            if (aIndex < 0 || bIndex < 0 || archived.has(relationship.source) || archived.has(relationship.target)) return null;
-            const [ax,rawAy]=GRAPH_POSITIONS[aIndex], [bx,rawBy]=GRAPH_POSITIONS[bIndex];const ay=graphY(rawAy),by=graphY(rawBy); const dx=bx-ax, dy=by-ay; const width=Math.sqrt(dx*dx+dy*dy); const angle=Math.atan2(dy,dx)*180/Math.PI;const highlighted=hoveredMapId === relationship.source || hoveredMapId === relationship.target;
-            return <i key={relationship.id} className={`graph-line ${relationship.transformationCost > .1 ? "bridge" : ""} ${highlighted ? "highlighted" : ""}`} style={{ left:`${ax}%`, top:`${ay}%`, width:`${width}%`, transform:`rotate(${angle}deg)` }} />;
-          })}
-          {activeFragments.slice(0,18).map((fragment,index) => { const shortName=fragment.name.length > 19 ? `${fragment.name.slice(0,18)}…` : fragment.name;return archived.has(fragment.id) ? null : <button key={fragment.id} title={fragment.name} className={`graph-node role-${fragment.role.toLowerCase()} ${mapSelectedId === fragment.id ? "selected" : ""}`} style={{ left:`${GRAPH_POSITIONS[index][0]}%`, top:`${graphY(GRAPH_POSITIONS[index][1])}%` }} onMouseEnter={() => setHoveredMapId(fragment.id)} onMouseLeave={() => setHoveredMapId(null)} onFocus={() => setHoveredMapId(fragment.id)} onBlur={() => setHoveredMapId(null)} onClick={() => { stopAllAudio();setSelectedId(fragment.id);setMapSelectedId(fragment.id); }} aria-label={`Inspect ${fragment.name}`}><i/><span>{shortName}</span><small>{fragment.name}</small></button>; })}
+        <div className="panel-titlebar map-heading"><h1>Map</h1><div className="map-legend"><span><i className="dot violet"/>Direct affinity</span><span><i className="line amber"/>Transformed bridge</span><span><i className="line take"/>Related takes</span><span><i className="node-size"/>Size = links</span><span className="dimension-legend">Position · tonal focus × timbral brightness</span></div></div>
+        {/* A focusable region provides keyboard pan/zoom without forcing screen readers into application mode. */}
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
+        <div ref={mapViewportRef} className={`graph-board ${mapPanning ? "panning" : ""}`} role="region" aria-label="Musical fragment map" aria-describedby="map-help" tabIndex={0} onPointerDown={beginMapPan} onPointerMove={moveMapPan} onPointerUp={endMapPan} onPointerCancel={endMapPan} onLostPointerCapture={endMapPan} onKeyDown={handleMapKeyboard}>
+          <div className="map-controls" role="group" aria-label="Map zoom controls"><button onClick={() => zoomMapBy(.8)} aria-label="Zoom out">−</button><output aria-label="Map zoom" aria-live="polite">{Math.round(mapCamera.scale * 100)}%</output><button onClick={() => zoomMapBy(1.25)} aria-label="Zoom in">＋</button><button className="map-fit" onClick={fitCurrentMap}>Fit</button></div>
+          <div className="graph-canvas" style={{ width:MAP_WORLD.width,height:MAP_WORLD.height,transform:`translate3d(${mapCamera.x}px,${mapCamera.y}px,0) scale(${mapCamera.scale})`,"--axis-font":`${7 / mapCamera.scale}px`,"--edge-height":`${1 / mapCamera.scale}px` } as CSSProperties}>
+            <div className="map-grid" aria-hidden="true"/>
+            <div className="map-axis map-axis-x" aria-hidden="true"><span>Unpitched / textural</span><b>Tonal focus</b><span>Pitched / melodic</span></div>
+            <div className="map-axis map-axis-y" aria-hidden="true"><span>Bright / airy</span><b>Timbral brightness</b><span>Dark / warm</span></div>
+            {mapTakeEdges.map((edge) => { const a=mapPoints.get(edge.source),b=mapPoints.get(edge.target);if (!a || !b || archived.has(edge.source) || archived.has(edge.target)) return null;const dx=b.x-a.x,dy=b.y-a.y;return <i key={`take-${edge.source}-${edge.target}`} className="graph-line take-edge" style={{ left:a.x,top:a.y,width:Math.hypot(dx,dy),transform:`rotate(${Math.atan2(dy,dx)*180/Math.PI}deg)` }}/>; })}
+            {mapRelationships.map((relationship) => {
+              const a=mapPoints.get(relationship.source),b=mapPoints.get(relationship.target);
+              if (!a || !b || archived.has(relationship.source) || archived.has(relationship.target)) return null;
+              const dx=b.x-a.x,dy=b.y-a.y;const highlighted=hoveredMapId === relationship.source || hoveredMapId === relationship.target;
+              return <i key={relationship.id} className={`graph-line ${relationshipIsTransformed(relationship) ? "bridge" : ""} ${highlighted ? "highlighted" : ""}`} style={{ left:a.x,top:a.y,width:Math.hypot(dx,dy),transform:`rotate(${Math.atan2(dy,dx)*180/Math.PI}deg)`,"--edge-opacity":Math.max(.24,relationship.base * .62) } as CSSProperties}/>;
+            })}
+            {mapFragments.map((fragment) => { if (archived.has(fragment.id)) return null;const point=mapPoints.get(fragment.id)!;const shortName=fragment.name.length > 19 ? `${fragment.name.slice(0,18)}…` : fragment.name;const links=mapDegreeFor(fragment.id);const size=17 + Math.min(6,links.length) * 1.25;const compensation=Math.max(1,24 / Math.max(1,size * mapCamera.scale));return <button key={fragment.id} data-map-node={fragment.id} title={fragment.name} className={`graph-node role-${fragment.role.toLowerCase()} ${mapSelectedId === fragment.id ? "selected" : ""}`} style={{ left:point.x,top:point.y,"--node-size":`${size}px`,"--node-compensation":compensation,"--node-hover-compensation":compensation * 1.25,"--label-opacity":mapCamera.scale < .45 ? 0 : .58 } as CSSProperties} onMouseEnter={() => setHoveredMapId(fragment.id)} onMouseLeave={() => setHoveredMapId(null)} onFocus={() => setHoveredMapId(fragment.id)} onBlur={() => setHoveredMapId(null)} onClick={(event) => { stopAllAudio();setSelectedId(fragment.id);setMapSelectedId(fragment.id);if (event.detail === 0) focusMapInspector(); }} aria-label={`Inspect ${fragment.name}, ${fragment.role}, ${fragment.key}, ${fragment.bpm} BPM, ${links.length} links`}><i/><span>{shortName}</span><small>{fragment.name}</small></button>; })}
+          </div>
+          <span id="map-help" className="sr-only">Drag the background to pan. Use the mouse wheel or plus and minus buttons to zoom. Arrow keys pan, and Home fits the map. Horizontal position moves from unpitched and textural to pitched and melodic. Vertical position moves from bright and airy to dark and warm.</span>
           {mapFragment && <section className="map-inspector" aria-label={`Map details for ${mapFragment.name}`}>
-            <button className="map-inspector-close" onClick={() => { stopAllAudio();setMapSelectedId(null); }} aria-label="Close map details">×</button>
+            <button ref={mapInspectorCloseRef} className="map-inspector-close" onClick={closeMapInspector} aria-label="Close map details">×</button>
             <div className="map-fragment-mini" role="row"><button className={`wave-play ${previewingId === mapFragment.id ? "playing" : ""}`} onClick={() => previewSingle(mapFragment)} aria-label={`${previewingId === mapFragment.id ? "Stop" : "Play"} ${mapFragment.name}`}><Waveform values={mapFragment.waveform} active={previewingId === mapFragment.id}/></button><span><b>{mapFragment.name}</b><small>{sourceNameFor(mapFragment)}</small></span><em>{mapFragment.key}</em><em>{mapFragment.bpm} BPM</em><em>{mapFragment.role}</em><span className="map-link-count"><b>{mapLinks.total} links</b>{mapLinks.manual > 0 && <i>Manual links {mapLinks.manual}</i>}</span><span>{mapTakes > 0 ? `${mapTakes + 1} takes` : "—"}</span></div>
-            <div className="map-connections-mini"><header><b>Connections</b><button onClick={() => openFragmentFromMap(mapFragment.id)}>Open full view →</button></header>{mapConnections.map((relationship) => { const target=activeFragmentById(relationship.otherId);return <div className="map-connection-mini" key={relationship.id}><strong>{relationship.score}%</strong><button className={`wave-play ${previewingId === target.id ? "playing" : ""}`} onClick={() => previewSingle(target)} aria-label={`${previewingId === target.id ? "Stop" : "Play"} ${target.name}`}><Waveform values={target.waveform} active={previewingId === target.id}/></button><button className="map-target" onClick={() => { stopAllAudio();setSelectedId(target.id);setMapSelectedId(target.id); }}>{target.name}</button><TransformChips relationship={relationship}/></div>;})}{mapConnections.length === 0 && <p>No active connections under the current criteria.</p>}</div>
+            <div className="map-connections-mini"><header><b>Connections</b><button onClick={() => openFragmentFromMap(mapFragment.id)}>Open full view →</button></header>{mapConnections.map((relationship) => { const target=activeFragmentById(relationship.otherId);return <div className="map-connection-mini" key={relationship.id}><strong>{relationship.score}%</strong><button className={`wave-play ${previewingId === target.id ? "playing" : ""}`} onClick={() => previewSingle(target)} aria-label={`${previewingId === target.id ? "Stop" : "Play"} ${target.name}`}><Waveform values={target.waveform} active={previewingId === target.id}/></button><button className="map-target" onClick={(event) => selectAndRevealMapNode(target.id,event.detail === 0)}>{target.name}</button><TransformChips relationship={relationship}/></div>;})}{mapConnections.length === 0 && <p>No active connections under the current criteria.</p>}</div>
           </section>}
         </div>
       </section>}
