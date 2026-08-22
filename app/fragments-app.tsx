@@ -151,9 +151,49 @@ export default function FragmentsApp() {
 
   useEffect(() => { filterMenuOpenRef.current=Boolean(filterMenu); },[filterMenu]);
 
+  useEffect(() => {
+    const bridge = (window as any).fragments;
+    if (!bridge) return;
+    void bridge.listSources().then((documents:any[]) => {
+      const persisted = documents.map((document) => ({
+        id: document.id,
+        name: document.originalName,
+        date: new Date(document.importedAt).toLocaleDateString("en-US", { month:"short",day:"2-digit",year:"numeric" }),
+        duration: document.duration,
+        format: document.format,
+        device: "Managed library",
+        fragmentIds: document.fragments.map((fragment:any) => fragment.id),
+        waveform: document.waveform?.peaks ?? [],
+        sensitivity: MESSY_PHONE_PROFILE.sensitivity,
+        start: 0,
+        end: document.duration,
+        sourceTypes: ["Voice memo","Jam"],
+        analysisProfile: MESSY_PHONE_PROFILE,
+        imported: true,
+        audioUrl: document.audioUrl,
+        bpm: document.analysis?.bpm ?? null,
+        key: document.analysis?.key ?? null,
+        scale: document.analysis?.scale ?? null,
+      })) as SourceFile[];
+      setSources((current) => [...current.filter((source) => !persisted.some((item) => item.id === source.id)),...persisted]);
+      setSourceRanges((current) => ({
+        ...current,
+        ...Object.fromEntries(documents.map((document) => [document.id,document.fragments.map((fragment:any,index:number) => ({
+          id: `${fragment.id}-range`,
+          fragmentId: fragment.id,
+          start: fragment.start,
+          end: fragment.end,
+          color: RANGE_COLORS[index % RANGE_COLORS.length],
+        }))])),
+      }));
+    }).catch((error:any) => console.error("Could not load managed library:", error));
+  }, []);
+
   const activeFragments = useMemo(() => FRAGMENTS.filter((fragment) => importComplete || !IMPORTED_FRAGMENT_IDS.includes(fragment.id)).map((fragment) => ({ ...fragment,...fragmentOverrides[fragment.id] })),[importComplete,fragmentOverrides]);
   const activeFragmentById = (id:string) => activeFragments.find((fragment) => fragment.id === id) ?? ({ ...fragmentById(id),...fragmentOverrides[id] });
-  const selected = activeFragmentById(selectedId);
+  const selectedFragmentId = selectedId.startsWith("source:") ? null : selectedId;
+  const selectedLibrarySourceId = selectedId.startsWith("source:") ? selectedId.slice("source:".length) : null;
+  const selected = activeFragmentById(selectedFragmentId ?? "f02");
   const selectedSource = sources.find((source) => source.id === selectedSourceId)!;
   const selectedRanges = sourceRanges[selectedSourceId] ?? [];
 
@@ -290,7 +330,20 @@ export default function FragmentsApp() {
     setCombineDraftRanges((current) => resizeRangesForSensitivity(current ?? selectedRanges,selectedSource,value));
   };
 
-  const connections=rankedConnectionsFor(selectedId);
+  const connectionAnchorFragmentId = (() => {
+    if (selectedFragmentId) return selectedFragmentId;
+    if (!selectedLibrarySourceId) return null;
+    const source = sources.find((item) => item.id === selectedLibrarySourceId);
+    const fromSource = source?.fragmentIds.find(
+      (id) => activeFragments.some((fragment) => fragment.id === id) && !archived.has(id),
+    );
+    if (fromSource) return fromSource;
+    return activeFragments.find(
+      (fragment) => fragment.sourceId === selectedLibrarySourceId && !archived.has(fragment.id),
+    )?.id ?? null;
+  })();
+
+  const connections = connectionAnchorFragmentId ? rankedConnectionsFor(connectionAnchorFragmentId) : [];
 
   const selectedDuplicates = duplicateGroup ? activeFragments.filter((fragment) => fragment.duplicateGroup === duplicateGroup && !duplicateExclusions.has(fragment.id) && !archived.has(fragment.id)) : [];
 
@@ -334,6 +387,61 @@ export default function FragmentsApp() {
     returnStack.current.pop();stopAllAudio();setView(snapshot.view);setSelectedId(snapshot.selectedId);setSelectedSourceId(snapshot.selectedSourceId);setConnectionsOpen(snapshot.connectionsOpen);setAdvancedOpen(snapshot.advancedOpen);setMapSelectedId(snapshot.mapSelectedId);setMapCamera(snapshot.mapCamera);setSourceEditorOpen(false);window.setTimeout(() => window.scrollTo({ top:snapshot.scrollY }),0);return true;
   };
   const openFragment = (id:string) => { stopAllAudio(); setSelectedId(id); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
+  const selectLibrarySource = (source: SourceFile) => {
+    stopAllAudio();
+    setSelectedId(`source:${source.id}`);
+    setConnectionsOpen(true);
+    setAdvancedOpen(false);
+    setView("library");
+  };
+  const removeSource = (sourceId: string) => {
+    const source = sources.find((item) => item.id === sourceId);
+    if (!source) return;
+
+    stopAllAudio();
+    const removedFragmentIds = activeFragments
+      .filter((fragment) => fragment.sourceId === sourceId)
+      .map((fragment) => fragment.id);
+    const remainingSources = sources.filter((item) => item.id !== sourceId);
+
+    setArchived((current) => new Set([...current, ...removedFragmentIds]));
+    setSources(remainingSources);
+    setSourceRanges((current) => {
+      const next = { ...current };
+      delete next[sourceId];
+      return next;
+    });
+
+    if (selectedSourceId === sourceId) {
+      setSelectedSourceId(remainingSources[0]?.id ?? OPENING_SOURCE_ID);
+      setSourceEditorOpen(false);
+      setSourceEditorModal(false);
+    }
+
+    if (selectedFragmentId && removedFragmentIds.includes(selectedFragmentId)) {
+      setConnectionsOpen(false);
+      const nextFragment = activeFragments.find(
+        (fragment) =>
+          fragment.sourceId !== sourceId
+          && !archived.has(fragment.id)
+          && !removedFragmentIds.includes(fragment.id),
+      );
+      setSelectedId(nextFragment?.id ?? "f02");
+    }
+
+    notify(`Removed ${source.name} from your library.`);
+  };
+  const editSourceForLibrarySource = (sourceId: string) => {
+    pushReturn("source-edit");
+    stopAllAudio();
+    setSelectedSourceId(sourceId);
+    setSourcePanelMode("fragmentation");
+    setSourceEditorOpen(true);
+    setConnectionsOpen(false);
+    setAdvancedOpen(false);
+    setView("source");
+  };
+  const sourceForId = (sourceId: string) => sources.find((source) => source.id === sourceId);
   const openFragmentFromMap = (id:string) => { pushReturn("map-full");openFragment(id); };
   const closeConnections = () => { if (restoreReturn("map-full")) return;stopAllAudio();setConnectionsOpen(false);setAdvancedOpen(false); };
   const closeSourceEditor = () => {
@@ -350,7 +458,7 @@ export default function FragmentsApp() {
   };
   const editSourceForFragment = (id:string) => { const fragment=activeFragmentById(id);pushReturn("source-edit");stopAllAudio();setSelectedSourceId(fragment.sourceId);setSourcePanelMode("fragmentation");setSourceEditorOpen(true);setConnectionsOpen(false);setAdvancedOpen(false);setView("source"); };
   const handleImportSource = (imported: ImportedSource) => {
-    const id = `source-import-${Date.now()}`;
+    const id = imported.persistedId ?? `source-import-${Date.now()}`;
     retainCachedAudio(imported.cacheKey);
     bindSourceAudio(id, imported.cacheKey);
     const newSource: SourceFile = {
@@ -368,7 +476,7 @@ export default function FragmentsApp() {
       sourceTypes: imported.sourceTypes,
       analysisProfile: MESSY_PHONE_PROFILE,
       imported: true,
-      audioUrl: imported.objectUrl,
+      audioUrl: imported.persistedAudioUrl ?? imported.objectUrl,
       audioCacheKey: imported.cacheKey,
       bpm: imported.analysis.bpm,
       key: imported.analysis.key,
@@ -508,6 +616,7 @@ export default function FragmentsApp() {
       {!combineCandidates && sourceEditorOpen && sourceEditorModal && <div className="source-editor-overlay" role="dialog" aria-modal="true" aria-label="Fragmentation">{fragmentationPanel}</div>}
 
       {!combineCandidates && view === "library" && <LibraryView
+        sources={sources}
         fragments={filterableFragments}
         selectedId={selectedId}
         connectionsOpen={connectionsOpen}
@@ -520,26 +629,45 @@ export default function FragmentsApp() {
         filterMenu={filterMenu}
         searchRef={searchRef}
         sourceNameFor={sourceNameFor}
+        sourceForId={sourceForId}
         linkSummaryFor={linkSummaryFor}
-        relatedTakeCountFor={relatedTakeCountFor}
         onQueryChange={setQuery}
         onSortChange={setSort}
         onFiltersChange={setLibraryFilters}
         onOpenColumnFilter={openColumnFilter}
         onCloseFilterMenu={closeFilterMenu}
         onSelectFragment={openFragment}
+        onSelectSource={selectLibrarySource}
         onPreviewFragment={previewSingle}
-        onOpenTakes={(fragment) => { setSelectedId(fragment.id); setDuplicateGroup(fragment.duplicateGroup!); }}
-        connectionsPanel={<aside className="connections">
+        onPreviewSource={previewSource}
+        connectionsPanel={connectionsOpen && (connectionAnchorFragmentId || selectedLibrarySourceId) ? <aside className="connections">
           <button type="button" className="panel-resizer" role="slider" aria-label="Resize connections panel" aria-orientation="vertical" aria-valuemin={420} aria-valuemax={760} aria-valuenow={connectionsWidth} onPointerDown={(event) => { event.preventDefault(); setResizingConnections(true); }} onDoubleClick={() => setConnectionsWidth(520)} onKeyDown={(event) => { if (event.key === "ArrowLeft") { event.preventDefault(); setConnectionsWidth((width) => Math.min(760,width + 20)); } if (event.key === "ArrowRight") { event.preventDefault(); setConnectionsWidth((width) => Math.max(420,width - 20)); } }}><span /></button>
           <div className="connections-head"><h2>Connections</h2><button className="panel-close" onClick={closeConnections} aria-label="Close connections">×</button></div>
-          <p className="selected-caption"><span>From</span><strong>{selected.name}</strong><button onClick={() => editSourceForFragment(selected.id)}>Edit source</button></p>
+          <p className="selected-caption">
+            <span>From</span>
+            <strong>
+              {selectedLibrarySourceId
+                ? sources.find((source) => source.id === selectedLibrarySourceId)?.name
+                : connectionAnchorFragmentId
+                  ? activeFragmentById(connectionAnchorFragmentId).name
+                  : ""}
+            </strong>
+            <button
+              onClick={() => {
+                if (selectedLibrarySourceId) editSourceForLibrarySource(selectedLibrarySourceId);
+                else if (connectionAnchorFragmentId) editSourceForFragment(connectionAnchorFragmentId);
+              }}
+            >
+              Edit source
+            </button>
+          </p>
           <ConnectionsTable
             connections={connections}
-            selectedFragmentId={selectedId}
+            selectedFragmentId={connectionAnchorFragmentId ?? ""}
             previewingId={previewingId}
             fragmentFor={activeFragmentById}
             sourceNameFor={sourceNameFor}
+            sourceForId={sourceForId}
             onPreview={(fragment, relationship) => {
               previewSingle(fragment);
               markRelationship(relationship, "auditioned");
@@ -547,7 +675,7 @@ export default function FragmentsApp() {
             onCombine={openCombine}
             onEditSource={editSourceForFragment}
           />
-        </aside>}
+        </aside> : null}
       />}
 
       {!combineCandidates && view === "source" && <SourcesView
@@ -567,6 +695,7 @@ export default function FragmentsApp() {
         onOpenFragmentation={(sourceId) => openSourceEditor(sourceId, "fragmentation", true)}
         onPreviewFragment={previewSingle}
         onPreviewSource={previewSource}
+        onRemoveSource={removeSource}
         getFragmentById={fragmentById}
         editorPanel={sourcePanelMode === "detail" ? detailPanel : fragmentationPanel}
       />}

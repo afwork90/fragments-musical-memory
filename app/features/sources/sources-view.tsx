@@ -25,6 +25,7 @@ type SourcesViewProps = {
   onOpenFragmentation: (sourceId: string) => void;
   onPreviewFragment: (fragment: Fragment) => void;
   onPreviewSource: (source: SourceFile) => void;
+  onRemoveSource: (sourceId: string) => void;
   getFragmentById: (id: string) => Fragment;
   editorPanel: ReactNode;
 };
@@ -46,6 +47,7 @@ export function SourcesView({
   onOpenFragmentation,
   onPreviewFragment,
   onPreviewSource,
+  onRemoveSource,
   getFragmentById,
   editorPanel,
 }: SourcesViewProps) {
@@ -66,20 +68,23 @@ export function SourcesView({
             onQueryChange={onQueryChange}
             onImportClick={onImportClick}
           />
-          <SourceTable
-            sources={filteredSources}
-            sourceRanges={sourceRanges}
-            selectedSourceId={selectedSourceId}
-            editorOpen={editorOpen}
-            previewingId={previewingId}
-            sort={sort}
-            onSortChange={onSortChange}
-            onSelectSource={onSelectSource}
-            onOpenFragmentation={onOpenFragmentation}
-            onPreviewFragment={onPreviewFragment}
-            onPreviewSource={onPreviewSource}
-            getFragmentById={getFragmentById}
-          />
+          <div className="sources-scroll">
+            <SourceTable
+              sources={filteredSources}
+              sourceRanges={sourceRanges}
+              selectedSourceId={selectedSourceId}
+              editorOpen={editorOpen}
+              previewingId={previewingId}
+              sort={sort}
+              onSortChange={onSortChange}
+              onSelectSource={onSelectSource}
+              onOpenFragmentation={onOpenFragmentation}
+              onPreviewFragment={onPreviewFragment}
+              onPreviewSource={onPreviewSource}
+              onRemoveSource={onRemoveSource}
+              getFragmentById={getFragmentById}
+            />
+          </div>
         </div>
         {editorOpen && !editorModal && editorPanel}
       </div>

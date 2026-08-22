@@ -19,6 +19,7 @@ import { formatSeconds } from "@/lib/format";
 import { Fragment, SourceFile } from "../../prototype-data";
 import { EditableRange } from "../../fragmentation-workbench";
 import { SOURCE_COLUMNS, toggleSourceSort } from "./source-columns";
+import { SourceRowActions } from "./source-row-actions";
 import { SourceSort, SourceSortColumn } from "./types";
 
 type SourceTableProps = {
@@ -33,6 +34,7 @@ type SourceTableProps = {
   onOpenFragmentation: (sourceId: string) => void;
   onPreviewFragment: (fragment: Fragment) => void;
   onPreviewSource: (source: SourceFile) => void;
+  onRemoveSource: (sourceId: string) => void;
   getFragmentById: (id: string) => Fragment;
 };
 
@@ -113,6 +115,7 @@ function SourceTableCell({
   canPlay,
   onPreview,
   onOpenFragmentation,
+  onRemoveSource,
 }: {
   columnId: SourceSortColumn;
   source: SourceFile;
@@ -121,6 +124,7 @@ function SourceTableCell({
   canPlay: boolean;
   onPreview: () => void;
   onOpenFragmentation: () => void;
+  onRemoveSource: (sourceId: string) => void;
 }) {
   switch (columnId) {
     case "name":
@@ -185,6 +189,12 @@ function SourceTableCell({
           </Button>
         </TableCell>
       );
+    case "actions":
+      return (
+        <TableCell className="w-10 px-2 py-2">
+          <SourceRowActions source={source} onRemove={onRemoveSource} />
+        </TableCell>
+      );
     default:
       return null;
   }
@@ -202,6 +212,7 @@ export function SourceTable({
   onOpenFragmentation,
   onPreviewFragment,
   onPreviewSource,
+  onRemoveSource,
   getFragmentById,
 }: SourceTableProps) {
   const handleRowKeyDown = (sourceId: string) => (event: KeyboardEvent<HTMLTableRowElement>) => {
@@ -223,23 +234,30 @@ export function SourceTable({
                 className={cn(
                   "h-8 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground",
                   columnHeadClass(column.id),
+                  column.id === "actions" && "w-10",
                 )}
                 aria-sort={
-                  sort.column === column.id
-                    ? sort.direction === "asc"
-                      ? "ascending"
-                      : "descending"
-                    : "none"
+                  column.id === "actions"
+                    ? undefined
+                    : sort.column === column.id
+                      ? sort.direction === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
                 }
               >
-                <button
-                  type="button"
-                  className="inline-flex w-full items-center justify-between gap-1 text-left hover:text-foreground"
-                  onClick={() => onSortChange(toggleSourceSort(column.id, sort))}
-                >
-                  {column.label}
-                  <SortIcon column={column.id} sort={sort} />
-                </button>
+                {column.id === "actions" ? (
+                  <span className="sr-only">Actions</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="inline-flex w-full items-center justify-between gap-1 text-left hover:text-foreground"
+                    onClick={() => onSortChange(toggleSourceSort(column.id, sort))}
+                  >
+                    {column.label}
+                    <SortIcon column={column.id} sort={sort} />
+                  </button>
+                )}
               </TableHead>
             ))}
           </TableRow>
@@ -263,8 +281,8 @@ export function SourceTable({
                   isSelected && "source-row-selected border-l-2 border-l-[var(--violet)] text-foreground",
                 )}
                 onClick={(event) => {
-                  // The signal column is a playback control, so it never opens the detail panel.
-                  if ((event.target as HTMLElement).closest(".source-signal-cell")) return;
+                  // Playback and row actions never open the detail panel.
+                  if ((event.target as HTMLElement).closest(".source-signal-cell, .source-row-actions")) return;
                   onSelectSource(source.id);
                 }}
                 onKeyDown={handleRowKeyDown(source.id)}
@@ -282,6 +300,7 @@ export function SourceTable({
                       else onPreviewSource(source);
                     }}
                     onOpenFragmentation={() => onOpenFragmentation(source.id)}
+                    onRemoveSource={onRemoveSource}
                   />
                 ))}
               </TableRow>

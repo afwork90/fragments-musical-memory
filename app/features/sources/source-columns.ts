@@ -10,6 +10,7 @@ export const SOURCE_COLUMNS: SourceColumnDef[] = [
   // { id: "format", label: "Format" },
   { id: "tempoKey", label: "Tempo · Key" },
   { id: "fragments", label: "Fragments" },
+  { id: "actions", label: "" },
 ];
 
 const DESCENDING_DEFAULT_COLUMNS: SourceSortColumn[] = ["date", "signal", "duration", "fragments"];

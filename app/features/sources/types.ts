@@ -9,7 +9,8 @@ export type SourceSortColumn =
   | "profile"
   | "format"
   | "tempoKey"
-  | "fragments";
+  | "fragments"
+  | "actions";
 
 export type SourceSort = {
   column: SourceSortColumn;

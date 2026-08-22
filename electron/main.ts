@@ -5,8 +5,10 @@ import {
   registerAppProtocol,
   registerAppScheme,
 } from "./protocols/app-protocol.js";
+import { initializePersistence, registerAudioScheme } from "./persistence.js";
 
 registerAppScheme();
+registerAudioScheme();
 
 const developmentUrl = process.env.ELECTRON_RENDERER_URL;
 
@@ -23,6 +25,9 @@ async function createWindow(): Promise<void> {
     },
   });
 
+  window.webContents.on("console-message", (_event, _level, message, line, sourceId) => {
+    console.log(`[renderer] ${message} (${sourceId}:${line})`);
+  });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, url) => {
     if (url !== developmentUrl && !url.startsWith("app://")) event.preventDefault();
@@ -33,6 +38,7 @@ async function createWindow(): Promise<void> {
 
 app.whenReady().then(async () => {
   if (!developmentUrl) registerAppProtocol();
+  await initializePersistence();
   await createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();

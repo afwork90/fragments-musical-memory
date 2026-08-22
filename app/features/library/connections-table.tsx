@@ -11,7 +11,7 @@ import {
   TableRow,
 } from "@/lib/ui/table";
 import { cn } from "@/lib/utils";
-import { Fragment, Relationship } from "../../prototype-data";
+import { Fragment, Relationship, SourceFile } from "../../prototype-data";
 import { CONNECTIONS_COLUMNS } from "./connections-columns";
 
 export type ScoredConnection = Relationship & { score: number; otherId: string };
@@ -22,6 +22,7 @@ type ConnectionsTableProps = {
   previewingId: string | null;
   fragmentFor: (id: string) => Fragment;
   sourceNameFor: (fragment: Fragment) => string;
+  sourceForId: (sourceId: string) => SourceFile | undefined;
   onPreview: (fragment: Fragment, relationship: ScoredConnection) => void;
   onCombine: (relationship: ScoredConnection) => void;
   onEditSource: (fragmentId: string) => void;
@@ -33,6 +34,7 @@ export function ConnectionsTable({
   previewingId,
   fragmentFor,
   sourceNameFor,
+  sourceForId,
   onPreview,
   onCombine,
   onEditSource,
@@ -56,6 +58,10 @@ export function ConnectionsTable({
           {connections.map((relationship, index) => {
             const target = fragmentFor(relationship.otherId);
             const sourceName = sourceNameFor(target);
+            const source = sourceForId(target.sourceId);
+            const slice = source
+              ? { start: target.start, end: target.end, duration: source.duration }
+              : undefined;
             const isFeatured = index === 0;
 
             return (
@@ -90,6 +96,7 @@ export function ConnectionsTable({
                     values={target.waveform}
                     sourceId={target.sourceId}
                     cacheSourceAudio
+                    slice={slice}
                     isPreviewing={previewingId === target.id}
                     onPreview={() => onPreview(target, relationship)}
                     ariaLabel={`${previewingId === target.id ? "Stop" : "Play"} ${target.name}`}

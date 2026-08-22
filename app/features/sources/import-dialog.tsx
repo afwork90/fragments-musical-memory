@@ -15,6 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   processAudioFile,
+  processAudioUrl,
   quickAnalyzeCached,
   releaseCachedAudio,
   retainCachedAudio,
@@ -25,6 +26,8 @@ import { SourceType } from "@/app/prototype-data";
 
 export type ImportedSource = ProcessedAudio & {
   sourceTypes: SourceType[];
+  persistedId?: string;
+  persistedAudioUrl?: string;
 };
 
 type ImportDialogProps = {
@@ -109,6 +112,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const previewCacheKeyRef = useRef<string | null>(null);
+  const pendingImportRef = useRef<string | null>(null);
   const analysisRequestRef = useRef(0);
 
   const releasePreview = () => {
@@ -119,6 +123,10 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   };
 
   const reset = () => {
+    if (pendingImportRef.current) {
+      void (window as any).fragments?.cancelImport(pendingImportRef.current);
+      pendingImportRef.current = null;
+    }
     releasePreview();
     setDecoded(null);
     setError(null);
@@ -176,6 +184,34 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
     }
   };
 
+  const chooseManagedFile = async () => {
+    const bridge = (window as any).fragments;
+    if (!bridge) {
+      inputRef.current?.click();
+      return;
+    }
+    setError(null);
+    setStatus("decoding");
+    try {
+      const filePath = await bridge.pickAudioFile();
+      if (!filePath) return;
+      const pending = await bridge.beginImport(filePath);
+      pendingImportRef.current = pending.id;
+      const next = await processAudioUrl(pending.audioUrl, pending.originalName, { analyze: false });
+      applyDecoded(next);
+      runQuickAnalysis(next.cacheKey);
+    } catch (error) {
+      console.error("Persistent import failed:", error);
+      setError("Could not copy or read this audio file.");
+      if (pendingImportRef.current) {
+        await bridge.cancelImport(pendingImportRef.current);
+        pendingImportRef.current = null;
+      }
+    } finally {
+      setStatus("idle");
+    }
+  };
+
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
     if (!file.type.startsWith("audio/") && !/\.(wav|mp3|m4a|aiff?|flac|ogg)$/i.test(file.name)) {
@@ -202,10 +238,25 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
     void handleFile(event.dataTransfer.files[0]);
   };
 
-  const handleImport = () => {
+  const handleImport = async () => {
     if (!decoded) return;
+    let persistedId: string | undefined;
+    let persistedAudioUrl: string | undefined;
+    const bridge = (window as any).fragments;
+    if (bridge && pendingImportRef.current) {
+      const persisted = await bridge.finalizeImport(pendingImportRef.current, {
+        duration: decoded.duration,
+        format: decoded.format,
+        sampleRate: decoded.sampleRate,
+        waveform: { version: 1, count: decoded.peaks.length, peaks: decoded.peaks },
+        analysis: decoded.analysis,
+      });
+      persistedId = persisted.id;
+      persistedAudioUrl = persisted.audioUrl;
+      pendingImportRef.current = null;
+    }
     releasePreview();
-    onImport({ ...decoded, sourceTypes: DEFAULT_SOURCE_TYPES });
+    onImport({ ...decoded, sourceTypes: DEFAULT_SOURCE_TYPES, persistedId, persistedAudioUrl });
     onOpenChange(false);
   };
 
@@ -216,7 +267,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg">
         <DialogHeader className="border-b border-border px-6 py-4 text-left">
           <DialogTitle>Import recording</DialogTitle>
-          <DialogDescription>Drop an audio file to import it as a source.</DialogDescription>
+          <DialogDescription>Electron imports are saved; browser imports last for this session.</DialogDescription>
         </DialogHeader>
 
         <div className="px-6 py-5">
@@ -268,7 +319,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
                   <p className="font-medium text-foreground">Drop an audio file here</p>
                   <p className="mt-1 text-sm text-muted-foreground">or choose one from your device</p>
                 </div>
-                <Button type="button" variant="outline" onClick={() => inputRef.current?.click()}>
+                <Button type="button" variant="outline" onClick={() => void chooseManagedFile()}>
                   Choose file
                 </Button>
               </div>
@@ -282,7 +333,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button type="button" variant="lime" disabled={!decoded || isDecoding} onClick={handleImport}>
+          <Button type="button" variant="lime" disabled={!decoded || isDecoding} onClick={() => void handleImport()}>
             Import source
           </Button>
         </DialogFooter>

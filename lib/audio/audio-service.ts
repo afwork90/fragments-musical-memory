@@ -32,9 +32,32 @@ function takeQuickWindow(cacheKey: string) {
   return staged;
 }
 
+// Only used as an in-memory cache key (not a security or persistence hash —
+// the main process computes a real SHA-256 of the copied file on disk), so a
+// fast synchronous hash avoids depending on Web Crypto's `subtle`, which is
+// only available in a secure context and isn't reliably one across every
+// custom Electron protocol this renderer loads from.
 async function hashArrayBuffer(buffer: ArrayBuffer) {
-  const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  if (crypto.subtle) {
+    try {
+      const digest = await crypto.subtle.digest("SHA-256", buffer);
+      return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    } catch {
+      // fall through to the non-cryptographic hash below
+    }
+  }
+
+  const bytes = new Uint8Array(buffer);
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let index = 0; index < bytes.length; index++) {
+    const byte = bytes[index];
+    h1 = Math.imul(h1 ^ byte, 2654435761);
+    h2 = Math.imul(h2 ^ byte, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `${(h1 >>> 0).toString(16).padStart(8, "0")}${(h2 >>> 0).toString(16).padStart(8, "0")}${bytes.length.toString(16)}`;
 }
 
 function monoFromBuffer(buffer: AudioBuffer) {
@@ -204,6 +227,20 @@ export async function processAudioFile(file: File, options: Omit<AudioProcessOpt
     ...options,
     name: file.name,
     format: file.type,
+  });
+}
+
+export async function processAudioUrl(
+  url: string,
+  name: string,
+  options: Omit<AudioProcessOptions, "name" | "format"> = {},
+) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not read managed audio (${response.status})`);
+  return processAudioBuffer(await response.arrayBuffer(), {
+    ...options,
+    name,
+    format: name.split(".").pop()?.toUpperCase() || "AUDIO",
   });
 }
 

@@ -5,14 +5,16 @@ import {
   ColumnFilterPopover,
   LibraryFilters,
 } from "../../library-filter-popover";
-import { Fragment, MusicalRole } from "../../prototype-data";
+import { Fragment, SourceFile } from "../../prototype-data";
 import { LIBRARY_ROLES } from "./library-columns";
-import { LibraryLinkSummary, visibleLibraryFragments } from "./library-list";
+import { visibleLibraryItems } from "./library-items";
+import { LibraryLinkSummary } from "./library-list";
 import { LibraryTable } from "./library-table";
 import { LibraryToolbar } from "./library-toolbar";
 import { LibraryFilterMenu, LibrarySort, LibrarySortColumn } from "./types";
 
 type LibraryViewProps = {
+  sources: SourceFile[];
   fragments: Fragment[];
   selectedId: string;
   connectionsOpen: boolean;
@@ -25,20 +27,22 @@ type LibraryViewProps = {
   filterMenu: LibraryFilterMenu | null;
   searchRef: RefObject<HTMLInputElement | null>;
   sourceNameFor: (fragment: Fragment) => string;
+  sourceForId: (sourceId: string) => SourceFile | undefined;
   linkSummaryFor: (fragmentId: string) => LibraryLinkSummary;
-  relatedTakeCountFor: (fragment: Fragment) => number;
   onQueryChange: (query: string) => void;
   onSortChange: (sort: LibrarySort) => void;
   onFiltersChange: (filters: LibraryFilters) => void;
   onOpenColumnFilter: (column: LibrarySortColumn, trigger: HTMLButtonElement) => void;
   onCloseFilterMenu: () => void;
   onSelectFragment: (fragmentId: string) => void;
+  onSelectSource: (source: SourceFile) => void;
   onPreviewFragment: (fragment: Fragment) => void;
-  onOpenTakes: (fragment: Fragment) => void;
+  onPreviewSource: (source: SourceFile) => void;
   connectionsPanel: ReactNode;
 };
 
 export function LibraryView({
+  sources,
   fragments,
   selectedId,
   connectionsOpen,
@@ -51,26 +55,28 @@ export function LibraryView({
   filterMenu,
   searchRef,
   sourceNameFor,
+  sourceForId,
   linkSummaryFor,
-  relatedTakeCountFor,
   onQueryChange,
   onSortChange,
   onFiltersChange,
   onOpenColumnFilter,
   onCloseFilterMenu,
   onSelectFragment,
+  onSelectSource,
   onPreviewFragment,
-  onOpenTakes,
+  onPreviewSource,
   connectionsPanel,
 }: LibraryViewProps) {
   const listContext = useMemo(
-    () => ({ sourceNameFor, linkSummaryFor, relatedTakeCountFor }),
-    [sourceNameFor, linkSummaryFor, relatedTakeCountFor],
+    () => ({ sourceNameFor, linkSummaryFor, relatedTakeCountFor: () => 0 }),
+    [sourceNameFor, linkSummaryFor],
   );
-  const visibleFragments = useMemo(
-    () => visibleLibraryFragments(fragments, query, filters, sort, listContext),
-    [fragments, query, filters, sort, listContext],
+  const visibleItems = useMemo(
+    () => visibleLibraryItems(sources, fragments, query, filters, sort, listContext),
+    [sources, fragments, query, filters, sort, listContext],
   );
+  const totalItemCount = sources.length + fragments.length;
   const keyFilterOptions = useMemo(
     () => Array.from(new Set(fragments.flatMap((fragment) => [fragment.key, ...fragment.alternateKeys]))).sort((a, b) => a.localeCompare(b)),
     [fragments],
@@ -79,7 +85,7 @@ export function LibraryView({
     () => Array.from(new Set(fragments.flatMap((fragment) => fragment.userTags))).sort((a, b) => a.localeCompare(b)),
     [fragments],
   );
-  const roleOptions = LIBRARY_ROLES.filter((role): role is MusicalRole => role !== "All");
+  const roleOptions = LIBRARY_ROLES.filter((role) => role !== "All");
 
   return (
     <section
@@ -95,8 +101,9 @@ export function LibraryView({
           searchRef={searchRef}
           onQueryChange={onQueryChange}
         />
-        <LibraryTable
-          fragments={visibleFragments}
+        <div className="library-scroll">
+          <LibraryTable
+          items={visibleItems}
           selectedId={selectedId}
           connectionsOpen={connectionsOpen}
           previewingId={previewingId}
@@ -104,14 +111,16 @@ export function LibraryView({
           filters={filters}
           filterMenu={filterMenu}
           sourceNameFor={sourceNameFor}
+          sourceForId={sourceForId}
           linkSummaryFor={linkSummaryFor}
-          relatedTakeCountFor={relatedTakeCountFor}
           onSortChange={onSortChange}
           onOpenColumnFilter={onOpenColumnFilter}
           onSelectFragment={onSelectFragment}
+          onSelectSource={onSelectSource}
           onPreviewFragment={onPreviewFragment}
-          onOpenTakes={onOpenTakes}
+          onPreviewSource={onPreviewSource}
         />
+        </div>
         {filterMenu && (
           <ColumnFilterPopover
             column={filterMenu.column}
@@ -121,8 +130,8 @@ export function LibraryView({
             keyOptions={keyFilterOptions}
             tagOptions={tagFilterOptions}
             roleOptions={roleOptions}
-            resultCount={visibleFragments.length}
-            totalCount={fragments.length}
+            resultCount={visibleItems.length}
+            totalCount={totalItemCount}
             onChange={onFiltersChange}
             onClose={onCloseFilterMenu}
           />
