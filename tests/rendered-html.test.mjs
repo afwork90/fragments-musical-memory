@@ -4,17 +4,18 @@ import test from "node:test";
 import { MAP_SCALE_MAX, MAP_SCALE_MIN, MAP_WORLD, fitMapCamera, musicalMapPoint, panMapCamera, zoomMapCameraAt } from "../app/map-layout.mjs";
 
 async function render() {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
-  return worker.fetch(
-    new Request("http://localhost/", { headers: { accept: "text/html" } }),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    { waitUntil() {}, passThroughOnException() {} },
+  const html = await readFile(
+    new URL("../dist/client/index.html", import.meta.url),
+    "utf8",
   );
+  return {
+    status: 200,
+    headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
+    text: async () => html,
+  };
 }
 
-test("server-renders the Fragments prototype", async () => {
+test("renders the packaged Fragments shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -96,7 +97,7 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(workbench, /ruler-edge-magnifier/);
   assert.match(workbench, /fragment-scan-playhead/);
   assert.match(workbench, /＋ Add fragment/);
-  assert.match(page, /No authored connections for this fragment/);
+  assert.match(connectionsTable, /No authored connections for this fragment/);
   assert.match(duplicateDialog, /Keep this for matching/);
   assert.doesNotMatch(page, /Audition connection|<span>Status<\/span>/);
   assert.match(data, /FragmentRef/);
