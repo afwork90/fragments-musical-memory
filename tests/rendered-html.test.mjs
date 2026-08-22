@@ -25,6 +25,7 @@ test("server-renders the Fragments prototype", async () => {
   assert.match(html, /24(?:<!-- -->)? surfaced · 2,418 indexed/);
   assert.match(html, /Bars\/Beats/);
   assert.match(html, /Confidence/);
+  assert.match(html, /Links/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 
@@ -45,6 +46,11 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(page, /edge-magnifier/);
   assert.match(page, /＋ Import/);
   assert.match(page, /＋ Add fragment/);
+  assert.match(page, /Manual links/);
+  assert.match(page, /linkSummaryFor/);
+  assert.match(page, /fragment-scan-playhead/);
+  assert.match(page, /map-inspector/);
+  assert.match(page, /highlighted/);
   assert.match(page, /No authored connections for this fragment/);
   assert.match(page, /Keep this for matching/);
   assert.doesNotMatch(page, /Audition connection|<span>Status<\/span>/);
@@ -57,7 +63,12 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(workflow, /scan-playhead/);
   assert.doesNotMatch(workflow, /Why it connects|Download always works/);
   assert.match(workflow, /This fragment no longer matches the original search/);
+  assert.match(workflow, /Magnify and adjust fragment start/);
+  assert.match(workflow, /correction-fragment-bar/);
+  assert.match(workflow, /fragment-scan-playhead/);
   assert.match(workflow, /Drag into DAW/);
+  assert.match(data, /rel\("r33"/);
+  assert.match(data, /status:"manual"/);
   assert.ok(audioFiles.filter((name) => name.endsWith(".wav")).length >= 40);
   await assert.rejects(access(new URL("../app/_sites-preview/", import.meta.url)));
 });
