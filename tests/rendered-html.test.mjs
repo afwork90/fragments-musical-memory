@@ -36,7 +36,7 @@ test("server-renders the Fragments prototype", async () => {
 test("ships the complete staged musical corpus and interface data", async () => {
   const [data, page, workflow, workbench, filters, sourcesToolbar, libraryTable, libraryColumns, duplicateDialog, styles, audioFiles] = await Promise.all([
     readFile(new URL("../app/prototype-data.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/fragments-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/hero-workflow.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/fragmentation-workbench.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/library-filter-popover.tsx", import.meta.url), "utf8"),

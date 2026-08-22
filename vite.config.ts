@@ -43,6 +43,7 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    base: process.env.PAGES_BUILD === "1" ? "./" : "/",
     resolve: {
       alias: {
         "@": path.resolve(import.meta.dirname),

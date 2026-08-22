@@ -64,15 +64,16 @@ function formatTempoKey(source: SourceFile, cached?: ProcessedAudio) {
 function SourceSignalCell({
   source,
   isPreviewing,
+  canPlay,
   onPreview,
 }: {
   source: SourceFile;
   isPreviewing: boolean;
+  canPlay: boolean;
   onPreview: () => void;
 }) {
   const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
   const values = cached?.peaks ?? source.waveform;
-  const canPlay = Boolean(source.audioUrl);
 
   return (
     <div className="source-signal-cell flex items-center gap-2">
@@ -124,6 +125,7 @@ function SourceTableCell({
   source,
   fragmentCount,
   isPreviewing,
+  canPlay,
   onPreview,
   onOpenFragmentation,
 }: {
@@ -131,6 +133,7 @@ function SourceTableCell({
   source: SourceFile;
   fragmentCount: number;
   isPreviewing: boolean;
+  canPlay: boolean;
   onPreview: () => void;
   onOpenFragmentation: () => void;
 }) {
@@ -146,7 +149,7 @@ function SourceTableCell({
     case "signal":
       return (
         <TableCell className="px-2 py-1.5">
-          <SourceSignalCell source={source} isPreviewing={isPreviewing} onPreview={onPreview} />
+          <SourceSignalCell source={source} isPreviewing={isPreviewing} canPlay={canPlay} onPreview={onPreview} />
         </TableCell>
       );
     case "date":
@@ -274,7 +277,11 @@ export function SourceTable({
                   "hover:bg-white/[0.04] hover:text-foreground/85",
                   isSelected && "source-row-selected border-l-2 border-l-[var(--violet)] text-foreground",
                 )}
-                onClick={() => onSelectSource(source.id)}
+                onClick={(event) => {
+                  // The signal column is a playback control, so it never opens the detail panel.
+                  if ((event.target as HTMLElement).closest(".source-signal-cell")) return;
+                  onSelectSource(source.id);
+                }}
                 onKeyDown={handleRowKeyDown(source.id)}
               >
                 {SOURCE_COLUMNS.map((column) => (
@@ -284,6 +291,7 @@ export function SourceTable({
                     source={source}
                     fragmentCount={fragmentCount}
                     isPreviewing={isPreviewing}
+                    canPlay={Boolean(auditionFragment || source.audioUrl)}
                     onPreview={() => {
                       if (auditionFragment) onPreviewFragment(auditionFragment);
                       else onPreviewSource(source);
