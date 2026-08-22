@@ -1,2 +1,2 @@
-conda activate backendsoundformer
-gunicorn -w 1 -b 0.0.0.0:3001 --timeout 400 backend:app
+CALL conda activate backendsoundformer
+waitress-serve --host=0.0.0.0 --port=8000 --threads=1 backend:app

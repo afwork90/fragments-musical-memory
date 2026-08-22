@@ -91,4 +91,4 @@ PyPDF2
 setuptools==80.10.2
 flask
 flask_cors
-gunicorn
+waitress
