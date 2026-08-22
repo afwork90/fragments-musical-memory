@@ -34,7 +34,7 @@ test("server-renders the Fragments prototype", async () => {
 });
 
 test("ships the complete staged musical corpus and interface data", async () => {
-  const [data, page, workflow, workbench, filters, sourcesToolbar, libraryTable, duplicateDialog, styles, audioFiles] = await Promise.all([
+  const [data, page, workflow, workbench, filters, sourcesToolbar, libraryTable, libraryColumns, duplicateDialog, styles, audioFiles] = await Promise.all([
     readFile(new URL("../app/prototype-data.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/hero-workflow.tsx", import.meta.url), "utf8"),
@@ -42,6 +42,7 @@ test("ships the complete staged musical corpus and interface data", async () => 
     readFile(new URL("../app/library-filter-popover.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/sources/sources-toolbar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/library-table.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/features/library/library-columns.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/duplicate-takes-dialog.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readdir(new URL("../public/audio/", import.meta.url)),
@@ -53,8 +54,8 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(page, /wave-play/);
   assert.match(page, /LibraryView/);
   assert.match(page, /SourcesView/);
-  assert.match(libraryTable, /Filter by Fragment/);
-  assert.match(libraryTable, /Bars\/Beats/);
+  assert.match(libraryTable, /Filter by \$\{column\.label\}/);
+  assert.match(libraryColumns, /Bars\/Beats/);
   assert.match(sourcesToolbar, /＋ Import/);
   assert.match(page, /Manual links/);
   assert.match(page, /linkSummaryFor/);
@@ -94,7 +95,7 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(data, /FragmentRef/);
   assert.match(data, /MatchTolerances/);
   assert.match(data, /sourceId/);
-  assert.match(workflow, /Importing.*Segmenting.*Extracting metadata.*Matching.*Ready/s);
+  assert.match(data, /Importing.*Segmenting.*Extracting metadata.*Matching.*Ready/s);
   assert.match(workflow, /Play A|\["A","B","A→B","B→A","Together"\]/);
   assert.match(workflow, /Previous candidate/);
   assert.match(workflow, /scan-playhead/);

@@ -2,8 +2,8 @@
 
 import { Upload } from "lucide-react";
 import { DragEvent, useEffect, useRef, useState } from "react";
-import { ContinuousWaveform } from "@/components/audio/continuous-waveform";
-import { Button } from "@/components/ui/button";
+import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
+import { Button } from "@/lib/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -11,7 +11,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/lib/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
   processAudioFile,

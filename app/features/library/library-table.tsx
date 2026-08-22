@@ -2,8 +2,8 @@
 
 import { ArrowDown, ArrowUp, ArrowUpDown, ListFilter } from "lucide-react";
 import { KeyboardEvent } from "react";
-import { Waveform } from "@/components/audio/waveform";
-import { Button } from "@/components/ui/button";
+import { Waveform } from "@/lib/audio/waveform";
+import { Button } from "@/lib/ui/button";
 import {
   Table,
   TableBody,
@@ -11,7 +11,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
+} from "@/lib/ui/table";
 import { cn } from "@/lib/utils";
 import { formatSeconds } from "@/lib/format";
 import { libraryFilterIsActive, LibraryFilters } from "../../library-filter-popover";

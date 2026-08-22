@@ -207,28 +207,6 @@ export async function processAudioFile(file: File, options: Omit<AudioProcessOpt
   });
 }
 
-export async function processAudioUrl(
-  url: string,
-  name: string,
-  options: Omit<AudioProcessOptions, "name"> & { cacheAlias?: string } = {},
-) {
-  if (options.cacheAlias) {
-    const cached = getCachedAudio(options.cacheAlias);
-    if (cached) {
-      retainCachedAudio(options.cacheAlias);
-      return cached;
-    }
-  }
-
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Failed to fetch ${name}`);
-  const arrayBuffer = await response.arrayBuffer();
-  const format = options.format ?? response.headers.get("content-type") ?? "audio/wav";
-  const processed = await processAudioBuffer(arrayBuffer, { ...options, name, format });
-  if (options.cacheAlias) aliasCacheKey(options.cacheAlias, processed.cacheKey);
-  return processed;
-}
-
 async function decodeQuickWindowFromCached(cached: ProcessedAudio) {
   const response = await fetch(cached.objectUrl);
   const arrayBuffer = await response.arrayBuffer();

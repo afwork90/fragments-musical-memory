@@ -17,11 +17,12 @@ import {
   SearchWeights,
   SourceFile,
 } from "./prototype-data";
-import { Waveform } from "@/components/audio/waveform";
+import { Waveform } from "@/lib/audio/waveform";
 import { DuplicateTakesDialog } from "./features/library/duplicate-takes-dialog";
 import { LibraryView } from "./features/library/library-view";
 import { LibraryFilterMenu, LibrarySort, LibrarySortColumn } from "./features/library/types";
 import { ImportDialog, ImportedSource } from "./features/sources/import-dialog";
+import { SourceDetailPanel } from "./features/sources/source-detail-panel";
 import { SourcesView } from "./features/sources/sources-view";
 import { SourceSort } from "./features/sources/types";
 import { CombineCandidate, CombineWorkspace, ExportSheet } from "./hero-workflow";
@@ -37,6 +38,7 @@ type ScoredRelationship = Relationship & { score: number; otherId: string };
 type MapCamera = { x:number;y:number;scale:number };
 type ReturnSnapshot = { kind:"source-edit" | "map-full";view:View;selectedId:string;selectedSourceId:string;connectionsOpen:boolean;advancedOpen:boolean;mapSelectedId:string | null;mapCamera:MapCamera;scrollY:number };
 type CorrectionPhase = "edit" | "recompute" | "prompt";
+type SourcePanelMode = "detail" | "fragmentation";
 
 const CONTEXTS: { id: SearchContext; label: string }[] = [
   { id: "whole", label: "Whole" }, { id: "melody", label: "Melody" }, { id: "rhythm", label: "Rhythm" },
@@ -116,6 +118,7 @@ export default function Home() {
   const [sourceSort, setSourceSort] = useState<SourceSort>({ column:"date", direction:"desc" });
   const [sourceEditorOpen, setSourceEditorOpen] = useState(false);
   const [sourceEditorModal, setSourceEditorModal] = useState(false);
+  const [sourcePanelMode, setSourcePanelMode] = useState<SourcePanelMode>("fragmentation");
   const [sourceRanges, setSourceRanges] = useState<Record<string,EditableRange[]>>(initialSourceRanges);
   const [importOpen,setImportOpen] = useState(false);
   const [importComplete,setImportComplete] = useState(false);
@@ -321,7 +324,7 @@ export default function Home() {
   const resetDemo = () => {
     stopAllAudio(); setView("library"); setSelectedId("f02"); setQuery("");setLibraryFilters(createLibraryFilters());setFilterMenu(null);setSort({ column:"date", direction:"desc" });
     setContext("whole"); setRangeMode("reasonable"); setWeights({ ...DEFAULT_WEIGHTS }); setTolerances({ ...DEFAULT_TOLERANCES });setArchived(new Set()); setDuplicateExclusions(new Set());
-    returnStack.current=[];setDuplicateGroup(null);setConnectionsOpen(false);setAdvancedOpen(false);setConnectionsWidth(520);setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(OPENING_SOURCE_ID);setSourceQuery("");setSourceSort({ column:"date",direction:"desc" });setSourceEditorOpen(false);setSourceEditorModal(false);setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null);setMapCamera({ x:0,y:0,scale:1 });mapDidFit.current=false;notify("Demo restored to 24 fragments before import.");
+    returnStack.current=[];setDuplicateGroup(null);setConnectionsOpen(false);setAdvancedOpen(false);setConnectionsWidth(520);setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(OPENING_SOURCE_ID);setSourceQuery("");setSourceSort({ column:"date",direction:"desc" });setSourceEditorOpen(false);setSourceEditorModal(false);setSourcePanelMode("fragmentation");setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null);setMapCamera({ x:0,y:0,scale:1 });mapDidFit.current=false;notify("Demo restored to 24 fragments before import.");
   };
   const pushReturn = (kind:ReturnSnapshot["kind"]) => returnStack.current.push({ kind,view,selectedId,selectedSourceId,connectionsOpen,advancedOpen,mapSelectedId,mapCamera:{ ...mapCamera },scrollY:window.scrollY });
   const restoreReturn = (kind:ReturnSnapshot["kind"]) => {
@@ -337,13 +340,14 @@ export default function Home() {
     if (restoreReturn("source-edit")) return;
     stopAllAudio();setSourceEditorOpen(false);setSourceEditorModal(false);
   };
-  const openSourceEditor = (sourceId: string, modal: boolean) => {
+  const openSourceEditor = (sourceId: string, mode: SourcePanelMode, modal: boolean) => {
     stopAllAudio();
     setSelectedSourceId(sourceId);
+    setSourcePanelMode(mode);
     setSourceEditorModal(modal);
     setSourceEditorOpen(true);
   };
-  const editSourceForFragment = (id:string) => { const fragment=activeFragmentById(id);pushReturn("source-edit");stopAllAudio();setSelectedSourceId(fragment.sourceId);setSourceEditorOpen(true);setConnectionsOpen(false);setAdvancedOpen(false);setView("source"); };
+  const editSourceForFragment = (id:string) => { const fragment=activeFragmentById(id);pushReturn("source-edit");stopAllAudio();setSelectedSourceId(fragment.sourceId);setSourcePanelMode("fragmentation");setSourceEditorOpen(true);setConnectionsOpen(false);setAdvancedOpen(false);setView("source"); };
   const handleImportSource = (imported: ImportedSource) => {
     const id = `source-import-${Date.now()}`;
     retainCachedAudio(imported.cacheKey);
@@ -372,6 +376,7 @@ export default function Home() {
     setSources((current) => [...current, newSource]);
     setSourceRanges((current) => ({ ...current, [id]: [] }));
     setSelectedSourceId(id);
+    setSourcePanelMode("fragmentation");
     setSourceEditorOpen(true);
     setImportComplete(true);
     setView("source");
@@ -383,7 +388,7 @@ export default function Home() {
   const rejectRelationship = (relationship:CombineCandidate) => { const next=(combineCandidates ?? []).filter((item) => item.id !== relationship.id);markRelationship(relationship,"rejected");setCombineCandidates(next.length ? next : null);if (!next.length) window.setTimeout(() => window.scrollTo({ top:returnScroll.current }),0);notify(next.length ? "Candidate rejected for this session." : "Last candidate rejected. Returned to the search."); };
   const beginCombineSourceEdit = (relationship:CombineCandidate) => {
     const candidate=activeFragmentById(relationship.otherId);const source=sources.find((item) => item.id === candidate.sourceId) ?? SOURCE_FILES.find((item) => item.id === candidate.sourceId)!;
-    stopAllAudio();setSelectedSourceId(source.id);setCombineDraftRanges((sourceRanges[source.id] ?? []).map((range) => ({ ...range })));setCombineDraftSensitivity(source.sensitivity);setCorrectionOriginal({ duration:candidate.duration,key:candidate.key,bpm:candidate.bpm,bars:candidate.bars,beats:candidate.beats,confidence:candidate.confidence,analysisRevision:candidate.analysisRevision });setCorrectionPhase("edit");setCorrectionRelationship(relationship);setSourceEditorOpen(true);
+    stopAllAudio();setSelectedSourceId(source.id);setCombineDraftRanges((sourceRanges[source.id] ?? []).map((range) => ({ ...range })));setCombineDraftSensitivity(source.sensitivity);setCorrectionOriginal({ duration:candidate.duration,key:candidate.key,bpm:candidate.bpm,bars:candidate.bars,beats:candidate.beats,confidence:candidate.confidence,analysisRevision:candidate.analysisRevision });setCorrectionPhase("edit");setCorrectionRelationship(relationship);setSourcePanelMode("fragmentation");setSourceEditorOpen(true);
   };
   const saveSourceBoundaries = () => {
     const patches:Record<string,Partial<Fragment>>={};
@@ -468,6 +473,8 @@ export default function Home() {
   const correctedRange=correctionRelationship ? editorRanges.find((range) => range.fragmentId === correctionRelationship.otherId) : null;
   const correctionFooter=correctionRelationship && correctionPhase === "recompute" ? <div className="recompute workbench-result"><i/><strong>Recomputing metadata and active match…</strong><span>Revision {(correctionOriginal?.analysisRevision ?? 1) + 1}</span></div> : correctionRelationship && correctionPhase === "prompt" && correctionOriginal ? <div className="correction-result workbench-result"><div className="metadata-diff"><span>Field</span><span>Before</span><span>After</span>{[["Duration",correctionOriginal.duration,formatSeconds((correctedRange?.end ?? 0) - (correctedRange?.start ?? 0))],["Key",correctionOriginal.key,"C minor"],["BPM",correctionOriginal.bpm,"90"],["Bars",correctionOriginal.bars,"3"],["Beats",correctionOriginal.beats,"17"],["Confidence",`${Math.round(correctionOriginal.confidence * 100)}%`,`93%`],["Match",`${correctionRelationship.score}%`,`76%`]].map((row) => row.map((cell,index) => <span className={index === 2 ? "changed" : ""} key={`${row[0]}-${index}`}>{cell}</span>))}</div><div className="link-prompt"><span className="relationship-badge manual">criteria changed</span><h3>This fragment no longer matches the original search. Keep it linked to this comparison?</h3><p>The boundary correction is saved either way. A manual link preserves your musical judgment.</p><div><button onClick={rejectCorrectionLink}>Reject and show next</button><button className="primary-button" onClick={keepCorrectionLink}>Yes, keep linked</button></div></div></div> : null;
   const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => correctionRelationship ? setCombineDraftRanges(ranges) : setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges }))} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} saveLabel={correctionRelationship ? "Save & recompute" : "Save boundaries"} footerContent={correctionFooter}/> : null;
+  const detailAuditionFragment=selectedSource.fragmentIds[0] ? activeFragmentById(selectedSource.fragmentIds[0]) : null;
+  const detailPanel=sourceEditorOpen && sourcePanelMode === "detail" ? <SourceDetailPanel source={selectedSource} fragmentCount={selectedRanges.length} isPreviewing={previewingId === (detailAuditionFragment?.id ?? `source:${selectedSource.id}`)} canPlay={Boolean(detailAuditionFragment || selectedSource.audioUrl)} onPreview={() => detailAuditionFragment ? previewSingle(detailAuditionFragment) : previewSource(selectedSource)} onClose={closeSourceEditor}/> : null;
 
   return (
     <main className="app-shell">
@@ -568,12 +575,12 @@ export default function Home() {
         onQueryChange={setSourceQuery}
         onSortChange={setSourceSort}
         onImportClick={() => setImportOpen(true)}
-        onSelectSource={(sourceId) => openSourceEditor(sourceId, false)}
-        onOpenFragmentation={(sourceId) => openSourceEditor(sourceId, true)}
+        onSelectSource={(sourceId) => openSourceEditor(sourceId, "detail", false)}
+        onOpenFragmentation={(sourceId) => openSourceEditor(sourceId, "fragmentation", true)}
         onPreviewFragment={previewSingle}
         onPreviewSource={previewSource}
         getFragmentById={fragmentById}
-        editorPanel={fragmentationPanel}
+        editorPanel={sourcePanelMode === "detail" ? detailPanel : fragmentationPanel}
       />}
 
       {!combineCandidates && view === "map" && <section className="page-view map-page">

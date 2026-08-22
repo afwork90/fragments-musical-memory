@@ -1,13 +1,11 @@
 import path from "node:path";
-import { sites } from "@openai/sites-vite-plugin";
 import vinext from "vinext";
 import { defineConfig } from "vite";
-import hostingConfig from "./.openai/hosting.json";
 
-const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
-  "00000000-0000-4000-8000-000000000000";
-
-const { d1, r2 } = hostingConfig;
+// Optional Cloudflare bindings. Leave null until a backend adds D1/R2.
+const PLACEHOLDER_DATABASE_ID = "00000000-0000-4000-8000-000000000000";
+const d1 = null;
+const r2 = null;
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
@@ -19,8 +17,8 @@ const localBindingConfig = {
     ? [
         {
           binding: d1,
-          database_name: "site-creator-d1",
-          database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
+          database_name: "fragments-d1",
+          database_id: PLACEHOLDER_DATABASE_ID,
         },
       ]
     : [],
@@ -28,7 +26,7 @@ const localBindingConfig = {
     ? [
         {
           binding: r2,
-          bucket_name: "site-creator-r2",
+          bucket_name: "fragments-r2",
         },
       ]
     : [],
@@ -59,7 +57,6 @@ export default defineConfig(async () => {
       : undefined,
     plugins: [
       vinext(),
-      sites(),
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         config: localBindingConfig,

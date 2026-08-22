@@ -2,8 +2,8 @@
 
 import { ArrowDown, ArrowUp, ArrowUpDown, Play, Square } from "lucide-react";
 import { KeyboardEvent } from "react";
-import { ContinuousWaveform } from "@/components/audio/continuous-waveform";
-import { Button } from "@/components/ui/button";
+import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
+import { Button } from "@/lib/ui/button";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import type { ProcessedAudio } from "@/lib/audio/types";
 import {
@@ -13,7 +13,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
+} from "@/lib/ui/table";
 import { cn } from "@/lib/utils";
 import { formatSeconds } from "@/lib/format";
 import { Fragment, SourceFile } from "../../prototype-data";

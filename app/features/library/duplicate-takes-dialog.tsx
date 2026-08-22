@@ -1,7 +1,7 @@
 "use client";
 
-import { Waveform } from "@/components/audio/waveform";
-import { Button } from "@/components/ui/button";
+import { Waveform } from "@/lib/audio/waveform";
+import { Button } from "@/lib/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -9,7 +9,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/lib/ui/dialog";
 import { Fragment } from "@/app/prototype-data";
 
 type DuplicateTakesDialogProps = {
