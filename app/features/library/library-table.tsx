@@ -2,7 +2,7 @@
 
 import { ArrowDown, ArrowUp, ArrowUpDown, ListFilter } from "lucide-react";
 import { KeyboardEvent } from "react";
-import { Waveform } from "@/lib/audio/waveform";
+import { SignalCell } from "@/lib/audio/signal-cell";
 import { Button } from "@/lib/ui/button";
 import {
   Table,
@@ -156,19 +156,16 @@ export function LibraryTable({
                 <TableCell className="max-w-[140px] truncate px-2 py-2" title={sourceName}>
                   {sourceName}
                 </TableCell>
-                <TableCell className="px-2 py-1">
-                  <button
-                    type="button"
-                    className={cn("wave-play block w-full", previewingId === fragment.id && "playing")}
-                    title={`Signal brightness ${fragment.brightness} / 100`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onPreviewFragment(fragment);
-                    }}
-                    aria-label={`${previewingId === fragment.id ? "Stop" : "Play"} ${fragment.name}; signal brightness ${fragment.brightness} out of 100`}
-                  >
-                    <Waveform values={fragment.waveform} active={previewingId === fragment.id} />
-                  </button>
+                <TableCell className="px-2 py-1.5">
+                  <SignalCell
+                    values={fragment.waveform}
+                    sourceId={fragment.sourceId}
+                    cacheSourceAudio
+                    isPreviewing={previewingId === fragment.id}
+                    onPreview={() => onPreviewFragment(fragment)}
+                    ariaLabel={`${previewingId === fragment.id ? "Stop" : "Play"} ${fragment.name}`}
+                    waveClassName="source-signal-wave h-11 min-w-[140px] flex-1"
+                  />
                 </TableCell>
                 <TableCell className="px-2 py-2">{fragment.dateLabel}</TableCell>
                 <TableCell className="px-2 py-2">{formatSeconds(fragment.start)}</TableCell>

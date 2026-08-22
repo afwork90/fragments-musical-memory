@@ -1,8 +1,8 @@
 "use client";
 
-import { ArrowDown, ArrowUp, ArrowUpDown, Play, Square } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { KeyboardEvent } from "react";
-import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
+import { SignalCell } from "@/lib/audio/signal-cell";
 import { Button } from "@/lib/ui/button";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import type { ProcessedAudio } from "@/lib/audio/types";
@@ -72,31 +72,16 @@ function SourceSignalCell({
   canPlay: boolean;
   onPreview: () => void;
 }) {
-  const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
-  const values = cached?.peaks ?? source.waveform;
-
   return (
-    <div className="source-signal-cell flex items-center gap-2">
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className={cn("source-play-button size-7 shrink-0", isPreviewing && "text-primary")}
-        disabled={!canPlay}
-        onClick={(event) => {
-          event.stopPropagation();
-          onPreview();
-        }}
-        aria-label={`${isPreviewing ? "Stop" : "Play"} ${source.name}`}
-      >
-        {isPreviewing ? <Square className="size-3.5 fill-current" /> : <Play className="size-3.5 fill-current" />}
-      </Button>
-      <ContinuousWaveform
-        values={values}
-        active={isPreviewing}
-        className="source-signal-wave h-11 min-w-[180px] flex-1"
-      />
-    </div>
+    <SignalCell
+      values={source.waveform}
+      sourceId={source.id}
+      cacheSourceAudio={Boolean(source.audioCacheKey)}
+      isPreviewing={isPreviewing}
+      canPlay={canPlay}
+      onPreview={onPreview}
+      ariaLabel={`${isPreviewing ? "Stop" : "Play"} ${source.name}`}
+    />
   );
 }
 

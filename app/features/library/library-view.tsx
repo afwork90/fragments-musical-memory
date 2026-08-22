@@ -4,8 +4,6 @@ import { CSSProperties, ReactNode, RefObject, useMemo } from "react";
 import {
   ColumnFilterPopover,
   LibraryFilters,
-  activeLibraryFilterCount,
-  createLibraryFilters,
 } from "../../library-filter-popover";
 import { Fragment, MusicalRole } from "../../prototype-data";
 import { LIBRARY_ROLES } from "./library-columns";
@@ -82,7 +80,6 @@ export function LibraryView({
     [fragments],
   );
   const roleOptions = LIBRARY_ROLES.filter((role): role is MusicalRole => role !== "All");
-  const filterCount = activeLibraryFilterCount(filters);
 
   return (
     <section
@@ -95,15 +92,8 @@ export function LibraryView({
         </div>
         <LibraryToolbar
           query={query}
-          roleFilters={filters.role}
-          filterCount={filterCount}
           searchRef={searchRef}
           onQueryChange={onQueryChange}
-          onRoleFiltersChange={(role) => onFiltersChange({ ...filters, role })}
-          onClearFilters={() => {
-            onFiltersChange(createLibraryFilters());
-            onCloseFilterMenu();
-          }}
         />
         <LibraryTable
           fragments={visibleFragments}

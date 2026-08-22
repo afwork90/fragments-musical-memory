@@ -34,15 +34,17 @@ test("server-renders the Fragments prototype", async () => {
 });
 
 test("ships the complete staged musical corpus and interface data", async () => {
-  const [data, page, workflow, workbench, filters, sourcesToolbar, libraryTable, libraryColumns, duplicateDialog, styles, audioFiles] = await Promise.all([
+  const [data, page, workflow, workbench, filters, sourcesToolbar, libraryToolbar, libraryTable, libraryColumns, connectionsTable, duplicateDialog, styles, audioFiles] = await Promise.all([
     readFile(new URL("../app/prototype-data.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/fragments-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/hero-workflow.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/fragmentation-workbench.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/library-filter-popover.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/sources/sources-toolbar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/features/library/library-toolbar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/library-table.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/library-columns.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/features/library/connections-table.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/duplicate-takes-dialog.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readdir(new URL("../public/audio/", import.meta.url)),
@@ -54,8 +56,13 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(page, /wave-play/);
   assert.match(page, /LibraryView/);
   assert.match(page, /SourcesView/);
+  assert.match(libraryToolbar, /sources-toolbar/);
+  assert.doesNotMatch(libraryToolbar, /filter-row/);
   assert.match(libraryTable, /Filter by \$\{column\.label\}/);
   assert.match(libraryColumns, /Bars\/Beats/);
+  assert.match(page, /ConnectionsTable/);
+  assert.match(connectionsTable, /relationship\.score/);
+  assert.doesNotMatch(page, /connection-controls/);
   assert.match(sourcesToolbar, /＋ Import/);
   assert.match(page, /Manual links/);
   assert.match(page, /linkSummaryFor/);

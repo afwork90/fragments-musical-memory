@@ -19,6 +19,7 @@ import {
 } from "./prototype-data";
 import { Waveform } from "@/lib/audio/waveform";
 import { DuplicateTakesDialog } from "./features/library/duplicate-takes-dialog";
+import { ConnectionsTable } from "./features/library/connections-table";
 import { LibraryView } from "./features/library/library-view";
 import { LibraryFilterMenu, LibrarySort, LibrarySortColumn } from "./features/library/types";
 import { ImportDialog, ImportedSource } from "./features/sources/import-dialog";
@@ -112,7 +113,7 @@ export default function FragmentsApp() {
   const [toast, setToast] = useState<string | null>(null);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [connectionsWidth, setConnectionsWidth] = useState(520);
+  const [connectionsWidth, setConnectionsWidth] = useState(640);
   const [resizingConnections, setResizingConnections] = useState(false);
   const [sourceQuery, setSourceQuery] = useState("");
   const [sourceSort, setSourceSort] = useState<SourceSort>({ column:"date", direction:"desc" });
@@ -531,34 +532,21 @@ export default function FragmentsApp() {
         onOpenTakes={(fragment) => { setSelectedId(fragment.id); setDuplicateGroup(fragment.duplicateGroup!); }}
         connectionsPanel={<aside className="connections">
           <button type="button" className="panel-resizer" role="slider" aria-label="Resize connections panel" aria-orientation="vertical" aria-valuemin={420} aria-valuemax={760} aria-valuenow={connectionsWidth} onPointerDown={(event) => { event.preventDefault(); setResizingConnections(true); }} onDoubleClick={() => setConnectionsWidth(520)} onKeyDown={(event) => { if (event.key === "ArrowLeft") { event.preventDefault(); setConnectionsWidth((width) => Math.min(760,width + 20)); } if (event.key === "ArrowRight") { event.preventDefault(); setConnectionsWidth((width) => Math.max(420,width - 20)); } }}><span /></button>
-          <div className="connections-head"><h2>Connections</h2><div><button className={`advanced-toggle ${advancedOpen ? "active" : ""}`} onClick={() => setAdvancedOpen((current) => !current)} aria-expanded={advancedOpen}>Advanced</button><button className="panel-close" onClick={closeConnections} aria-label="Close connections">×</button></div></div>
+          <div className="connections-head"><h2>Connections</h2><button className="panel-close" onClick={closeConnections} aria-label="Close connections">×</button></div>
           <p className="selected-caption"><span>From</span><strong>{selected.name}</strong><button onClick={() => editSourceForFragment(selected.id)}>Edit source</button></p>
-          <div className="connection-controls">
-            <div className="context-switch" aria-label="Search musical object">{CONTEXTS.map((item) => <button key={item.id} className={context === item.id ? "active" : ""} onClick={() => { stopAllAudio();setContext(item.id); }}>{item.label}</button>)}</div>
-            {advancedOpen && <div className="advanced-popover">
-              <div className="shape-title"><div><span>Weights & tolerances</span></div><button onClick={() => { setWeights({ ...DEFAULT_WEIGHTS });setTolerances({ ...DEFAULT_TOLERANCES });setRangeMode("reasonable"); }}>Balanced</button></div>
-              <div className="weight-presets"><button onClick={() => setWeights({ rhythm:100,harmony:16,melody:12,timbre:42 })}>Rhythm</button><button onClick={() => setWeights({ rhythm:18,harmony:100,melody:74,timbre:22 })}>Harmony</button></div>
-              {(Object.keys(weights) as (keyof SearchWeights)[]).map((key) => <label className="weight-row" key={key}><span>{key}</span><input type="range" min="0" max="100" value={weights[key]} onChange={(event) => setWeights((current) => ({ ...current, [key]:Number(event.target.value) }))} /><output>{weights[key]}</output></label>)}
-              <div className="tolerance-grid"><label><span>Tempo window</span><input aria-label="Tempo window" type="range" min="2" max="40" value={tolerances.tempoWindow} onChange={(event) => setTolerances((current) => ({ ...current,tempoWindow:Number(event.target.value) }))}/><output>±{tolerances.tempoWindow}%</output></label><label><span>Key flexibility</span><select value={tolerances.keyFlexibility} onChange={(event) => setTolerances((current) => ({ ...current,keyFlexibility:event.target.value as MatchTolerances["keyFlexibility"] }))}><option value="exact">Exact</option><option value="related">Related</option><option value="nearby">Nearby</option></select></label><label><span>Length</span><select value={tolerances.lengthTolerance} onChange={(event) => setTolerances((current) => ({ ...current,lengthTolerance:event.target.value as MatchTolerances["lengthTolerance"] }))}><option value="same">Same bars</option><option value="one">±1 bar</option><option value="any">Any</option></select></label><label className="check-row"><input type="checkbox" checked={tolerances.allowRepetition} onChange={(event) => setTolerances((current) => ({ ...current,allowRepetition:event.target.checked }))}/><span>Allow repetition</span></label></div>
-              <div className="range-toggle advanced-range"><button className={rangeMode === "reasonable" ? "active" : ""} onClick={() => setRangeMode("reasonable")}>Reasonable</button><button className={rangeMode === "experimental" ? "active experimental" : ""} onClick={() => setRangeMode("experimental")}>Experimental</button></div>
-            </div>}
-          </div>
-          {selected.objects && context !== "whole" && <div className="object-note"><span>Isolated {context}</span><small>Prepared musical-object view</small></div>}
-          <div className="connection-table" role="table" aria-label={`Connections for ${selected.name}`}>
-            <div className="connection-row connection-header" role="row"><span>Fit</span><span>Fragment</span><span>Signal</span><span>Key</span><span>BPM</span><span>Role</span><span>Change</span><span>Actions</span></div>
-            {connections.map((relationship,index) => {
-            const target = activeFragmentById(relationship.otherId);
-            return <div className={`connection-row ${index === 0 ? "featured" : ""}`} role="row" key={relationship.id}>
-              <span className="connection-fit"><strong>{relationship.score}</strong><small>%</small></span>
-              <span className="connection-name">{target.id === "f02" && selectedId === "f01" && <i>Rediscovered · 2018</i>}<b>{target.name}</b><small title={relationship.reason}>{relationship.reason}</small></span>
-              <button className={`wave-play connection-wave ${previewingId === target.id ? "playing" : ""}`} onClick={(event) => { event.stopPropagation();previewSingle(target);markRelationship(relationship,"auditioned"); }} aria-label={`${previewingId === target.id ? "Stop" : "Play"} ${target.name}`}><Waveform values={target.waveform} active={previewingId === target.id}/></button>
-              <span className="connection-key" title={target.alternateKeys.length ? `${target.key}; also ${target.alternateKeys.join(", ")}` : target.key}>{target.key}</span>
-              <span className="connection-tempo">{target.bpm}</span>
-              <span className="connection-role">{target.role}</span>
-              <span className="connection-change"><TransformChips relationship={relationship} /></span>
-              <span className="connection-actions"><button className="connection-edit-button" onClick={() => editSourceForFragment(target.id)} aria-label={`Edit source for ${target.name}`}>Edit source</button><button className="combine-button" onClick={() => openCombine(relationship)} aria-label={`Combine ${target.name} with ${selected.name}`}>Combine</button></span>
-            </div>;
-          })}{connections.length === 0 && <div className="connection-empty">No authored connections for this fragment.</div>}</div>
+          <ConnectionsTable
+            connections={connections}
+            selectedFragmentId={selectedId}
+            previewingId={previewingId}
+            fragmentFor={activeFragmentById}
+            sourceNameFor={sourceNameFor}
+            onPreview={(fragment, relationship) => {
+              previewSingle(fragment);
+              markRelationship(relationship, "auditioned");
+            }}
+            onCombine={openCombine}
+            onEditSource={editSourceForFragment}
+          />
         </aside>}
       />}
 
