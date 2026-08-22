@@ -76,7 +76,7 @@ addict==2.4.0
 beartype==0.21.0
 
 # Others
-triton==3.0.0
+# triton==3.0.0 # we aint using the GPU
 muq==0.1.0
 vmo==0.30.5
 
@@ -91,10 +91,4 @@ PyPDF2
 setuptools==80.10.2
 flask
 flask_cors
-configuration_songformer 
-dataset 
-model 
-model_config 
-musicfm 
-postprocessing
 gunicorn
