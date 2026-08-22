@@ -1,6 +1,7 @@
 "use client";
 
 import { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import { Fragment, SourceFile } from "./prototype-data";
 
 export type EditableRange = { id:string; fragmentId?:string; start:number; end:number; color:string };
@@ -44,6 +45,9 @@ export function FragmentationWorkbench({ source,ranges,fragments,sensitivity,foc
   const [dragged,setDragged]=useState<{ rangeId:string;edge:Edge } | null>(null);
   const [magnifier,setMagnifier]=useState<{ x:number;time:number;edge:Edge } | null>(null);
   const [previewingId,setPreviewingId]=useState<string | null>(null);
+  const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
+  const waveform = cached?.peaks ?? source.waveform;
+  const analysisMeta = cached?.analysis;
   const audioRef=useRef<HTMLAudioElement | null>(null);
   const timelineRef=useRef<HTMLDivElement>(null);
   const rulerRef=useRef<HTMLDivElement>(null);
@@ -99,7 +103,7 @@ export function FragmentationWorkbench({ source,ranges,fragments,sensitivity,foc
 
   return <aside className="source-editor fragmentation-workbench">
     <div className="source-editor-title"><h2>Fragmentation</h2><button className="panel-close" onClick={close} aria-label="Close fragmentation panel">×</button></div>
-    <div className="source-editor-head"><div><h3>{source.name}</h3><p>{source.format} · {source.device}</p></div>{source.fragmentIds[0] && fragments.find((fragment) => fragment.id === source.fragmentIds[0]) && <button className="soft-button" onClick={() => preview(fragments.find((fragment) => fragment.id === source.fragmentIds[0])!)}>{previewingId === source.fragmentIds[0] ? "Ⅱ Stop" : "▶ Play"}</button>}</div>
+    <div className="source-editor-head"><div><h3>{source.name}</h3><p>{source.format} · {source.device}{analysisMeta?.bpm ? ` · ${analysisMeta.bpm} BPM` : ""}{analysisMeta?.key && analysisMeta.scale ? ` · ${analysisMeta.key} ${analysisMeta.scale}` : ""}</p></div>{source.fragmentIds[0] && fragments.find((fragment) => fragment.id === source.fragmentIds[0]) && <button className="soft-button" onClick={() => preview(fragments.find((fragment) => fragment.id === source.fragmentIds[0])!)}>{previewingId === source.fragmentIds[0] ? "Ⅱ Stop" : "▶ Play"}</button>}</div>
     <div className="timeline-card" ref={timelineRef}>
       <div className="fragment-lanes-scroll"><div className="fragment-lanes" ref={rulerRef} style={{ height:`${ranges.length * 23 + 4}px` }}>{ranges.map((range,index) => <div className={`fragment-lane ${range.fragmentId === focusedFragmentId ? "focused" : ""}`} key={range.id} style={{ top:`${index * 23}px`,"--fragment-color":range.color } as CSSProperties}>
         <div className="fragment-bar" style={{ left:`${range.start / source.duration * 100}%`,width:`${(range.end - range.start) / source.duration * 100}%` }}>
@@ -108,9 +112,9 @@ export function FragmentationWorkbench({ source,ranges,fragments,sensitivity,foc
           <button className="range-handle end" onPointerDown={(event) => beginRangeDrag(event,range,"end")} onKeyDown={(event) => { const step=event.shiftKey ? 1 : .25;if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault();changeEdge(range,"end",range.end + (event.key === "ArrowLeft" ? -step : step)); } }} aria-label={`Adjust end of fragment ${index + 1}`} />
         </div>
       </div>)}</div></div>
-      {magnifier && dragged && <div className="ruler-edge-magnifier" style={{ left:`${magnifier.x}px` }}><strong>{magnifier.edge} · {formatSeconds(magnifier.time)}</strong><ContinuousWaveform values={waveformSlice(source.waveform,magnifier.time,source.duration)} /></div>}
+      {magnifier && dragged && <div className="ruler-edge-magnifier" style={{ left:`${magnifier.x}px` }}><strong>{magnifier.edge} · {formatSeconds(magnifier.time)}</strong><ContinuousWaveform values={waveformSlice(waveform,magnifier.time,source.duration)} /></div>}
       <div className="timeline-labels"><span>0:00</span><span>{formatSeconds(source.duration / 2)}</span><span>{formatSeconds(source.duration)}</span></div>
-      <div className="continuous-wave-wrap"><ContinuousWaveform values={source.waveform}/>{ranges.map((range,index) => { const fragment=fragmentFor(range);return <div className={`wave-range ${fragment && previewingId === fragment.id ? "auditioning" : ""}`} key={range.id} style={{ left:`${range.start / source.duration * 100}%`,width:`${(range.end - range.start) / source.duration * 100}%`,"--fragment-color":range.color } as CSSProperties}><span>F{index + 1}</span>{fragment && previewingId === fragment.id && <i className="fragment-scan-playhead" />}</div>; })}</div>
+      <div className="continuous-wave-wrap"><ContinuousWaveform values={waveform}/>{ranges.map((range,index) => { const fragment=fragmentFor(range);return <div className={`wave-range ${fragment && previewingId === fragment.id ? "auditioning" : ""}`} key={range.id} style={{ left:`${range.start / source.duration * 100}%`,width:`${(range.end - range.start) / source.duration * 100}%`,"--fragment-color":range.color } as CSSProperties}><span>F{index + 1}</span>{fragment && previewingId === fragment.id && <i className="fragment-scan-playhead" />}</div>; })}</div>
       <div className="fragment-summary"><strong>{ranges.length} fragments</strong><span>Drag a ruler edge to trim · Shift + arrow for 1 second</span></div>
     </div>
     <div className="source-lower">

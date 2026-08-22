@@ -6,28 +6,33 @@ import {
   DEFAULT_TOLERANCES,
   FRAGMENTS,
   IMPORTED_FRAGMENT_IDS,
+  MESSY_PHONE_PROFILE,
   RELATIONSHIPS,
   SOURCE_FILES,
-  STAGED_SOURCE_ID,
   Fragment,
   MatchTolerances,
-  MusicalRole,
   Relationship,
   RelationshipStatus,
   SearchContext,
   SearchWeights,
   SourceFile,
 } from "./prototype-data";
-import { CombineCandidate, CombineWorkspace, ExportSheet, ImportSheet } from "./hero-workflow";
+import { Waveform } from "@/components/audio/waveform";
+import { DuplicateTakesDialog } from "./features/library/duplicate-takes-dialog";
+import { LibraryView } from "./features/library/library-view";
+import { LibraryFilterMenu, LibrarySort, LibrarySortColumn } from "./features/library/types";
+import { ImportDialog, ImportedSource } from "./features/sources/import-dialog";
+import { SourcesView } from "./features/sources/sources-view";
+import { SourceSort } from "./features/sources/types";
+import { CombineCandidate, CombineWorkspace, ExportSheet } from "./hero-workflow";
 import { EditableRange, FragmentationWorkbench } from "./fragmentation-workbench";
-import { ColumnFilterPopover, LibraryColumnId, LibraryFilters, activeLibraryFilterCount, createLibraryFilters, libraryFilterIsActive } from "./library-filter-popover";
+import { LibraryFilters, createLibraryFilters } from "./library-filter-popover";
+import { formatSeconds } from "@/lib/format";
+import { bindSourceAudio, retainCachedAudio } from "@/lib/audio/audio-service";
 import { MAP_WORLD, clampMapCamera, fitMapCamera, musicalMapPoint, panMapCamera, zoomMapCameraAt } from "./map-layout.mjs";
 
 type View = "library" | "source" | "map" | "archive";
 type RangeMode = "reasonable" | "experimental";
-type SortColumn = LibraryColumnId;
-type SortDirection = "asc" | "desc";
-type SourceSortColumn = "name" | "signal" | "date" | "duration" | "type" | "profile" | "format" | "device" | "fragments";
 type ScoredRelationship = Relationship & { score: number; otherId: string };
 type MapCamera = { x:number;y:number;scale:number };
 type ReturnSnapshot = { kind:"source-edit" | "map-full";view:View;selectedId:string;selectedSourceId:string;connectionsOpen:boolean;advancedOpen:boolean;mapSelectedId:string | null;mapCamera:MapCamera;scrollY:number };
@@ -37,18 +42,6 @@ const CONTEXTS: { id: SearchContext; label: string }[] = [
   { id: "whole", label: "Whole" }, { id: "melody", label: "Melody" }, { id: "rhythm", label: "Rhythm" },
   { id: "harmony", label: "Harmony" }, { id: "bass", label: "Bass" },
 ];
-const ROLES: ("All" | MusicalRole)[] = ["All", "Melody", "Rhythm", "Harmony", "Bass", "Voice", "Texture"];
-const LIBRARY_COLUMNS: { id:SortColumn; label:string }[] = [
-  { id:"name", label:"Fragment" }, { id:"source", label:"Source" }, { id:"signal", label:"Signal" },
-  { id:"date", label:"Recorded" }, { id:"start", label:"Start" }, { id:"end", label:"End" }, { id:"duration", label:"Length" },
-  { id:"bars", label:"Bars/Beats" }, { id:"key", label:"Key" }, { id:"tempo", label:"BPM" }, { id:"confidence", label:"Confidence" },
-  { id:"tags", label:"Tags" }, { id:"role", label:"Role" }, { id:"links", label:"Links" }, { id:"takes", label:"Takes" },
-];
-const SOURCE_COLUMNS: { id:SourceSortColumn; label:string }[] = [
-  { id:"name", label:"Source" }, { id:"signal", label:"Signal" }, { id:"date", label:"Recorded" },
-  { id:"duration", label:"Length" }, { id:"type", label:"Type" }, { id:"profile", label:"Profile" }, { id:"format", label:"Format" }, { id:"device", label:"Device" },
-  { id:"fragments", label:"Fragments" },
-];
 const RANGE_COLORS = ["#a99cff","#74d8ff","#ffbc65","#c8fa78","#ff849b","#75e2c2"];
 const OPENING_SOURCE_ID = SOURCE_FILES.find((source) => !source.imported)!.id;
 const INITIAL_RELATIONSHIP_STATUSES = Object.fromEntries(RELATIONSHIPS.filter((relationship) => relationship.status).map((relationship) => [relationship.id,relationship.status!])) as Record<string,RelationshipStatus>;
@@ -56,9 +49,7 @@ const INITIAL_MANUAL_RELATIONSHIP_IDS = new Set(RELATIONSHIPS.filter((relationsh
 const fragmentById = (id: string) => FRAGMENTS.find((fragment) => fragment.id === id)!;
 const sourceNameFor = (fragment:Fragment) => SOURCE_FILES.find((source) => source.id === fragment.sourceId)?.name ?? fragment.source;
 const otherIdFor = (relationship: Relationship, selectedId: string) => relationship.source === selectedId ? relationship.target : relationship.source;
-const formatSeconds = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 const fragmentCountForSensitivity = (sensitivity:number) => Math.max(1,Math.min(6,Math.floor((sensitivity - 10) / 16) + 1));
-const matchesNumericFilter = (actual:number,filter:LibraryFilters["tempo"]) => filter.value.trim() === "" || (filter.comparison === "gt" ? actual > Number(filter.value) : actual < Number(filter.value));
 const relationshipIsTransformed = (relationship:Relationship) => Boolean(relationship.transform && ((relationship.transform.pitch ?? 0) !== 0 || (relationship.transform.bpm ?? 0) !== 0 || relationship.transform.timing || (relationship.transform.beatOffset ?? 0) !== 0 || (relationship.transform.repeat ?? 1) !== 1 || relationship.transform.labels.some((label) => label !== "As recorded")));
 
 function rangeForIndex(source:SourceFile,index:number):EditableRange {
@@ -95,10 +86,6 @@ function scoreRelationship(relationship: Relationship, weights: SearchWeights, c
   return Math.round(Math.max(0, Math.min(99, (similarity * .9 + relationship.base * .1 - penalty) * 100)));
 }
 
-function Waveform({ values, active=false, large=false }: { values:number[]; active?:boolean; large?:boolean }) {
-  return <div className={`wave ${active ? "active" : ""} ${large ? "large" : ""}`} aria-hidden="true">{values.map((height,index) => <i key={index} style={{ height:`${height}%` }} />)}</div>;
-}
-
 function TransformChips({ relationship }: { relationship:Relationship }) {
   return <div className="chips">{(relationship.transform?.labels ?? ["As recorded"]).map((label) => <span key={label}>{label}</span>)}</div>;
 }
@@ -108,8 +95,8 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState("f02");
   const [query, setQuery] = useState("");
   const [libraryFilters,setLibraryFilters] = useState<LibraryFilters>(createLibraryFilters);
-  const [filterMenu,setFilterMenu] = useState<{ column:SortColumn;left:number;top:number;trigger:HTMLButtonElement } | null>(null);
-  const [sort, setSort] = useState<{ column:SortColumn; direction:SortDirection }>({ column:"date", direction:"desc" });
+  const [filterMenu,setFilterMenu] = useState<LibraryFilterMenu | null>(null);
+  const [sort, setSort] = useState<LibrarySort>({ column:"date", direction:"desc" });
   const [context, setContext] = useState<SearchContext>("whole");
   const [rangeMode, setRangeMode] = useState<RangeMode>("reasonable");
   const [weights, setWeights] = useState<SearchWeights>({ ...DEFAULT_WEIGHTS });
@@ -126,8 +113,9 @@ export default function Home() {
   const [connectionsWidth, setConnectionsWidth] = useState(520);
   const [resizingConnections, setResizingConnections] = useState(false);
   const [sourceQuery, setSourceQuery] = useState("");
-  const [sourceSort, setSourceSort] = useState<{ column:SourceSortColumn; direction:SortDirection }>({ column:"date", direction:"desc" });
+  const [sourceSort, setSourceSort] = useState<SourceSort>({ column:"date", direction:"desc" });
   const [sourceEditorOpen, setSourceEditorOpen] = useState(false);
+  const [sourceEditorModal, setSourceEditorModal] = useState(false);
   const [sourceRanges, setSourceRanges] = useState<Record<string,EditableRange[]>>(initialSourceRanges);
   const [importOpen,setImportOpen] = useState(false);
   const [importComplete,setImportComplete] = useState(false);
@@ -170,7 +158,7 @@ export default function Home() {
     setPreviewingId(null);
   };
 
-  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setFilterMenu(null);setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");if (next !== "map") setMapSelectedId(null);setView(next); };
+  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setFilterMenu(null);setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");if (next !== "map") setMapSelectedId(null);setView(next); };
   const notify = (message:string) => { setToast(message); window.setTimeout(() => setToast(null), 2400); };
 
   useEffect(() => {
@@ -261,91 +249,12 @@ export default function Home() {
 
   const relatedTakeCountFor=(fragment:Fragment) => fragment.duplicateGroup && !duplicateExclusions.has(fragment.id) ? activeFragments.filter((item) => item.duplicateGroup === fragment.duplicateGroup && item.id !== fragment.id && !archived.has(item.id) && !duplicateExclusions.has(item.id)).length : 0;
   const filterableFragments=useMemo(() => activeFragments.filter((fragment) => !archived.has(fragment.id)),[activeFragments,archived]);
-  const keyFilterOptions=useMemo(() => Array.from(new Set(filterableFragments.flatMap((fragment) => [fragment.key,...fragment.alternateKeys]))).sort((a,b) => a.localeCompare(b)),[filterableFragments]);
-  const tagFilterOptions=useMemo(() => Array.from(new Set(filterableFragments.flatMap((fragment) => fragment.userTags))).sort((a,b) => a.localeCompare(b)),[filterableFragments]);
-  const libraryFilterCount=activeLibraryFilterCount(libraryFilters);
-  const matchesLibraryFilters=(fragment:Fragment) => {
-    const name=libraryFilters.name.trim().toLowerCase();
-    const source=libraryFilters.source.trim().toLowerCase();
-    if (name && !fragment.name.toLowerCase().includes(name)) return false;
-    if (source && !sourceNameFor(fragment).toLowerCase().includes(source)) return false;
-    if (!matchesNumericFilter(fragment.brightness,libraryFilters.signal)) return false;
-    if (libraryFilters.date.value) {
-      const comparison=fragment.date.localeCompare(libraryFilters.date.value);
-      if (libraryFilters.date.comparison === "after" ? comparison <= 0 : comparison >= 0) return false;
-    }
-    if (!matchesNumericFilter(fragment.start,libraryFilters.start) || !matchesNumericFilter(fragment.end,libraryFilters.end) || !matchesNumericFilter(fragment.end - fragment.start,libraryFilters.duration)) return false;
-    const barsOrBeats=libraryFilters.bars.metric === "bars" ? fragment.bars : fragment.beats;
-    if (!matchesNumericFilter(barsOrBeats,libraryFilters.bars)) return false;
-    if (libraryFilters.key.length && ![fragment.key,...fragment.alternateKeys].some((key) => libraryFilters.key.includes(key))) return false;
-    if (!matchesNumericFilter(fragment.bpm,libraryFilters.tempo) || !matchesNumericFilter(fragment.confidence * 100,libraryFilters.confidence)) return false;
-    if (libraryFilters.tags.length && !fragment.userTags.some((tag) => libraryFilters.tags.includes(tag))) return false;
-    if (libraryFilters.role.length && !libraryFilters.role.includes(fragment.role)) return false;
-    if (!matchesNumericFilter(linkSummaryFor(fragment.id).total,libraryFilters.links)) return false;
-    const relatedTakes=relatedTakeCountFor(fragment);
-    const takeCount=relatedTakes > 0 ? relatedTakes + 1 : 0;
-    return matchesNumericFilter(takeCount,libraryFilters.takes);
-  };
 
-  const normalizedQuery=query.trim().toLowerCase();
-  const visibleFragments=activeFragments.filter((fragment) => !archived.has(fragment.id))
-    .filter((fragment) => !normalizedQuery || `${fragment.name} ${sourceNameFor(fragment)} ${fragment.key} ${fragment.roles.join(" ")} ${fragment.userTags.join(" ")}`.toLowerCase().includes(normalizedQuery))
-    .filter(matchesLibraryFilters)
-    .sort((a,b) => {
-      const takeCount=(fragment:Fragment) => relatedTakeCountFor(fragment);
-      let comparison=0;
-      if (sort.column === "name") comparison=a.name.localeCompare(b.name);
-      if (sort.column === "source") comparison=sourceNameFor(a).localeCompare(sourceNameFor(b));
-      if (sort.column === "signal") comparison=a.brightness - b.brightness;
-      if (sort.column === "date") comparison=a.date.localeCompare(b.date);
-      if (sort.column === "start") comparison=a.start - b.start;
-      if (sort.column === "end") comparison=a.end - b.end;
-      if (sort.column === "duration") comparison=(a.end - a.start) - (b.end - b.start);
-      if (sort.column === "bars") comparison=a.bars - b.bars || a.beats - b.beats;
-      if (sort.column === "key") comparison=a.key.localeCompare(b.key);
-      if (sort.column === "tempo") comparison=a.bpm - b.bpm;
-      if (sort.column === "confidence") comparison=a.confidence - b.confidence;
-      if (sort.column === "tags") comparison=a.userTags.join(" ").localeCompare(b.userTags.join(" "));
-      if (sort.column === "role") comparison=a.role.localeCompare(b.role);
-      if (sort.column === "links") comparison=linkSummaryFor(a.id).total - linkSummaryFor(b.id).total;
-      if (sort.column === "takes") comparison=takeCount(a) - takeCount(b);
-      return sort.direction === "asc" ? comparison : -comparison;
-    });
-
-  const changeSort = (column:SortColumn) => setSort((current) => ({
-    column,
-    direction:current.column === column ? (current.direction === "asc" ? "desc" : "asc") : (["date","signal","tempo","links","takes"].includes(column) ? "desc" : "asc"),
-  }));
-
-  const openColumnFilter = (column:SortColumn,trigger:HTMLButtonElement) => {
+  const openColumnFilter = (column:LibrarySortColumn,trigger:HTMLButtonElement) => {
     if (filterMenu?.column === column) { setFilterMenu(null);return; }
     const rect=trigger.getBoundingClientRect();
     setFilterMenu({ column,left:rect.left,top:rect.bottom + 5,trigger });
   };
-
-  const visibleSources = useMemo(() => {
-    const normalized = sourceQuery.trim().toLowerCase();
-    return sources
-      .filter((source) => !normalized || `${source.name} ${source.date} ${source.format} ${source.device}`.toLowerCase().includes(normalized))
-      .sort((a,b) => {
-        let comparison = 0;
-        if (sourceSort.column === "name") comparison = a.name.localeCompare(b.name);
-        if (sourceSort.column === "signal") comparison = a.waveform.reduce((sum,value) => sum + value,0) - b.waveform.reduce((sum,value) => sum + value,0);
-        if (sourceSort.column === "date") comparison = Date.parse(a.date) - Date.parse(b.date);
-        if (sourceSort.column === "duration") comparison = a.duration - b.duration;
-        if (sourceSort.column === "type") comparison = a.sourceTypes.join(" ").localeCompare(b.sourceTypes.join(" "));
-        if (sourceSort.column === "profile") comparison = a.analysisProfile.name.localeCompare(b.analysisProfile.name);
-        if (sourceSort.column === "format") comparison = a.format.localeCompare(b.format);
-        if (sourceSort.column === "device") comparison = a.device.localeCompare(b.device);
-        if (sourceSort.column === "fragments") comparison = a.fragmentIds.length - b.fragmentIds.length;
-        return sourceSort.direction === "asc" ? comparison : -comparison;
-      });
-  }, [sources, sourceQuery, sourceSort]);
-
-  const changeSourceSort = (column:SourceSortColumn) => setSourceSort((current) => ({
-    column,
-    direction:current.column === column ? (current.direction === "asc" ? "desc" : "asc") : (["date","signal","duration","fragments"].includes(column) ? "desc" : "asc"),
-  }));
 
   const resizeRangesForSensitivity = (ranges:EditableRange[],source:SourceFile,value:number) => {
     const count=fragmentCountForSensitivity(value);
@@ -388,6 +297,15 @@ export default function Home() {
     audio.play().catch(() => notify("Playback needs one more click in this browser."));
   };
 
+  const previewSource = (source: SourceFile) => {
+    const previewKey = `source:${source.id}`;
+    if (previewingId === previewKey && previewAudio.current) { previewAudio.current.pause(); previewAudio.current = null; setPreviewingId(null); return; }
+    if (!source.audioUrl) return;
+    stopAllAudio();
+    const audio = new Audio(source.audioUrl); audio.loop = true; audio.volume = .72; previewAudio.current = audio; setPreviewingId(previewKey);
+    audio.play().catch(() => notify("Playback needs one more click in this browser."));
+  };
+
   const archiveFragment = (id:string) => {
     stopAllAudio(); setArchived((current) => new Set([...current, id]));
     if (id === selectedId) setSelectedId(activeFragments.find((fragment) => fragment.id !== id && !archived.has(fragment.id))?.id ?? "f02");
@@ -403,7 +321,7 @@ export default function Home() {
   const resetDemo = () => {
     stopAllAudio(); setView("library"); setSelectedId("f02"); setQuery("");setLibraryFilters(createLibraryFilters());setFilterMenu(null);setSort({ column:"date", direction:"desc" });
     setContext("whole"); setRangeMode("reasonable"); setWeights({ ...DEFAULT_WEIGHTS }); setTolerances({ ...DEFAULT_TOLERANCES });setArchived(new Set()); setDuplicateExclusions(new Set());
-    returnStack.current=[];setDuplicateGroup(null);setConnectionsOpen(false);setAdvancedOpen(false);setConnectionsWidth(520);setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(OPENING_SOURCE_ID);setSourceQuery("");setSourceSort({ column:"date",direction:"desc" });setSourceEditorOpen(false);setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null);setMapCamera({ x:0,y:0,scale:1 });mapDidFit.current=false;notify("Demo restored to 24 fragments before import.");
+    returnStack.current=[];setDuplicateGroup(null);setConnectionsOpen(false);setAdvancedOpen(false);setConnectionsWidth(520);setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(OPENING_SOURCE_ID);setSourceQuery("");setSourceSort({ column:"date",direction:"desc" });setSourceEditorOpen(false);setSourceEditorModal(false);setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null);setMapCamera({ x:0,y:0,scale:1 });mapDidFit.current=false;notify("Demo restored to 24 fragments before import.");
   };
   const pushReturn = (kind:ReturnSnapshot["kind"]) => returnStack.current.push({ kind,view,selectedId,selectedSourceId,connectionsOpen,advancedOpen,mapSelectedId,mapCamera:{ ...mapCamera },scrollY:window.scrollY });
   const restoreReturn = (kind:ReturnSnapshot["kind"]) => {
@@ -415,14 +333,49 @@ export default function Home() {
   const openFragmentFromMap = (id:string) => { pushReturn("map-full");openFragment(id); };
   const closeConnections = () => { if (restoreReturn("map-full")) return;stopAllAudio();setConnectionsOpen(false);setAdvancedOpen(false); };
   const closeSourceEditor = () => {
-    if (correctionRelationship) { setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);return; }
+    if (correctionRelationship) { setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);return; }
     if (restoreReturn("source-edit")) return;
-    stopAllAudio();setSourceEditorOpen(false);
+    stopAllAudio();setSourceEditorOpen(false);setSourceEditorModal(false);
+  };
+  const openSourceEditor = (sourceId: string, modal: boolean) => {
+    stopAllAudio();
+    setSelectedSourceId(sourceId);
+    setSourceEditorModal(modal);
+    setSourceEditorOpen(true);
   };
   const editSourceForFragment = (id:string) => { const fragment=activeFragmentById(id);pushReturn("source-edit");stopAllAudio();setSelectedSourceId(fragment.sourceId);setSourceEditorOpen(true);setConnectionsOpen(false);setAdvancedOpen(false);setView("source"); };
-  const completeImport = () => {
-    setImportComplete(true);setImportOpen(false);setSources(SOURCE_FILES.map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(STAGED_SOURCE_ID);
-    setView("library");setQuery("Balcony");setLibraryFilters(createLibraryFilters());setFilterMenu(null);setSelectedId("f01");setConnectionsOpen(false);notify("4 fragment references added. Select one to find connections.");
+  const handleImportSource = (imported: ImportedSource) => {
+    const id = `source-import-${Date.now()}`;
+    retainCachedAudio(imported.cacheKey);
+    bindSourceAudio(id, imported.cacheKey);
+    const newSource: SourceFile = {
+      id,
+      name: imported.name,
+      date: new Date().toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" }),
+      duration: imported.duration,
+      format: imported.format,
+      device: "Local upload",
+      fragmentIds: [],
+      waveform: imported.peaks,
+      sensitivity: MESSY_PHONE_PROFILE.sensitivity,
+      start: 0,
+      end: imported.duration,
+      sourceTypes: imported.sourceTypes,
+      analysisProfile: MESSY_PHONE_PROFILE,
+      imported: true,
+      audioUrl: imported.objectUrl,
+      audioCacheKey: imported.cacheKey,
+      bpm: imported.analysis.bpm,
+      key: imported.analysis.key,
+      scale: imported.analysis.scale,
+    };
+    setSources((current) => [...current, newSource]);
+    setSourceRanges((current) => ({ ...current, [id]: [] }));
+    setSelectedSourceId(id);
+    setSourceEditorOpen(true);
+    setImportComplete(true);
+    setView("source");
+    notify(`Imported ${imported.name}.`);
   };
   const openCombine = (relationship:ScoredRelationship) => { stopAllAudio();returnScroll.current=window.scrollY;setRelationshipStatuses((current) => ({ ...current,[relationship.id]:current[relationship.id] ?? "auditioned" }));setCombineCandidates([relationship,...connections.filter((item) => item.id !== relationship.id)].slice(0,3));window.scrollTo({ top:0 }); };
   const closeCombine = () => { stopAllAudio();setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setCombineCandidates(null);window.setTimeout(() => window.scrollTo({ top:returnScroll.current }),0); };
@@ -514,7 +467,7 @@ export default function Home() {
   const editorSensitivity=correctionRelationship ? (combineDraftSensitivity ?? selectedSource.sensitivity) : selectedSource.sensitivity;
   const correctedRange=correctionRelationship ? editorRanges.find((range) => range.fragmentId === correctionRelationship.otherId) : null;
   const correctionFooter=correctionRelationship && correctionPhase === "recompute" ? <div className="recompute workbench-result"><i/><strong>Recomputing metadata and active match…</strong><span>Revision {(correctionOriginal?.analysisRevision ?? 1) + 1}</span></div> : correctionRelationship && correctionPhase === "prompt" && correctionOriginal ? <div className="correction-result workbench-result"><div className="metadata-diff"><span>Field</span><span>Before</span><span>After</span>{[["Duration",correctionOriginal.duration,formatSeconds((correctedRange?.end ?? 0) - (correctedRange?.start ?? 0))],["Key",correctionOriginal.key,"C minor"],["BPM",correctionOriginal.bpm,"90"],["Bars",correctionOriginal.bars,"3"],["Beats",correctionOriginal.beats,"17"],["Confidence",`${Math.round(correctionOriginal.confidence * 100)}%`,`93%`],["Match",`${correctionRelationship.score}%`,`76%`]].map((row) => row.map((cell,index) => <span className={index === 2 ? "changed" : ""} key={`${row[0]}-${index}`}>{cell}</span>))}</div><div className="link-prompt"><span className="relationship-badge manual">criteria changed</span><h3>This fragment no longer matches the original search. Keep it linked to this comparison?</h3><p>The boundary correction is saved either way. A manual link preserves your musical judgment.</p><div><button onClick={rejectCorrectionLink}>Reject and show next</button><button className="primary-button" onClick={keepCorrectionLink}>Yes, keep linked</button></div></div></div> : null;
-  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => correctionRelationship ? setCombineDraftRanges(ranges) : setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges }))} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);openFragment(id); }} saveLabel={correctionRelationship ? "Save & recompute" : "Save boundaries"} footerContent={correctionFooter}/> : null;
+  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => correctionRelationship ? setCombineDraftRanges(ranges) : setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges }))} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} saveLabel={correctionRelationship ? "Save & recompute" : "Save boundaries"} footerContent={correctionFooter}/> : null;
 
   return (
     <main className="app-shell">
@@ -524,10 +477,10 @@ export default function Home() {
           <button className={view === "library" ? "nav-active" : ""} onClick={() => navigate("library")}>Library</button>
           <button className={view === "source" ? "nav-active" : ""} onClick={() => navigate("source")}>Sources</button>
           <button className={view === "map" ? "nav-active" : ""} onClick={() => navigate("map")}>Map</button>
-          <button className={view === "archive" ? "nav-active" : ""} onClick={() => navigate("archive")}>Archive {archived.size > 0 && <b>{archived.size}</b>}</button>
+          {/* <button className={view === "archive" ? "nav-active" : ""} onClick={() => navigate("archive")}>Archive {archived.size > 0 && <b>{archived.size}</b>}</button> */}
         </nav>
         <div className="index-status"><span /><small>{activeFragments.length} surfaced · 2,418 indexed</small></div>
-        <button className="reset" onClick={resetDemo}>↺ Reset demo</button>
+        {/* <button className="reset" onClick={resetDemo}>↺ Reset demo</button> */}
       </header>
 
       {combineCandidates && <CombineWorkspace
@@ -544,40 +497,32 @@ export default function Home() {
         onAuditioned={(relationship) => { if (!relationshipStatuses[relationship.id]) markRelationship(relationship,"auditioned"); }}
       />}
       {combineCandidates && correctionRelationship && sourceEditorOpen && <div className="source-editor-overlay" role="dialog" aria-modal="true" aria-label="Edit source boundaries">{fragmentationPanel}</div>}
+      {!combineCandidates && sourceEditorOpen && sourceEditorModal && <div className="source-editor-overlay" role="dialog" aria-modal="true" aria-label="Fragmentation">{fragmentationPanel}</div>}
 
-      {!combineCandidates && view === "library" && <section className={`workspace ${connectionsOpen ? "connections-open" : ""} ${resizingConnections ? "resizing" : ""}`} style={{ "--connections-width":`${connectionsWidth}px` } as CSSProperties}>
-        <div className="library">
-          <div className="panel-titlebar"><h1>Fragments</h1></div>
-          <div className="toolbar">
-            <div className="filter-row" aria-label="Quick filter by musical role">{ROLES.map((role) => { const active=role === "All" ? libraryFilters.role.length === 0 : libraryFilters.role.includes(role);return <button key={role} className={active ? "filter-active" : ""} aria-pressed={active} onClick={() => setLibraryFilters((current) => ({ ...current,role:role === "All" ? [] : current.role.includes(role) ? current.role.filter((item) => item !== role) : [...current.role,role] }))}>{role === "All" ? "All fragments" : role}</button>; })}</div>
-            {libraryFilterCount > 0 && <button className="filters-summary" onClick={() => { setLibraryFilters(createLibraryFilters());setFilterMenu(null); }} aria-label={`Clear ${libraryFilterCount} column filters`}>Filters {libraryFilterCount}<span>Clear</span></button>}
-            <label className="search"><span aria-hidden="true">⌕</span><input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" aria-label="Search fragments" /><kbd>⌘ K</kbd></label>
-          </div>
-          <div className="table" role="table" aria-label="Fragment library">
-            <div className="table-row table-header" role="row">{LIBRARY_COLUMNS.map((column) => { const filtered=libraryFilterIsActive(libraryFilters,column.id);const expanded=filterMenu?.column === column.id;return <span className={`column-head ${filtered ? "filtered" : ""}`} role="columnheader" aria-sort={sort.column === column.id ? (sort.direction === "asc" ? "ascending" : "descending") : "none"} key={column.id}><button className="column-sort" onClick={() => changeSort(column.id)} aria-label={`Sort by ${column.label}${sort.column === column.id ? `, currently ${sort.direction === "asc" ? "ascending" : "descending"}` : ""}`}>{column.label}<i aria-hidden="true">{sort.column === column.id ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}</i></button><button type="button" className={`column-filter-trigger ${filtered ? "active" : ""}`} data-column-filter={column.id} onClick={(event) => { event.stopPropagation();openColumnFilter(column.id,event.currentTarget); }} aria-label={`Filter by ${column.label}${filtered ? ", active" : ""}`} aria-haspopup="dialog" aria-expanded={expanded} aria-controls={expanded ? `filter-${column.id}` : undefined}><i aria-hidden="true"/></button></span>; })}</div>
-            {visibleFragments.map((fragment) => {
-              const relatedTakes = relatedTakeCountFor(fragment);
-              const links=linkSummaryFor(fragment.id);
-              return <div key={fragment.id} className={`table-row fragment-row ${connectionsOpen && selectedId === fragment.id ? "selected" : ""} ${links.total > 0 ? "" : "no-connections"}`} role="row" tabIndex={0} onClick={() => openFragment(fragment.id)} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openFragment(fragment.id); } }}>
-                <span className="track-name"><b>{fragment.name}</b></span>
-                <span className="source-cell" title={sourceNameFor(fragment)}>{sourceNameFor(fragment)}</span>
-                <button className={`wave-play ${previewingId === fragment.id ? "playing" : ""}`} title={`Signal brightness ${fragment.brightness} / 100`} onClick={(event) => { event.stopPropagation(); previewSingle(fragment); }} aria-label={`${previewingId === fragment.id ? "Stop" : "Play"} ${fragment.name}; signal brightness ${fragment.brightness} out of 100`}><Waveform values={fragment.waveform} active={previewingId === fragment.id} /></button>
-                <span className="date-cell">{fragment.dateLabel}</span>
-                <span>{formatSeconds(fragment.start)}</span><span>{formatSeconds(fragment.end)}</span>
-                <span className="duration-cell">{formatSeconds(fragment.end - fragment.start)}</span>
-                <span className="bars-cell">{fragment.bars} / {fragment.beats}</span>
-                <span className="key-cell" title={fragment.alternateKeys.length ? `Also: ${fragment.alternateKeys.join(", ")}` : fragment.key}>{fragment.key}{fragment.alternateKeys.length > 0 && <small>+{fragment.alternateKeys.length}</small>}</span>
-                <span className="tempo-cell">{fragment.bpm}</span><span className="confidence-cell">{Math.round(fragment.confidence * 100)}%</span><span className="tags-cell" title={fragment.userTags.join(", ")}>{fragment.userTags.join(" · ")}</span><span className="role-cell"><em>{fragment.role}</em></span>
-                <span className="links-cell"><b>{links.total}</b>{links.manual > 0 && <em>Manual links {links.manual}</em>}</span>
-                <span className="takes-cell">{relatedTakes > 0 ? <button className="take-link" onClick={(event) => { event.stopPropagation();setSelectedId(fragment.id);setDuplicateGroup(fragment.duplicateGroup!); }}>{relatedTakes + 1}</button> : "—"}</span>
-              </div>;
-            })}
-            {visibleFragments.length === 0 && <div className="empty-inline">No fragments match the current search and filters.</div>}
-          </div>
-          {filterMenu && <ColumnFilterPopover column={filterMenu.column} filters={libraryFilters} position={{ left:filterMenu.left,top:filterMenu.top }} triggerElement={filterMenu.trigger} keyOptions={keyFilterOptions} tagOptions={tagFilterOptions} roleOptions={ROLES.filter((role):role is MusicalRole => role !== "All")} resultCount={visibleFragments.length} totalCount={activeFragments.filter((fragment) => !archived.has(fragment.id)).length} onChange={setLibraryFilters} onClose={closeFilterMenu}/>}
-        </div>
-
-        {connectionsOpen && <aside className="connections">
+      {!combineCandidates && view === "library" && <LibraryView
+        fragments={filterableFragments}
+        selectedId={selectedId}
+        connectionsOpen={connectionsOpen}
+        resizingConnections={resizingConnections}
+        connectionsWidth={connectionsWidth}
+        previewingId={previewingId}
+        query={query}
+        sort={sort}
+        filters={libraryFilters}
+        filterMenu={filterMenu}
+        searchRef={searchRef}
+        sourceNameFor={sourceNameFor}
+        linkSummaryFor={linkSummaryFor}
+        relatedTakeCountFor={relatedTakeCountFor}
+        onQueryChange={setQuery}
+        onSortChange={setSort}
+        onFiltersChange={setLibraryFilters}
+        onOpenColumnFilter={openColumnFilter}
+        onCloseFilterMenu={closeFilterMenu}
+        onSelectFragment={openFragment}
+        onPreviewFragment={previewSingle}
+        onOpenTakes={(fragment) => { setSelectedId(fragment.id); setDuplicateGroup(fragment.duplicateGroup!); }}
+        connectionsPanel={<aside className="connections">
           <button type="button" className="panel-resizer" role="slider" aria-label="Resize connections panel" aria-orientation="vertical" aria-valuemin={420} aria-valuemax={760} aria-valuenow={connectionsWidth} onPointerDown={(event) => { event.preventDefault(); setResizingConnections(true); }} onDoubleClick={() => setConnectionsWidth(520)} onKeyDown={(event) => { if (event.key === "ArrowLeft") { event.preventDefault(); setConnectionsWidth((width) => Math.min(760,width + 20)); } if (event.key === "ArrowRight") { event.preventDefault(); setConnectionsWidth((width) => Math.max(420,width - 20)); } }}><span /></button>
           <div className="connections-head"><h2>Connections</h2><div><button className={`advanced-toggle ${advancedOpen ? "active" : ""}`} onClick={() => setAdvancedOpen((current) => !current)} aria-expanded={advancedOpen}>Advanced</button><button className="panel-close" onClick={closeConnections} aria-label="Close connections">×</button></div></div>
           <p className="selected-caption"><span>From</span><strong>{selected.name}</strong><button onClick={() => editSourceForFragment(selected.id)}>Edit source</button></p>
@@ -608,26 +553,28 @@ export default function Home() {
             </div>;
           })}{connections.length === 0 && <div className="connection-empty">No authored connections for this fragment.</div>}</div>
         </aside>}
-      </section>}
+      />}
 
-      {!combineCandidates && view === "source" && <section className="page-view source-page">
-        <div className={`source-workspace ${sourceEditorOpen ? "editor-open" : ""}`}>
-          <div className="sources-panel">
-            <div className="panel-titlebar"><h1>Sources</h1></div>
-            <div className="sources-toolbar"><button className="import-button" onClick={() => importComplete ? notify("The staged recording is already imported. Reset to replay it.") : setImportOpen(true)}>{importComplete ? "✓ Imported" : "＋ Import"}</button><label className="search"><span aria-hidden="true">⌕</span><input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} placeholder="Search" aria-label="Search sources" /></label></div>
-            <div className="source-table" role="table" aria-label="Source files">
-              <div className="source-table-row source-table-header" role="row">{SOURCE_COLUMNS.map((column) => <span role="columnheader" aria-sort={sourceSort.column === column.id ? (sourceSort.direction === "asc" ? "ascending" : "descending") : "none"} key={column.id}><button onClick={() => changeSourceSort(column.id)}>{column.label}<i aria-hidden="true">{sourceSort.column === column.id ? (sourceSort.direction === "asc" ? "↑" : "↓") : "↕"}</i></button></span>)}</div>
-              {visibleSources.map((source) => { const auditionId = source.fragmentIds[0]; return <div className={`source-table-row ${sourceEditorOpen && selectedSourceId === source.id ? "selected" : ""}`} role="row" tabIndex={0} key={source.id} onClick={() => { stopAllAudio(); setSelectedSourceId(source.id); setSourceEditorOpen(true); }} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); stopAllAudio(); setSelectedSourceId(source.id); setSourceEditorOpen(true); } }}>
-                <span className="source-name-cell" title={source.name}><b>{source.name}</b></span>
-                <button className={`wave-play ${previewingId === auditionId ? "playing" : ""}`} onClick={(event) => { event.stopPropagation(); previewSingle(fragmentById(auditionId)); }} aria-label={`${previewingId === auditionId ? "Stop" : "Play"} ${source.name}`}><Waveform values={source.waveform.slice(0,36)} active={previewingId === auditionId} /></button>
-                <span>{source.date}</span><span>{formatSeconds(source.duration)}</span><span title={source.sourceTypes.join(", ")}>{source.sourceTypes.join(" · ")}</span><span title={`${source.analysisProfile.detectors.join(", ")} · ${source.analysisProfile.tempoStrategy}`}>{source.analysisProfile.name}</span><span title={source.format}>{source.format.split(" · ")[0]}</span><span title={source.device}>{source.device}</span><span>{sourceRanges[source.id]?.length ?? 0}</span>
-              </div>; })}
-              {visibleSources.length === 0 && <div className="empty-inline">No sources match that search.</div>}
-            </div>
-          </div>
-          {sourceEditorOpen && fragmentationPanel}
-        </div>
-      </section>}
+      {!combineCandidates && view === "source" && <SourcesView
+        sources={sources}
+        sourceRanges={sourceRanges}
+        selectedSourceId={selectedSourceId}
+        editorOpen={sourceEditorOpen}
+        editorModal={sourceEditorModal}
+        importComplete={importComplete}
+        previewingId={previewingId}
+        query={sourceQuery}
+        sort={sourceSort}
+        onQueryChange={setSourceQuery}
+        onSortChange={setSourceSort}
+        onImportClick={() => setImportOpen(true)}
+        onSelectSource={(sourceId) => openSourceEditor(sourceId, false)}
+        onOpenFragmentation={(sourceId) => openSourceEditor(sourceId, true)}
+        onPreviewFragment={previewSingle}
+        onPreviewSource={previewSource}
+        getFragmentById={fragmentById}
+        editorPanel={fragmentationPanel}
+      />}
 
       {!combineCandidates && view === "map" && <section className="page-view map-page">
         <div className="panel-titlebar map-heading"><h1>Map</h1><div className="map-legend"><span><i className="dot violet"/>Direct affinity</span><span><i className="line amber"/>Transformed bridge</span><span><i className="line take"/>Related takes</span><span><i className="node-size"/>Size = links</span><span className="dimension-legend">Position · tonal focus × timbral brightness</span></div></div>
@@ -662,13 +609,19 @@ export default function Home() {
         {archived.size === 0 ? <div className="empty-state"><span>◌</span><h2>Nothing archived yet</h2><p>When you tidy alternate takes, they remain safely recoverable here.</p><button onClick={() => navigate("library")}>Return to library</button></div> : <div className="archive-list">{activeFragments.filter((fragment) => archived.has(fragment.id)).map((fragment) => <div className="archive-row" key={fragment.id}><Waveform values={fragment.waveform}/><span><b>{fragment.name}</b><small>{sourceNameFor(fragment)} · {fragment.dateLabel}</small></span><em>{fragment.role}</em><button onClick={() => restoreFragment(fragment.id)}>↟ Restore to matching</button></div>)}</div>}
       </section>}
 
-      {duplicateGroup && <div className="modal-backdrop" role="presentation"><section className="duplicate-modal" role="dialog" aria-modal="true" aria-label="Manage related takes">
-        <header><h2>Takes</h2><button className="modal-close" onClick={() => { setDuplicateGroup(null); stopAllAudio(); }} aria-label="Close takes">×</button></header>
-        <div className="duplicate-list">{selectedDuplicates.map((fragment,index) => <div className={`duplicate-row ${fragment.id === selectedId ? "current" : ""}`} key={fragment.id}><button className="round-play" onClick={() => previewSingle(fragment)}>{previewingId === fragment.id ? "Ⅱ" : "▶"}</button><Waveform values={fragment.waveform} active={previewingId === fragment.id}/><span><b>{fragment.name}</b><small>{fragment.dateLabel} · {fragment.duration} {index === 0 && "· strongest recording"}</small></span><div className="duplicate-actions"><button onClick={() => { setDuplicateExclusions((current) => new Set([...current,fragment.id])); notify("Marked as a separate idea."); }}>Not a duplicate</button><button onClick={() => archiveFragment(fragment.id)}>Archive</button></div><button className="keep-button" onClick={() => keepTake(fragment.id)}>Keep this for matching</button></div>)}</div>
-        <footer><span>No cleanup is required. Fragments will keep working either way.</span><button onClick={() => setDuplicateGroup(null)}>Done</button></footer>
-      </section></div>}
+      <DuplicateTakesDialog
+        open={Boolean(duplicateGroup)}
+        onOpenChange={(open) => { if (!open) { setDuplicateGroup(null); stopAllAudio(); } }}
+        fragments={selectedDuplicates}
+        selectedId={selectedId}
+        previewingId={previewingId}
+        onPreview={previewSingle}
+        onMarkSeparate={(fragmentId) => { setDuplicateExclusions((current) => new Set([...current, fragmentId])); notify("Marked as a separate idea."); }}
+        onArchive={archiveFragment}
+        onKeepTake={keepTake}
+      />
 
-      {importOpen && <ImportSheet source={SOURCE_FILES.find((source) => source.id === STAGED_SOURCE_ID)!} onCancel={() => setImportOpen(false)} onComplete={completeImport}/>} 
+      <ImportDialog open={importOpen} onOpenChange={setImportOpen} onImport={handleImportSource} />
       {exportRelationship && (() => { const candidate=activeFragmentById(exportRelationship.otherId);return <ExportSheet anchor={selected} candidate={candidate} relationship={exportRelationship} onClose={() => setExportRelationship(null)} onSaved={() => { markRelationship(exportRelationship,"preferred");setExportRelationship(null);notify("Package ready and relationship marked Preferred."); }}/>; })()}
 
       {toast && <div className="toast" role="status"><span>✓</span>{toast}</div>}

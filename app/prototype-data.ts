@@ -98,6 +98,11 @@ export interface SourceFile {
   sourceTypes: SourceType[];
   analysisProfile: AnalysisProfile;
   imported?: boolean;
+  audioUrl?: string;
+  audioCacheKey?: string;
+  bpm?: number | null;
+  key?: string | null;
+  scale?: string | null;
 }
 
 export interface ImportSession { sourceId:string; tags:SourceType[]; stage:"classify" | "Importing" | "Segmenting" | "Extracting metadata" | "Matching" | "Ready"; }

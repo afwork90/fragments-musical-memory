@@ -1,20 +1,24 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Fragment,
-  MESSY_PHONE_PROFILE,
   Relationship,
   RelationshipStatus,
-  SourceFile,
-  SourceType,
 } from "./prototype-data";
 
 export type CombineCandidate = Relationship & { score:number; otherId:string };
 type TransformDraft = { semitones:number; bpm:number; timing:"normal" | "half-time" | "double-time"; beatOffset:number; repeat:number; transformed:boolean };
 
-const PIPELINE = ["Importing","Segmenting","Extracting metadata","Matching","Ready"] as const;
-const COLORS = ["#a99cff","#74d8ff","#ffbc65","#c8fa78"];
 function wavePath(values:number[],width=1000,height=160) {
   const middle=height / 2;
   const upper=values.map((value,index) => `${index ? "L" : "M"}${index / Math.max(1,values.length - 1) * width},${middle - value / 100 * middle * .88}`).join(" ");
@@ -26,29 +30,48 @@ function RealWave({ values,active=false }: { values:number[]; active?:boolean })
   return <svg className={`hero-wave ${active ? "active" : ""}`} viewBox="0 0 1000 160" preserveAspectRatio="none" aria-hidden="true"><path d={wavePath(values)} /></svg>;
 }
 
-export function ImportSheet({ source,onCancel,onComplete }: { source:SourceFile; onCancel:()=>void; onComplete:()=>void }) {
-  const [tags,setTags]=useState<SourceType[]>(["Voice memo","Jam"]);
-  const [stage,setStage]=useState(-1);
-  useEffect(() => {
-    if (stage < 0 || stage >= PIPELINE.length - 1) return;
-    const timer=window.setTimeout(() => setStage((value) => value + 1),720);
-    return () => window.clearTimeout(timer);
-  },[stage]);
-  const toggleTag=(tag:SourceType) => setTags((current) => current.includes(tag) ? current.filter((item) => item !== tag) : [...current,tag]);
-  return <div className="workflow-backdrop"><section className="import-sheet" role="dialog" aria-modal="true" aria-label="Import recording">
-    <header><div><span className="eyebrow">Import</span><h2>{source.name}</h2></div><button className="modal-close" onClick={onCancel} aria-label="Close import">×</button></header>
-    <div className="import-source"><RealWave values={source.waveform}/><div><b>8:42</b><span>{source.format}</span><span>{source.device}</span></div></div>
-    {stage < 0 ? <>
-      <div className="import-block"><h3>What kind of recording is this?</h3><p>Choose everything that applies. This adapts fragmentation and analysis.</p><div className="tag-picker">{(["Voice memo","Jam","Practice","Studio","Field recording","Archive"] as SourceType[]).map((tag) => <button key={tag} aria-pressed={tags.includes(tag)} className={tags.includes(tag) ? "active" : ""} onClick={() => toggleTag(tag)}>{tags.includes(tag) ? "✓ " : ""}{tag}</button>)}</div></div>
-      <div className="analysis-profile"><div><span>Profile</span><h3>{MESSY_PHONE_PROFILE.name}</h3></div><dl><div><dt>Sensitivity</dt><dd>{MESSY_PHONE_PROFILE.sensitivity}%</dd></div><div><dt>Expected fragment</dt><dd>{MESSY_PHONE_PROFILE.expectedLength}</dd></div><div><dt>Detection</dt><dd>{MESSY_PHONE_PROFILE.detectors.join(" · ")}</dd></div><div><dt>Tempo</dt><dd>{MESSY_PHONE_PROFILE.tempoStrategy}</dd></div><div><dt>Key</dt><dd>{MESSY_PHONE_PROFILE.keyStrategy}</dd></div><div><dt>Confidence floor</dt><dd>{Math.round(MESSY_PHONE_PROFILE.confidenceThreshold * 100)}%</dd></div></dl></div>
-      <footer><button className="soft-button" onClick={onCancel}>Cancel</button><button className="primary-button" disabled={tags.length === 0} onClick={() => setStage(0)}>Analyze recording</button></footer>
-    </> : <div className="pipeline-view">
-      <div className="pipeline-steps">{PIPELINE.map((label,index) => <div className={`${index < stage ? "done" : index === stage ? "active" : ""}`} key={label}><i>{index < stage ? "✓" : index + 1}</i><span>{label}</span></div>)}</div>
-      <div className="pipeline-preview"><RealWave values={source.waveform} active={stage < 4}/>{stage >= 1 && [74,108,151,207].map((start,index) => <i key={start} style={{ left:`${start / source.duration * 100}%`,width:`${[18,20,17,8][index] / source.duration * 100}%`,background:COLORS[index] }} />)}</div>
-      <div className="pipeline-status"><strong>{PIPELINE[stage]}</strong><span>{stage < 4 ? ["Reading 8:42 source…","4 musical regions found","Key, tempo, bars, tags, confidence…","Comparing against 2,418 indexed ideas…"][stage] : "1 source and 4 fragment references are ready."}</span></div>
-      {stage === 4 && <div className="generated-summary"><span>＋4 fragments</span><b>Balcony guitar, 1:14am</b><small>Hero anchor · A minor · 92 BPM · 91% confidence</small><button className="primary-button" onClick={onComplete}>Open generated fragments</button></div>}
-    </div>}
-  </section></div>;
+export function ExportSheet({ anchor,candidate,relationship,onClose,onSaved }: { anchor:Fragment;candidate:Fragment;relationship:CombineCandidate;onClose:()=>void;onSaved:()=>void }) {
+  const manifest=encodeURIComponent(JSON.stringify({ anchor:{ id:anchor.id,sourceId:anchor.sourceId,start:anchor.start,end:anchor.end },candidate:{ id:candidate.id,sourceId:candidate.sourceId,start:candidate.start,end:candidate.end },transform:relationship.transform?.labels ?? ["As recorded"],fit:relationship.score },null,2));
+  const outputs=[{ name:"Combined preview.wav",asset:relationship.transform?.asset ?? candidate.audio,meta:"A + transformed B"},{ name:`${anchor.name}.wav`,asset:anchor.audio,meta:"Anchor · original"},{ name:`${candidate.name} — transformed.wav`,asset:relationship.transform?.asset ?? candidate.audio,meta:relationship.transform?.labels.join(" · ") ?? "As recorded" }];
+  const drag=(event:React.DragEvent,asset:string,name:string) => { const url=new URL(asset,window.location.href).href;event.dataTransfer.setData("text/uri-list",url);event.dataTransfer.setData("DownloadURL",`audio/wav:${name}:${url}`);event.dataTransfer.effectAllowed="copy"; };
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto border-border bg-card sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Combination package</DialogTitle>
+          <DialogDescription>
+            Prepared files preserve the scripted transformation and source references. Drag into a DAW when supported, or export each file directly.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="export-files space-y-3">
+          {outputs.map((output,index) => (
+            <div className="export-tile grid gap-3 rounded-md border border-border/70 p-3" draggable onDragStart={(event) => drag(event,output.asset,output.name)} key={output.name}>
+              <span className="file-icon text-xs font-semibold text-muted-foreground">WAV</span>
+              <div>
+                <b className="block text-sm">{output.name}</b>
+                <small className="text-xs text-muted-foreground">{output.meta}</small>
+                <em className="block text-xs text-muted-foreground not-italic">Drag into DAW</em>
+              </div>
+              <a className="text-sm text-primary underline" href={output.asset} download={output.name}>Export</a>
+              {index === 0 && <audio controls src={output.asset}><track kind="captions" src="/audio/instrumental.vtt" srcLang="en" label="Instrumental audio"/></audio>}
+            </div>
+          ))}
+          <div className="export-tile manifest grid gap-3 rounded-md border border-border/70 p-3">
+            <span className="file-icon text-xs font-semibold text-muted-foreground">JSON</span>
+            <div>
+              <b className="block text-sm">transformation-recipe.json</b>
+              <small className="text-xs text-muted-foreground">Source ranges, fit, and transformation manifest</small>
+            </div>
+            <a className="text-sm text-primary underline" href={`data:application/json;charset=utf-8,${manifest}`} download="transformation-recipe.json">Export</a>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>Close</Button>
+          <Button type="button" variant="lime" onClick={onSaved}>Save combination & finish</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function recommendationFor(relationship:CombineCandidate,fragment:Fragment):TransformDraft {
@@ -108,13 +131,6 @@ export function CombineWorkspace({ anchor,candidates,fragments,statuses,onClose,
         <div className="console-recommendation"><span>Recommended</span><b>{recommendation.semitones} st · {recommendation.bpm} BPM · {recommendation.beatOffset} beat · {recommendation.repeat}×</b></div>
       </aside>
     </div>
-    <footer className="combine-actions"><button onClick={() => { const next=candidates.find((item) => item.id !== relationship.id);if (next) chooseCandidate(next.id);onReject(relationship); }}>Reject</button><button onClick={() => onExport(relationship)}>Export</button><button className="primary-button" onClick={() => onSave(relationship)}>Save combination</button></footer>
+    <footer className="combine-actions"><Button type="button" variant="outline" onClick={() => { const next=candidates.find((item) => item.id !== relationship.id);if (next) chooseCandidate(next.id);onReject(relationship); }}>Reject</Button><Button type="button" variant="outline" onClick={() => onExport(relationship)}>Export</Button><Button type="button" variant="lime" onClick={() => onSave(relationship)}>Save combination</Button></footer>
   </section>;
-}
-
-export function ExportSheet({ anchor,candidate,relationship,onClose,onSaved }: { anchor:Fragment;candidate:Fragment;relationship:CombineCandidate;onClose:()=>void;onSaved:()=>void }) {
-  const manifest=encodeURIComponent(JSON.stringify({ anchor:{ id:anchor.id,sourceId:anchor.sourceId,start:anchor.start,end:anchor.end },candidate:{ id:candidate.id,sourceId:candidate.sourceId,start:candidate.start,end:candidate.end },transform:relationship.transform?.labels ?? ["As recorded"],fit:relationship.score },null,2));
-  const outputs=[{ name:"Combined preview.wav",asset:relationship.transform?.asset ?? candidate.audio,meta:"A + transformed B"},{ name:`${anchor.name}.wav`,asset:anchor.audio,meta:"Anchor · original"},{ name:`${candidate.name} — transformed.wav`,asset:relationship.transform?.asset ?? candidate.audio,meta:relationship.transform?.labels.join(" · ") ?? "As recorded" }];
-  const drag=(event:React.DragEvent,asset:string,name:string) => { const url=new URL(asset,window.location.href).href;event.dataTransfer.setData("text/uri-list",url);event.dataTransfer.setData("DownloadURL",`audio/wav:${name}:${url}`);event.dataTransfer.effectAllowed="copy"; };
-  return <div className="workflow-backdrop"><section className="export-sheet" role="dialog" aria-modal="true" aria-label="Export package"><header><div><span className="eyebrow">Export</span><h2>Combination package</h2></div><button className="modal-close" onClick={onClose} aria-label="Close export">×</button></header><p className="export-intro">Prepared files preserve the scripted transformation and source references. Drag into a DAW when supported, or export each file directly.</p><div className="export-files">{outputs.map((output,index) => <div className="export-tile" draggable onDragStart={(event) => drag(event,output.asset,output.name)} key={output.name}><span className="file-icon">WAV</span><div><b>{output.name}</b><small>{output.meta}</small><em>Drag into DAW</em></div><a href={output.asset} download={output.name}>Export</a>{index === 0 && <audio controls src={output.asset}><track kind="captions" src="/audio/instrumental.vtt" srcLang="en" label="Instrumental audio"/></audio>}</div>)}<div className="export-tile manifest"><span className="file-icon">JSON</span><div><b>transformation-recipe.json</b><small>Source ranges, fit, and transformation manifest</small></div><a href={`data:application/json;charset=utf-8,${manifest}`} download="transformation-recipe.json">Export</a></div></div><footer><button onClick={onClose}>Close</button><button className="primary-button" onClick={onSaved}>Save combination & finish</button></footer></section></div>;
 }

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { sites } from "@openai/sites-vite-plugin";
 import vinext from "vinext";
 import { defineConfig } from "vite";
@@ -44,6 +45,15 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    resolve: {
+      alias: {
+        "@": path.resolve(import.meta.dirname),
+      },
+    },
+    assetsInclude: ["**/*.wasm"],
+    optimizeDeps: {
+      exclude: ["essentia.js"],
+    },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
