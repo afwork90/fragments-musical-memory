@@ -20,11 +20,13 @@ npm run lint
 
 ## GitHub Pages
 
-Pushes to the `gh-pages` branch build a static export and deploy it via GitHub Actions.
+Pushes to `main` build a static export and deploy it via GitHub Actions.
 
 1. In the repository **Settings → Pages**, set **Source** to **GitHub Actions**.
-2. Push to `gh-pages` (or merge into it) to trigger `.github/workflows/deploy-gh-pages.yml`.
-3. The site is published at `https://<user>.github.io/<repo>/` for project repositories.
+2. Push to `main` to trigger `.github/workflows/deploy-gh-pages.yml`.
+3. The site is published at `https://afwork90.github.io/fragments-musical-memory/`.
+
+GitHub's `github-pages` environment only allows deployment from approved branches (usually `main`). To deploy from a different branch instead, go to **Settings → Environments → github-pages → Deployment branches** and add it.
 
 The Pages build uses `npm run build:pages` (`output: "export"` with relative asset paths). Local `npm run build` still produces the full vinext worker bundle for Cloudflare-style hosting.
 
