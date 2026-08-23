@@ -161,6 +161,7 @@ export function FragmentationWorkbench({
   onOpenFragment,
   onRenameFragment,
   onSaveFragment,
+  onDeleteFragment,
   savedFragmentIds,
   saveLabel = "Save boundaries",
   footerContent,
@@ -178,6 +179,7 @@ export function FragmentationWorkbench({
   onOpenFragment?: (id: string) => void;
   onRenameFragment?: (id: string, name: string) => void;
   onSaveFragment?: (id: string) => void;
+  onDeleteFragment?: (id: string) => void;
   savedFragmentIds?: Set<string>;
   saveLabel?: string;
   footerContent?: ReactNode;
@@ -531,6 +533,7 @@ export function FragmentationWorkbench({
                     onOpenInfo={() => {}}
                     onRename={onRenameFragment ? (name) => onRenameFragment(fragment.id, name) : undefined}
                     onSave={onSaveFragment ? () => onSaveFragment(fragment.id) : undefined}
+                    onDelete={onDeleteFragment ? () => onDeleteFragment(fragment.id) : undefined}
                     isSaved={saved && savedFragmentIds ? savedFragmentIds.has(fragment.id) : false}
                   />
                 </div>

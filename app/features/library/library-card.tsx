@@ -1,7 +1,7 @@
 "use client";
 
 import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Pencil, Play, Square } from "lucide-react";
+import { Check, Pencil, Play, Square, Trash2 } from "lucide-react";
 import { ScrubbableWaveform } from "@/lib/audio/scrubbable-waveform";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
@@ -36,6 +36,7 @@ type LibraryCardProps = {
   waveActions?: ReactNode;
   onRename?: (name: string) => void;
   onSave?: () => void;
+  onDelete?: () => void;
   isSaved?: boolean;
 };
 
@@ -53,6 +54,7 @@ function CardActions({
   onOpenMatches,
   onOpenInfo,
   onSave,
+  onDelete,
   isSaved,
   showMatchActions = true,
 }: {
@@ -60,6 +62,7 @@ function CardActions({
   onOpenMatches: () => void;
   onOpenInfo: () => void;
   onSave?: () => void;
+  onDelete?: () => void;
   isSaved?: boolean;
   showMatchActions?: boolean;
 }) {
@@ -77,6 +80,21 @@ function CardActions({
           }}
         >
           {isSaved ? (<><Check className="size-3" />Saved</>) : "Save"}
+        </Button>
+      )}
+      {onDelete && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="library-card-action library-card-action-delete"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+          aria-label="Delete fragment"
+        >
+          <Trash2 className="size-3" />
         </Button>
       )}
       {showMatchActions && (
@@ -195,6 +213,7 @@ function CardHeading({
   showActions = true,
   onRename,
   onSave,
+  onDelete,
   isSaved,
 }: {
   title: string;
@@ -206,6 +225,7 @@ function CardHeading({
   showActions?: boolean;
   onRename?: (name: string) => void;
   onSave?: () => void;
+  onDelete?: () => void;
   isSaved?: boolean;
 }) {
   return (
@@ -213,8 +233,8 @@ function CardHeading({
       <EditableTitle title={title} muted={muted} onRename={onRename} />
       <div className="library-card-heading-right">
         <div className="library-card-meta">{meta}</div>
-        {(showActions || onSave) && (
-          <CardActions matchCount={matchCount} onOpenMatches={onOpenMatches} onOpenInfo={onOpenInfo} onSave={onSave} isSaved={isSaved} showMatchActions={showActions} />
+        {(showActions || onSave || onDelete) && (
+          <CardActions matchCount={matchCount} onOpenMatches={onOpenMatches} onOpenInfo={onOpenInfo} onSave={onSave} onDelete={onDelete} isSaved={isSaved} showMatchActions={showActions} />
         )}
       </div>
     </div>
@@ -242,6 +262,7 @@ export function LibraryCard({
   waveActions,
   onRename,
   onSave,
+  onDelete,
   isSaved,
 }: LibraryCardProps) {
   if (item.kind === "source") {
@@ -285,6 +306,7 @@ export function LibraryCard({
       waveActions={waveActions}
       onRename={onRename}
       onSave={onSave}
+      onDelete={onDelete}
       isSaved={isSaved}
     />
   );
@@ -403,6 +425,7 @@ function FragmentLibraryCard({
   waveActions,
   onRename,
   onSave,
+  onDelete,
   isSaved,
 }: {
   fragment: Fragment;
@@ -424,6 +447,7 @@ function FragmentLibraryCard({
   waveActions?: ReactNode;
   onRename?: (name: string) => void;
   onSave?: () => void;
+  onDelete?: () => void;
   isSaved?: boolean;
 }) {
   const source = sourceForId(fragment.sourceId);
@@ -464,6 +488,7 @@ function FragmentLibraryCard({
         showActions={showActions}
         onRename={onRename}
         onSave={onSave}
+        onDelete={onDelete}
         isSaved={isSaved}
         meta={(
           <>

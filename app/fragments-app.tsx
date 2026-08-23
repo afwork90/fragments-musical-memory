@@ -141,6 +141,86 @@ function fragmentToDocument(fragment: Fragment) {
   };
 }
 
+/**
+ * Simple heuristic "affinity" between two real (imported) fragments, based
+ * on the metadata we actually measure (BPM, key) rather than the hand-picked
+ * scores the prototype demo data uses. Pairs below a similarity floor are
+ * dropped rather than persisted, so the library doesn't fill up with noise.
+ */
+function heuristicRelationshipBetween(a: Fragment, b: Fragment): Relationship | null {
+  if (!a.bpm || !b.bpm) return null;
+  const bpmDelta = Math.abs(a.bpm - b.bpm);
+  const tempoScore = Math.max(0, 1 - bpmDelta / Math.max(a.bpm, b.bpm, 1));
+  const keyMatch = a.key !== "—" && a.key !== "" && a.key === b.key;
+  const pitchScore = keyMatch ? .95 : .55;
+  const base = tempoScore * .6 + pitchScore * .4;
+  if (base < .6) return null;
+  return {
+    id: `auto-${a.id}-${b.id}`,
+    source: a.id,
+    target: b.id,
+    base,
+    metrics: { rhythm:tempoScore, harmony:pitchScore, melody:(tempoScore + pitchScore) / 2, timbre:.7, tempo:tempoScore, pitch:pitchScore, brightness:.7 },
+    transformationCost: Math.min(.3, bpmDelta / 100),
+    reason: keyMatch
+      ? `Both fragments are in ${a.key} at a similar tempo (${Math.round(a.bpm)}/${Math.round(b.bpm)} BPM).`
+      : `Tempos are close (${Math.round(a.bpm)} vs ${Math.round(b.bpm)} BPM).`,
+    origin: "algorithmic",
+  };
+}
+
+/** Computes affinities between every pair of real fragments across the whole library (capped to keep it cheap). */
+function computeHeuristicRelationships(fragments: Fragment[]): Relationship[] {
+  const relationships: Relationship[] = [];
+  const pool = fragments.slice(0, 150);
+  for (let i = 0; i < pool.length; i++) {
+    for (let j = i + 1; j < pool.length; j++) {
+      if (pool[i].sourceId === pool[j].sourceId) continue;
+      const relationship = heuristicRelationshipBetween(pool[i], pool[j]);
+      if (relationship) relationships.push(relationship);
+    }
+  }
+  return relationships;
+}
+
+function sourceFileFromDocument(document: any, audioUrl?: string): SourceFile {
+  let analysis = document.analysis;
+  if (analysisNeedsInvention(analysis)) {
+    analysis = inventAnalysis(document.id);
+  }
+  return {
+    id: document.id,
+    name: document.originalName,
+    date: new Date(document.importedAt).toLocaleDateString("en-US", { month:"short",day:"2-digit",year:"numeric" }),
+    duration: document.duration,
+    format: document.format,
+    device: "Managed library",
+    fragmentIds: document.fragments.map((fragment: any) => fragment.id),
+    waveform: document.waveform?.peaks ?? [],
+    sensitivity: MESSY_PHONE_PROFILE.sensitivity,
+    start: 0,
+    end: document.duration,
+    sourceTypes: ["Voice memo","Jam"],
+    analysisProfile: MESSY_PHONE_PROFILE,
+    imported: true,
+    audioUrl: audioUrl ?? document.audioUrl,
+    audioCacheKey: document.id,
+    bpm: analysis?.bpm ?? null,
+    key: analysis?.key ?? null,
+    scale: analysis?.scale ?? null,
+  };
+}
+
+function rangesFromDocument(document: any): EditableRange[] {
+  return document.fragments.map((fragment: any, index: number) => ({
+    id: `${fragment.id}-range`,
+    fragmentId: fragment.id,
+    start: fragment.start,
+    end: fragment.end,
+    color: RANGE_COLORS[index % RANGE_COLORS.length],
+  }));
+}
+
 function scoreRelationship(relationship: Relationship, weights: SearchWeights, context: SearchContext, mode: RangeMode) {
   const multipliers: Record<SearchContext, SearchWeights> = {
     whole:{ rhythm:1, harmony:1, melody:1, timbre:1 },
@@ -196,6 +276,7 @@ export default function FragmentsApp() {
   const [importComplete,setImportComplete] = useState(false);
   const [fragmentOverrides,setFragmentOverrides] = useState<Record<string,Partial<Fragment>>>({});
   const [importedFragments,setImportedFragments] = useState<Fragment[]>([]);
+  const [importedRelationships,setImportedRelationships] = useState<Relationship[]>([]);
   const [savedFragmentIds,setSavedFragmentIds] = useState<Set<string>>(new Set());
   const [combineCandidates,setCombineCandidates] = useState<CombineCandidate[] | null>(null);
   const [correctionRelationship,setCorrectionRelationship] = useState<CombineCandidate | null>(null);
@@ -274,6 +355,11 @@ export default function FragmentsApp() {
         ...current.filter((fragment) => !documents.some((document) => document.id === fragment.sourceId)),
         ...persistedFragments,
       ]);
+      const persistedRelationships = documents.flatMap((document) => document.relationships ?? []);
+      setImportedRelationships((current) => [
+        ...current.filter((relationship) => !persistedFragments.some((fragment) => fragment.id === relationship.source)),
+        ...persistedRelationships,
+      ]);
       for (const item of backfill) {
         try {
           await bridge.updateSourceAnalysis(item.id, item.analysis);
@@ -289,6 +375,25 @@ export default function FragmentsApp() {
     ...importedFragments,
   ].map((fragment) => ({ ...fragment,...fragmentOverrides[fragment.id] })),[importComplete,fragmentOverrides,importedFragments]);
   const activeFragmentById = (id:string) => activeFragments.find((fragment) => fragment.id === id) ?? ({ ...fragmentById(id),...fragmentOverrides[id] });
+  // Real (imported) fragments have no hand-authored affinities, so recompute simple
+  // BPM/key-based ones whenever the set of real fragments changes, and persist each
+  // source's outgoing relationships to its source.json so they survive a reload.
+  useEffect(() => {
+    const bridge = (window as any).fragments;
+    if (!bridge?.updateRelationships || importedFragments.length < 2) return;
+    const computed = computeHeuristicRelationships(importedFragments);
+    setImportedRelationships(computed);
+    const bySource = new Map<string,Relationship[]>();
+    for (const relationship of computed) {
+      const ownerId = importedFragments.find((fragment) => fragment.id === relationship.source)?.sourceId;
+      if (!ownerId) continue;
+      bySource.set(ownerId,[...(bySource.get(ownerId) ?? []),relationship]);
+    }
+    for (const sourceId of new Set(importedFragments.map((fragment) => fragment.sourceId))) {
+      void bridge.updateRelationships(sourceId,bySource.get(sourceId) ?? []).catch((error:any) => console.warn("Could not persist relationships:",error));
+    }
+  },[importedFragments]);
+  const allRelationships = useMemo(() => importedRelationships.length ? [...RELATIONSHIPS,...importedRelationships] : RELATIONSHIPS,[importedRelationships]);
   const selectedFragmentId = selectedId.startsWith("source:") ? null : selectedId;
   const selectedLibrarySourceId = selectedId.startsWith("source:") ? selectedId.slice("source:".length) : null;
   const selected = activeFragmentById(selectedFragmentId ?? "f02");
@@ -390,7 +495,7 @@ export default function FragmentsApp() {
   const rankedConnectionsFor = (sourceId:string,limit=6):ScoredRelationship[] => {
     const sourceFragment=activeFragmentById(sourceId);
     const seen=new Set<string>();
-    return RELATIONSHIPS.filter((relationship) => relationship.source === sourceId || relationship.target === sourceId)
+    return allRelationships.filter((relationship) => relationship.source === sourceId || relationship.target === sourceId)
       .map((relationship) => {
         const correctedHero=relationship.id === "r01" && Boolean(fragmentOverrides.f02?.analysisRevision);
         const effectiveRelationship=correctedHero && relationship.transform ? { ...relationship,transform:{ ...relationship.transform,bpm:2,labels:["−3 st","+2 BPM"] } } : relationship;
@@ -420,21 +525,15 @@ export default function FragmentsApp() {
   };
 
   const linkSummaryFor = (fragmentId:string) => {
-    const eligible=rankedConnectionsFor(fragmentId,RELATIONSHIPS.length);
+    const eligible=rankedConnectionsFor(fragmentId,allRelationships.length);
     return { total:eligible.length,manual:eligible.filter((relationship) => manualRelationshipIds.has(relationship.id)).length };
   };
 
   const relatedTakeCountFor=(fragment:Fragment) => fragment.duplicateGroup && !duplicateExclusions.has(fragment.id) ? activeFragments.filter((item) => item.duplicateGroup === fragment.duplicateGroup && item.id !== fragment.id && !archived.has(item.id) && !duplicateExclusions.has(item.id)).length : 0;
   const filterableFragments=useMemo(() => activeFragments.filter((fragment) => !archived.has(fragment.id)),[activeFragments,archived]);
 
-  const resizeRangesForSensitivity = (ranges:EditableRange[],source:SourceFile,value:number) => {
-    const count=fragmentCountForSensitivity(value);
-    return count <= ranges.length ? ranges.slice(0,count) : [...ranges,...Array.from({ length:count - ranges.length },(_,offset) => rangeForIndex(source,ranges.length + offset))];
-  };
-
   const updateSourceSensitivity = (value:number) => {
     setSources((current) => current.map((source) => source.id === selectedSourceId ? { ...source,sensitivity:value } : source));
-    setSourceRanges((current) => ({ ...current,[selectedSourceId]:resizeRangesForSensitivity(current[selectedSourceId] ?? [],selectedSource,value) }));
   };
 
   const addManualFragment = () => {
@@ -454,7 +553,6 @@ export default function FragmentsApp() {
 
   const updateCombineSensitivity = (value:number) => {
     setCombineDraftSensitivity(value);
-    setCombineDraftRanges((current) => resizeRangesForSensitivity(current ?? selectedRanges,selectedSource,value));
   };
 
   const connectionAnchorFragmentId = (() => {
@@ -611,8 +709,13 @@ export default function FragmentsApp() {
       .filter((fragment) => fragment.sourceId === sourceId)
       .map((fragment) => fragment.id);
     const remainingSources = sources.filter((item) => item.id !== sourceId);
+    const bridge = (window as any).fragments;
+    if (bridge?.archiveSource && source.imported) {
+      void bridge.archiveSource(sourceId).catch((error: any) => console.warn("Could not archive source:", error));
+    }
 
     setArchived((current) => new Set([...current, ...removedFragmentIds]));
+    setImportedFragments((current) => current.filter((fragment) => fragment.sourceId !== sourceId));
     setSources(remainingSources);
     setSourceRanges((current) => {
       const next = { ...current };
@@ -637,7 +740,7 @@ export default function FragmentsApp() {
       setSelectedId(nextFragment?.id ?? "f02");
     }
 
-    notify(`Removed ${source.name} from your library.`);
+    notify(`Removed ${source.name} from your library. Import the same file again to restore your slices.`);
   };
   const editSourceForLibrarySource = (sourceId: string) => {
     pushReturn("source-edit");
@@ -668,6 +771,36 @@ export default function FragmentsApp() {
     const id = imported.persistedId ?? `source-import-${Date.now()}`;
     retainCachedAudio(imported.cacheKey);
     bindSourceAudio(id, imported.cacheKey);
+
+    if (imported.restored && imported.persistedDocument) {
+      const document: any = { ...imported.persistedDocument, audioUrl: imported.persistedAudioUrl };
+      const source = sourceFileFromDocument(document, imported.persistedAudioUrl);
+      const ranges = rangesFromDocument(document);
+      const fragments = document.fragments.map((fragmentDoc: any, index: number) =>
+        fragmentFromDocument(fragmentDoc, index, source));
+
+      setSources((current) => [...current.filter((item) => item.id !== source.id), source]);
+      setSourceRanges((current) => ({ ...current, [source.id]: ranges }));
+      setImportedFragments((current) => [
+        ...current.filter((fragment) => fragment.sourceId !== source.id),
+        ...fragments,
+      ]);
+      setSavedFragmentIds((current) => new Set([...current, ...fragments.map((fragment: Fragment) => fragment.id)]));
+      setArchived((current) => {
+        const next = new Set(current);
+        for (const fragment of fragments) next.delete(fragment.id);
+        return next;
+      });
+      setSelectedSourceId(source.id);
+      setSourcePanelMode("fragmentation");
+      setSourceEditorModal(true);
+      setSourceEditorOpen(true);
+      setImportComplete(true);
+      setView("source");
+      notify(`Restored ${source.name} with your saved slices.`);
+      return;
+    }
+
     const newSource: SourceFile = {
       id,
       name: imported.name,
@@ -849,6 +982,47 @@ export default function FragmentsApp() {
     const { range:nextRange,fragment } = promoteRangeToFragment(range,index,selectedSource);
     commitPromotedRange(nextRange,fragment,selectedSource);
   };
+
+  /** Removes a fragment slice from the workbench and library. */
+  const deleteFragmentOrRange = (id: string) => {
+    const range = rangeForFragmentCardId(id);
+    if (!range) return;
+
+    const nextRanges = selectedRanges.filter((item) => item.id !== range.id);
+    setSourceRanges((current) => ({ ...current, [selectedSource.id]: nextRanges }));
+
+    if (previewingId === range.fragmentId || previewingId === range.id) {
+      stopAllAudio();
+    }
+
+    if (!range.fragmentId) {
+      notify("Fragment removed.");
+      return;
+    }
+
+    const fragmentId = range.fragmentId;
+    setImportedFragments((current) => current.filter((fragment) => fragment.id !== fragmentId));
+    setFragmentOverrides((current) => {
+      const next = { ...current };
+      delete next[fragmentId];
+      return next;
+    });
+    setSavedFragmentIds((current) => {
+      const next = new Set(current);
+      next.delete(fragmentId);
+      return next;
+    });
+    setArchived((current) => new Set([...current, fragmentId]));
+    setSources((current) => current.map((source) => source.id === selectedSource.id
+      ? { ...source, fragmentIds: source.fragmentIds.filter((fid) => fid !== fragmentId) }
+      : source));
+
+    const surviving = activeFragments.filter(
+      (fragment) => fragment.sourceId === selectedSource.id && fragment.id !== fragmentId,
+    );
+    persistFragmentsForSource(selectedSource.id, surviving);
+    notify("Fragment removed.");
+  };
   const saveCombineSourceBoundaries = () => {
     if (!correctionRelationship || !combineDraftRanges) return;
     const candidate=activeFragmentById(correctionRelationship.otherId);const patches:Record<string,Partial<Fragment>>={};
@@ -863,8 +1037,8 @@ export default function FragmentsApp() {
   const mapPoints=useMemo(() => new Map(activeFragments.map((fragment) => [fragment.id,musicalMapPoint(fragment)])),[activeFragments]);
   const mapTakeEdges=useMemo(() => { const firstByGroup=new Map<string,string>();const edges:{ source:string;target:string }[]=[];activeFragments.forEach((fragment) => { if (!fragment.duplicateGroup || archived.has(fragment.id) || duplicateExclusions.has(fragment.id)) return;const first=firstByGroup.get(fragment.duplicateGroup);if (first) edges.push({ source:first,target:fragment.id });else firstByGroup.set(fragment.duplicateGroup,fragment.id); });return edges; },[activeFragments,archived,duplicateExclusions]);
   const mapRelationshipScores=new Map<string,number>();
-  mapFragments.filter((fragment) => !archived.has(fragment.id)).forEach((fragment) => rankedConnectionsFor(fragment.id,RELATIONSHIPS.length).forEach((relationship) => mapRelationshipScores.set(relationship.id,Math.max(mapRelationshipScores.get(relationship.id) ?? 0,relationship.score))));
-  const mapRelationships=RELATIONSHIPS.filter((relationship) => mapRelationshipScores.has(relationship.id) && !archived.has(relationship.source) && !archived.has(relationship.target) && relationshipStatuses[relationship.id] !== "rejected");
+  mapFragments.filter((fragment) => !archived.has(fragment.id)).forEach((fragment) => rankedConnectionsFor(fragment.id,allRelationships.length).forEach((relationship) => mapRelationshipScores.set(relationship.id,Math.max(mapRelationshipScores.get(relationship.id) ?? 0,relationship.score))));
+  const mapRelationships=allRelationships.filter((relationship) => mapRelationshipScores.has(relationship.id) && !archived.has(relationship.source) && !archived.has(relationship.target) && relationshipStatuses[relationship.id] !== "rejected");
   const mapDegreeFor=(id:string) => mapRelationships.filter((relationship) => relationship.source === id || relationship.target === id);
   const mapFragment=mapSelectedId && !archived.has(mapSelectedId) ? activeFragments.find((fragment) => fragment.id === mapSelectedId) ?? null : null;
   const focusMapInspector=() => window.setTimeout(() => mapInspectorCloseRef.current?.focus({ preventScroll:true }),0);
@@ -877,7 +1051,7 @@ export default function FragmentsApp() {
   const editorSensitivity=correctionRelationship ? (combineDraftSensitivity ?? selectedSource.sensitivity) : selectedSource.sensitivity;
   const correctedRange=correctionRelationship ? editorRanges.find((range) => range.fragmentId === correctionRelationship.otherId) : null;
   const correctionFooter=correctionRelationship && correctionPhase === "recompute" ? <div className="recompute workbench-result"><i/><strong>Recomputing metadata and active match…</strong><span>Revision {(correctionOriginal?.analysisRevision ?? 1) + 1}</span></div> : correctionRelationship && correctionPhase === "prompt" && correctionOriginal ? <div className="correction-result workbench-result"><div className="metadata-diff"><span>Field</span><span>Before</span><span>After</span>{[["Duration",correctionOriginal.duration,formatSeconds((correctedRange?.end ?? 0) - (correctedRange?.start ?? 0))],["Key",correctionOriginal.key,"C minor"],["BPM",correctionOriginal.bpm,"90"],["Bars",correctionOriginal.bars,"3"],["Beats",correctionOriginal.beats,"17"],["Confidence",`${Math.round(correctionOriginal.confidence * 100)}%`,`93%`],["Match",`${correctionRelationship.score}%`,`76%`]].map((row) => row.map((cell,index) => <span className={index === 2 ? "changed" : ""} key={`${row[0]}-${index}`}>{cell}</span>))}</div><div className="link-prompt"><span className="relationship-badge manual">criteria changed</span><h3>This fragment no longer matches the original search. Keep it linked to this comparison?</h3><p>The boundary correction is saved either way. A manual link preserves your musical judgment.</p><div><button onClick={rejectCorrectionLink}>Reject and show next</button><button className="primary-button" onClick={keepCorrectionLink}>Yes, keep linked</button></div></div></div> : null;
-  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => correctionRelationship ? setCombineDraftRanges(ranges) : setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges }))} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} onRenameFragment={correctionRelationship ? undefined : renameFragmentOrRange} onSaveFragment={correctionRelationship ? undefined : saveFragmentOrRange} savedFragmentIds={savedFragmentIds} saveLabel={correctionRelationship ? "Save & recompute" : "Save boundaries"} footerContent={correctionFooter}/> : null;
+  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => correctionRelationship ? setCombineDraftRanges(ranges) : setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges }))} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} onRenameFragment={correctionRelationship ? undefined : renameFragmentOrRange} onSaveFragment={correctionRelationship ? undefined : saveFragmentOrRange} onDeleteFragment={correctionRelationship ? undefined : deleteFragmentOrRange} savedFragmentIds={savedFragmentIds} saveLabel={correctionRelationship ? "Save & recompute" : "Save boundaries"} footerContent={correctionFooter}/> : null;
   const detailFragment = infoFragmentId ? activeFragments.find((fragment) => fragment.id === infoFragmentId) ?? null : null;
   const detailPanel=sourceEditorOpen && sourcePanelMode === "detail" ? <SourceDetailPanel
     source={selectedSource}

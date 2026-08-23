@@ -380,3 +380,71 @@ test("writes JSON atomically, leaving no temporary files behind", async () => {
     assert.deepEqual(files, ["original.wav", "source.json"]);
   });
 });
+
+test("archiveSource hides a source from listSources but keeps its folder on disk", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const fixturePath = await makeFixtureFile(fixturesDir, "archive-me.wav", Buffer.from("archive fixture"));
+    const service = createLibraryService(libraryRoot);
+    const created = await service.beginImport(fixturePath);
+    await service.finalizeImport(created.id, validFinalizeMetadata());
+
+    await service.archiveSource(created.id);
+
+    const listed = await service.listSources();
+    assert.equal(listed.length, 0);
+
+    const sourceDir = path.join(libraryRoot, "sources", created.id);
+    const files = await readdir(sourceDir);
+    assert.ok(files.includes("source.json"));
+    assert.ok(files.includes("original.wav"));
+
+    const archived = JSON.parse(await readFile(path.join(sourceDir, "source.json"), "utf8"));
+    assert.ok(archived.deletedAt);
+    assert.equal(archived.fragments.length, 1);
+  });
+});
+
+test("beginImport restores a soft-deleted source with the same content hash", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const fixtureContents = Buffer.from("restore-by-hash fixture");
+    const fixturePath = await makeFixtureFile(fixturesDir, "restore-me.wav", fixtureContents);
+    const service = createLibraryService(libraryRoot);
+    const created = await service.beginImport(fixturePath);
+    const sliced = [
+      { id: "frag-1", name: "Intro", start: 0, end: 4, roles: [], primaryRole: "Unclassified", userTags: [], analysis: { bpm: 90, key: "C", scale: "major", keyStrength: 0.8 }, analysisRevision: 1 },
+      { id: "frag-2", name: "Outro", start: 4, end: 8, roles: [], primaryRole: "Unclassified", userTags: [], analysis: { bpm: null, key: null, scale: null, keyStrength: null }, analysisRevision: 1 },
+    ];
+    await service.finalizeImport(created.id, validFinalizeMetadata());
+    await service.updateFragments(created.id, sliced);
+    await service.archiveSource(created.id);
+
+    const restored = await service.beginImport(fixturePath);
+
+    assert.equal(restored.id, created.id);
+    assert.equal(restored.restored, true);
+    assert.equal(restored.deletedAt, null);
+    assert.equal(restored.fragments.length, 2);
+    assert.equal(restored.fragments[0].id, "frag-1");
+
+    const listed = await service.listSources();
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].fragments.length, 2);
+
+    const sourceDirs = await readdir(path.join(libraryRoot, "sources"));
+    assert.equal(sourceDirs.length, 1);
+  });
+});
+
+test("beginImport rejects importing a file that is already active in the library", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const fixturePath = await makeFixtureFile(fixturesDir, "duplicate.wav", Buffer.from("duplicate fixture"));
+    const service = createLibraryService(libraryRoot);
+    const created = await service.beginImport(fixturePath);
+    await service.finalizeImport(created.id, validFinalizeMetadata());
+
+    await assert.rejects(() => service.beginImport(fixturePath), /already in your library/);
+
+    const sourceDirs = await readdir(path.join(libraryRoot, "sources"));
+    assert.equal(sourceDirs.length, 1);
+  });
+});

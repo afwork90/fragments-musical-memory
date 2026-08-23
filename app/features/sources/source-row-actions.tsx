@@ -44,11 +44,10 @@ export function SourceRowActions({ source, onRemove }: SourceRowActionsProps) {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[8.5rem]">
           <DropdownMenuItem
-            variant="destructive"
             className="text-[11px]"
             onSelect={() => setRemoveOpen(true)}
           >
-            Remove
+            Remove from library
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -62,9 +61,9 @@ export function SourceRowActions({ source, onRemove }: SourceRowActionsProps) {
               title={<DialogTitle className="modal-titlebar-title">{source.name}</DialogTitle>}
             />
             <DialogDescription className="mt-2">
-              This removes <strong className="font-medium text-foreground">{source.name}</strong> and all
-              of its fragments from Fragments. Your original file is not deleted — only the copy made on
-              import is removed.
+              This removes <strong className="font-medium text-foreground">{source.name}</strong> and its
+              fragments from Fragments. Your source folder and slices are kept on disk — import the same file
+              again to restore them.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -79,7 +78,7 @@ export function SourceRowActions({ source, onRemove }: SourceRowActionsProps) {
                 setRemoveOpen(false);
               }}
             >
-              Remove
+              Remove from library
             </Button>
           </DialogFooter>
         </DialogContent>

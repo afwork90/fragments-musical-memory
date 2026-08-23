@@ -80,6 +80,10 @@ export async function initializePersistence() {
     return { ...source, audioUrl: audioUrl(source.id) };
   });
   logged("fragments:cancel-import", (_event, id) => library.cancelImport(id));
+  logged("fragments:archive-source", async (_event, id) => {
+    const source = await library.archiveSource(id);
+    return { ...source, audioUrl: audioUrl(source.id) };
+  });
   logged("fragments:list-sources", async () => (
     (await library.listSources())
       .filter((source) => source.duration)
@@ -91,6 +95,10 @@ export async function initializePersistence() {
   });
   logged("fragments:update-fragments", async (_event, id, fragments) => {
     const source = await library.updateFragments(id, fragments);
+    return { ...source, audioUrl: audioUrl(source.id) };
+  });
+  logged("fragments:update-relationships", async (_event, id, relationships) => {
+    const source = await library.updateRelationships(id, relationships);
     return { ...source, audioUrl: audioUrl(source.id) };
   });
 

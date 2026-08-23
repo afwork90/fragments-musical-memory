@@ -29,6 +29,8 @@ export type ImportedSource = ProcessedAudio & {
   sourceTypes: SourceType[];
   persistedId?: string;
   persistedAudioUrl?: string;
+  restored?: boolean;
+  persistedDocument?: Record<string, unknown>;
 };
 
 type ImportDialogProps = {
@@ -113,7 +115,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const previewCacheKeyRef = useRef<string | null>(null);
-  const pendingImportRef = useRef<string | null>(null);
+  const pendingImportRef = useRef<{ id: string; restored?: boolean; duration?: number | null; audioUrl?: string } | null>(null);
   const analysisRequestRef = useRef(0);
 
   const releasePreview = () => {
@@ -124,8 +126,12 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   };
 
   const reset = () => {
-    if (pendingImportRef.current) {
-      void (window as any).fragments?.cancelImport(pendingImportRef.current);
+    const bridge = (window as any).fragments;
+    if (pendingImportRef.current && bridge) {
+      const pending = pendingImportRef.current;
+      if (!pending.restored && !pending.duration) {
+        void bridge.cancelImport(pending.id);
+      }
       pendingImportRef.current = null;
     }
     releasePreview();
@@ -197,15 +203,21 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
       const filePath = await bridge.pickAudioFile();
       if (!filePath) return;
       const pending = await bridge.beginImport(filePath);
-      pendingImportRef.current = pending.id;
+      pendingImportRef.current = pending;
       const next = await processAudioUrl(pending.audioUrl, pending.originalName, { analyze: false });
       applyDecoded(next);
       runQuickAnalysis(next.cacheKey);
     } catch (error) {
       console.error("Persistent import failed:", error);
-      setError("Could not copy or read this audio file.");
+      const message = error && typeof error === "object" && "code" in error && error.code === "DUPLICATE_SOURCE"
+        ? "This recording is already in your library."
+        : "Could not copy or read this audio file.";
+      setError(message);
       if (pendingImportRef.current) {
-        await bridge.cancelImport(pendingImportRef.current);
+        const pending = pendingImportRef.current;
+        if (!pending.restored && !pending.duration) {
+          await bridge.cancelImport(pending.id);
+        }
         pendingImportRef.current = null;
       }
     } finally {
@@ -243,21 +255,40 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
     if (!decoded) return;
     let persistedId: string | undefined;
     let persistedAudioUrl: string | undefined;
+    let restored = false;
+    let persistedDocument: Record<string, unknown> | undefined;
     const bridge = (window as any).fragments;
-    if (bridge && pendingImportRef.current) {
-      const persisted = await bridge.finalizeImport(pendingImportRef.current, {
-        duration: decoded.duration,
-        format: decoded.format,
-        sampleRate: decoded.sampleRate,
-        waveform: { version: 1, count: decoded.peaks.length, peaks: decoded.peaks },
-        analysis: decoded.analysis,
-      });
-      persistedId = persisted.id;
-      persistedAudioUrl = persisted.audioUrl;
+    const pending = pendingImportRef.current;
+    if (bridge && pending) {
+      if (pending.restored || pending.duration) {
+        const listed = await bridge.listSources();
+        const existing = listed.find((item: { id: string }) => item.id === pending.id) ?? pending;
+        persistedId = existing.id;
+        persistedAudioUrl = existing.audioUrl ?? pending.audioUrl;
+        restored = Boolean(pending.restored);
+        persistedDocument = existing;
+      } else {
+        const finalized = await bridge.finalizeImport(pending.id, {
+          duration: decoded.duration,
+          format: decoded.format,
+          sampleRate: decoded.sampleRate,
+          waveform: { version: 1, count: decoded.peaks.length, peaks: decoded.peaks },
+          analysis: decoded.analysis,
+        });
+        persistedId = finalized.id;
+        persistedAudioUrl = finalized.audioUrl;
+      }
       pendingImportRef.current = null;
     }
     releasePreview();
-    onImport({ ...decoded, sourceTypes: DEFAULT_SOURCE_TYPES, persistedId, persistedAudioUrl });
+    onImport({
+      ...decoded,
+      sourceTypes: DEFAULT_SOURCE_TYPES,
+      persistedId,
+      persistedAudioUrl,
+      restored,
+      persistedDocument,
+    });
     onOpenChange(false);
   };
 
