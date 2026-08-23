@@ -9,7 +9,8 @@ import { Fragment, SourceFile } from "../../prototype-data";
 import { LIBRARY_ROLES } from "./library-columns";
 import { visibleLibraryItems } from "./library-items";
 import { LibraryLinkSummary } from "./library-list";
-import { LibraryTable } from "./library-table";
+import { LibraryCardList } from "./library-card-list";
+import { LibraryListControls } from "./library-list-controls";
 import { LibraryToolbar } from "./library-toolbar";
 import { LibraryFilterMenu, LibrarySort, LibrarySortColumn } from "./types";
 
@@ -21,6 +22,7 @@ type LibraryViewProps = {
   resizingConnections: boolean;
   connectionsWidth: number;
   previewingId: string | null;
+  previewProgress: number | null;
   query: string;
   sort: LibrarySort;
   filters: LibraryFilters;
@@ -29,16 +31,24 @@ type LibraryViewProps = {
   sourceNameFor: (fragment: Fragment) => string;
   sourceForId: (sourceId: string) => SourceFile | undefined;
   linkSummaryFor: (fragmentId: string) => LibraryLinkSummary;
+  fragmentAudioFor: (fragmentId: string) => string | undefined;
   onQueryChange: (query: string) => void;
   onSortChange: (sort: LibrarySort) => void;
   onFiltersChange: (filters: LibraryFilters) => void;
   onOpenColumnFilter: (column: LibrarySortColumn, trigger: HTMLButtonElement) => void;
   onCloseFilterMenu: () => void;
-  onSelectFragment: (fragmentId: string) => void;
-  onSelectSource: (source: SourceFile) => void;
+  onHighlightFragment: (fragmentId: string) => void;
+  onHighlightSource: (source: SourceFile) => void;
+  onOpenMatchesFragment: (fragmentId: string) => void;
+  onOpenMatchesSource: (source: SourceFile) => void;
+  onOpenInfo: (sourceId: string) => void;
   onPreviewFragment: (fragment: Fragment) => void;
   onPreviewSource: (source: SourceFile) => void;
+  onSeekFragment: (fragment: Fragment, ratio: number) => void;
+  onSeekSource: (source: SourceFile, ratio: number) => void;
   connectionsPanel: ReactNode;
+  infoPanelOpen: boolean;
+  infoPanel: ReactNode;
 };
 
 export function LibraryView({
@@ -49,6 +59,7 @@ export function LibraryView({
   resizingConnections,
   connectionsWidth,
   previewingId,
+  previewProgress,
   query,
   sort,
   filters,
@@ -57,16 +68,24 @@ export function LibraryView({
   sourceNameFor,
   sourceForId,
   linkSummaryFor,
+  fragmentAudioFor,
   onQueryChange,
   onSortChange,
   onFiltersChange,
   onOpenColumnFilter,
   onCloseFilterMenu,
-  onSelectFragment,
-  onSelectSource,
+  onHighlightFragment,
+  onHighlightSource,
+  onOpenMatchesFragment,
+  onOpenMatchesSource,
+  onOpenInfo,
   onPreviewFragment,
   onPreviewSource,
+  onSeekFragment,
+  onSeekSource,
   connectionsPanel,
+  infoPanelOpen,
+  infoPanel,
 }: LibraryViewProps) {
   const listContext = useMemo(
     () => ({ sourceNameFor, linkSummaryFor, relatedTakeCountFor: () => 0 }),
@@ -89,37 +108,44 @@ export function LibraryView({
 
   return (
     <section
-      className={`workspace ${connectionsOpen ? "connections-open" : ""} ${resizingConnections ? "resizing" : ""}`}
-      style={{ "--connections-width": `${connectionsWidth}px` } as CSSProperties}
+      className={`workspace ${infoPanelOpen ? "info-open" : connectionsOpen ? "connections-open" : ""} ${resizingConnections && !infoPanelOpen ? "resizing" : ""}`}
+      style={!infoPanelOpen && connectionsOpen ? { "--connections-width": `${connectionsWidth}px` } as CSSProperties : undefined}
     >
       <div className="library">
-        <div className="panel-titlebar">
-          <h1>Fragments</h1>
+        <div className="library-header">
+          <LibraryToolbar
+            query={query}
+            searchRef={searchRef}
+            onQueryChange={onQueryChange}
+          />
+          <LibraryListControls
+            sort={sort}
+            filters={filters}
+            filterMenu={filterMenu}
+            onSortChange={onSortChange}
+            onOpenColumnFilter={onOpenColumnFilter}
+          />
         </div>
-        <LibraryToolbar
-          query={query}
-          searchRef={searchRef}
-          onQueryChange={onQueryChange}
-        />
         <div className="library-scroll">
-          <LibraryTable
-          items={visibleItems}
-          selectedId={selectedId}
-          connectionsOpen={connectionsOpen}
-          previewingId={previewingId}
-          sort={sort}
-          filters={filters}
-          filterMenu={filterMenu}
-          sourceNameFor={sourceNameFor}
-          sourceForId={sourceForId}
-          linkSummaryFor={linkSummaryFor}
-          onSortChange={onSortChange}
-          onOpenColumnFilter={onOpenColumnFilter}
-          onSelectFragment={onSelectFragment}
-          onSelectSource={onSelectSource}
-          onPreviewFragment={onPreviewFragment}
-          onPreviewSource={onPreviewSource}
-        />
+          <LibraryCardList
+            items={visibleItems}
+            selectedId={selectedId}
+            previewingId={previewingId}
+            previewProgress={previewProgress}
+            sourceNameFor={sourceNameFor}
+            sourceForId={sourceForId}
+            linkSummaryFor={linkSummaryFor}
+            fragmentAudioFor={fragmentAudioFor}
+            onHighlightFragment={onHighlightFragment}
+            onHighlightSource={onHighlightSource}
+            onOpenMatchesFragment={onOpenMatchesFragment}
+            onOpenMatchesSource={onOpenMatchesSource}
+            onOpenInfo={onOpenInfo}
+            onPreviewFragment={onPreviewFragment}
+            onPreviewSource={onPreviewSource}
+            onSeekFragment={onSeekFragment}
+            onSeekSource={onSeekSource}
+          />
         </div>
         {filterMenu && (
           <ColumnFilterPopover
@@ -137,7 +163,7 @@ export function LibraryView({
           />
         )}
       </div>
-      {connectionsOpen && connectionsPanel}
+      {infoPanelOpen ? infoPanel : connectionsOpen ? connectionsPanel : null}
     </section>
   );
 }

@@ -17,6 +17,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/lib/ui/dropdown-menu";
+import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { SourceFile } from "../../prototype-data";
 
 type SourceRowActionsProps = {
@@ -55,8 +56,12 @@ export function SourceRowActions({ source, onRemove }: SourceRowActionsProps) {
       <Dialog open={removeOpen} onOpenChange={setRemoveOpen}>
         <DialogContent showCloseButton={false} className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Remove source?</DialogTitle>
-            <DialogDescription>
+            <ModalTitlebar
+              className="mb-0"
+              eyebrow="Remove"
+              title={<DialogTitle className="modal-titlebar-title">{source.name}</DialogTitle>}
+            />
+            <DialogDescription className="mt-2">
               This removes <strong className="font-medium text-foreground">{source.name}</strong> and all
               of its fragments from Fragments. Your original file is not deleted — only the copy made on
               import is removed.

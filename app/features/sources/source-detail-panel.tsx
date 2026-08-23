@@ -1,20 +1,31 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Play, Square } from "lucide-react";
 import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
+import { formatMusicalKey } from "@/lib/audio/source-metadata";
 import { Button } from "@/lib/ui/button";
+import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
 import { formatSeconds } from "@/lib/format";
 import { SourceFile } from "../../prototype-data";
+
+export type SourceAnalysisValues = {
+  bpm: number | null;
+  key: string | null;
+  scale: string | null;
+};
 
 type SourceDetailPanelProps = {
   source: SourceFile;
   fragmentCount: number;
   isPreviewing: boolean;
   canPlay: boolean;
+  editable?: boolean;
   onPreview: () => void;
   onClose: () => void;
+  onSaveAnalysis?: (analysis: SourceAnalysisValues) => void | Promise<void>;
 };
 
 function MetadataRow({ label, value }: { label: string; value: string }) {
@@ -35,44 +46,67 @@ export function SourceDetailPanel({
   fragmentCount,
   isPreviewing,
   canPlay,
+  editable = false,
   onPreview,
   onClose,
+  onSaveAnalysis,
 }: SourceDetailPanelProps) {
   const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
   const values = cached?.peaks ?? source.waveform;
-  const bpm = cached?.analysis.bpm ?? source.bpm ?? null;
-  const key = cached?.analysis.key ?? source.key ?? null;
-  const scale = cached?.analysis.scale ?? source.scale ?? null;
+  const resolvedBpm = cached?.analysis.bpm ?? source.bpm ?? null;
+  const resolvedKey = cached?.analysis.key ?? source.key ?? null;
+  const resolvedScale = cached?.analysis.scale ?? source.scale ?? null;
   const keyStrength = cached?.analysis.keyStrength ?? null;
-  const keyLabel = key && scale ? `${key} ${scale}` : key;
+  const keyLabel = formatMusicalKey(resolvedKey, resolvedScale);
+
+  const [bpm, setBpm] = useState(resolvedBpm != null ? String(resolvedBpm) : "");
+  const [key, setKey] = useState(resolvedKey ?? "");
+  const [scale, setScale] = useState(resolvedScale ?? "major");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setBpm(resolvedBpm != null ? String(resolvedBpm) : "");
+    setKey(resolvedKey ?? "");
+    setScale(resolvedScale ?? "major");
+  }, [resolvedBpm, resolvedKey, resolvedScale, source.id]);
+
+  const saveAnalysis = async () => {
+    if (!onSaveAnalysis) return;
+    setSaving(true);
+    try {
+      const parsedBpm = bpm.trim() === "" ? null : Number(bpm);
+      await onSaveAnalysis({
+        bpm: parsedBpm != null && Number.isFinite(parsedBpm) ? Math.round(parsedBpm) : null,
+        key: key.trim() || null,
+        scale: scale || null,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <aside className="source-editor source-detail-panel">
-      <div className="source-editor-title">
-        <h2>Source</h2>
-        <button className="panel-close" onClick={onClose} aria-label="Close source panel">
-          ×
-        </button>
-      </div>
+      <ModalTitlebar
+        eyebrow="Info"
+        title={source.name}
+        onClose={onClose}
+        closeLabel="Close info panel"
+      />
 
       <div className="space-y-5">
-        <div className="min-w-0">
-          <p className="truncate text-[13px] font-semibold text-foreground" title={source.name}>
-            {source.name}
-          </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            {formatSeconds(source.duration)} · {source.format}
-          </p>
-        </div>
+        <p className="text-[11px] text-muted-foreground">
+          {formatSeconds(source.duration)} · {source.format}
+        </p>
 
         <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
           <div
-            className="h-32 cursor-grab overflow-hidden rounded border border-border/60 bg-[#09080b] active:cursor-grabbing"
+            className="waveform-frame h-32 cursor-grab active:cursor-grabbing"
             draggable
             onDragStart={(event) => startDesktopDrag(event, { sourceId: source.id }, { audioUrl: source.audioUrl ?? "", fileName: `${source.name}.wav` })}
             title="Drag onto your desktop or into a DAW"
           >
-            <ContinuousWaveform values={values} active={isPreviewing} />
+            <ContinuousWaveform values={values} active={isPreviewing} className="h-full w-full" />
           </div>
           <div className="flex items-center gap-3">
             <Button
@@ -91,14 +125,14 @@ export function SourceDetailPanel({
               )}
               {isPreviewing ? "Stop" : "Play"}
             </Button>
-            {bpm != null || keyLabel ? (
+            {!editable && (resolvedBpm != null || keyLabel) && (
               <p className="text-[11px] text-muted-foreground">
-                {bpm != null && (
+                {resolvedBpm != null && (
                   <span>
-                    <strong className="text-foreground">{bpm}</strong> BPM
+                    <strong className="text-foreground">{resolvedBpm}</strong> BPM
                   </span>
                 )}
-                {bpm != null && keyLabel && <span> · </span>}
+                {resolvedBpm != null && keyLabel && <span> · </span>}
                 {keyLabel && (
                   <span>
                     <strong className="text-foreground">{keyLabel}</strong>
@@ -106,11 +140,61 @@ export function SourceDetailPanel({
                   </span>
                 )}
               </p>
-            ) : (
-              <p className="text-[11px] text-muted-foreground">No tempo or key detected.</p>
             )}
           </div>
         </div>
+
+        {editable ? (
+          <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+            <label className="block space-y-1">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">BPM</span>
+              <input
+                className="w-full rounded border border-border bg-[#0d0c10] px-2 py-1.5 text-[12px] text-foreground"
+                inputMode="numeric"
+                value={bpm}
+                onChange={(event) => setBpm(event.target.value)}
+                placeholder="—"
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Key</span>
+              <input
+                className="w-full rounded border border-border bg-[#0d0c10] px-2 py-1.5 text-[12px] text-foreground"
+                value={key}
+                onChange={(event) => setKey(event.target.value)}
+                placeholder="C"
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Scale</span>
+              <select
+                className="w-full rounded border border-border bg-[#0d0c10] px-2 py-1.5 text-[12px] text-foreground"
+                value={scale}
+                onChange={(event) => setScale(event.target.value)}
+              >
+                <option value="major">Major</option>
+                <option value="minor">Minor</option>
+              </select>
+            </label>
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="library-card-action"
+                disabled={saving || !onSaveAnalysis}
+                onClick={() => void saveAnalysis()}
+              >
+                {saving ? "Saving…" : "Save metadata"}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {resolvedBpm != null && <MetadataRow label="BPM" value={String(resolvedBpm)} />}
+            {keyLabel && <MetadataRow label="Key" value={keyLabel} />}
+          </>
+        )}
 
         <div>
           <MetadataRow label="Recorded" value={source.date} />

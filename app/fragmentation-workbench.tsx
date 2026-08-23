@@ -1,126 +1,507 @@
 "use client";
 
-import { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, useEffect, useRef, useState } from "react";
+import {
+  CSSProperties,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { Play, Square } from "lucide-react";
+import { LibraryCard } from "@/app/features/library/library-card";
+import { LibraryLinkSummary } from "@/app/features/library/library-list";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
-import { Fragment, SourceFile } from "./prototype-data";
+import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
+import { slicePeaks } from "@/lib/audio/slice-peaks";
+import { Button } from "@/lib/ui/button";
+import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
+import { cn } from "@/lib/utils";
+import { formatSeconds } from "@/lib/format";
+import { Fragment, MusicalRole, SourceFile } from "./prototype-data";
 
-export type EditableRange = { id:string; fragmentId?:string; start:number; end:number; color:string };
+export type EditableRange = { id: string; fragmentId?: string; start: number; end: number; color: string };
 type Edge = "start" | "end";
 
-const formatSeconds = (seconds:number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2,"0")}`;
+const noopLinkSummary = (): LibraryLinkSummary => ({ total: 0, manual: 0 });
 
-function waveformPath(values:number[],width=1000,height=160) {
-  const middle=height / 2;
-  const upper=values.map((value,index) => `${index ? "L" : "M"}${index / Math.max(1,values.length - 1) * width},${middle - value / 100 * middle * .88}`).join(" ");
-  const lower=[...values].reverse().map((value,reverseIndex) => { const index=values.length - 1 - reverseIndex;return `L${index / Math.max(1,values.length - 1) * width},${middle + value / 100 * middle * .88}`; }).join(" ");
-  return `${upper} ${lower} Z`;
-}
-
-function waveformSlice(values:number[],time:number,duration:number) {
-  const center=Math.round(time / duration * (values.length - 1));
-  const start=Math.max(0,center - 5);
-  const slice=values.slice(start,Math.min(values.length,center + 6));
+function waveformSlice(values: number[], time: number, duration: number) {
+  const center = Math.round((time / duration) * (values.length - 1));
+  const start = Math.max(0, center - 5);
+  const slice = values.slice(start, Math.min(values.length, center + 6));
   return slice.length > 2 ? slice : values;
 }
 
-function ContinuousWaveform({ values }: { values:number[] }) {
-  return <svg className="continuous-wave" viewBox="0 0 1000 160" preserveAspectRatio="none" aria-hidden="true"><path d={waveformPath(values)} /></svg>;
+function SensitivityKnob({
+  sensitivity,
+  onSensitivityChange,
+}: {
+  sensitivity: number;
+  onSensitivityChange: (value: number) => void;
+}) {
+  const sensitivityDrag = useRef<{ y: number; value: number } | null>(null);
+  const percent = Math.round(((sensitivity - 10) / 80) * 100);
+
+  const beginSensitivityDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    sensitivityDrag.current = { y: event.clientY, value: sensitivity };
+  };
+  const moveSensitivityDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (!sensitivityDrag.current) return;
+    onSensitivityChange(
+      Math.max(10, Math.min(90, Math.round(sensitivityDrag.current.value + (sensitivityDrag.current.y - event.clientY) * 0.75))),
+    );
+  };
+  const finishSensitivityDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    sensitivityDrag.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  return (
+    <div className="sensitivity-control" title="Fragment sensitivity">
+      <span className="sensitivity-label">Sensitivity</span>
+      <button
+        type="button"
+        className="sensitivity-dial"
+        role="slider"
+        aria-label="Fragment sensitivity"
+        aria-valuemin={10}
+        aria-valuemax={90}
+        aria-valuenow={sensitivity}
+        onPointerDown={beginSensitivityDrag}
+        onPointerMove={moveSensitivityDrag}
+        onPointerUp={finishSensitivityDrag}
+        onPointerCancel={finishSensitivityDrag}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowUp" || event.key === "ArrowRight") {
+            event.preventDefault();
+            onSensitivityChange(Math.min(90, sensitivity + 4));
+          }
+          if (event.key === "ArrowDown" || event.key === "ArrowLeft") {
+            event.preventDefault();
+            onSensitivityChange(Math.max(10, sensitivity - 4));
+          }
+        }}
+      >
+        <span className="sensitivity-fill" style={{ height: `${percent}%` } as CSSProperties} />
+      </button>
+    </div>
+  );
 }
 
-export function FragmentationWorkbench({ source,ranges,fragments,sensitivity,focusedFragmentId,onRangesChange,onSensitivityChange,onAddRange,onSave,onClose,onOpenFragment,saveLabel="Save boundaries",footerContent }: {
-  source:SourceFile;
-  ranges:EditableRange[];
-  fragments:Fragment[];
-  sensitivity:number;
-  focusedFragmentId?:string;
-  onRangesChange:(ranges:EditableRange[])=>void;
-  onSensitivityChange:(value:number)=>void;
-  onAddRange:()=>void;
-  onSave:()=>void;
-  onClose:()=>void;
-  onOpenFragment?:(id:string)=>void;
-  saveLabel?:string;
-  footerContent?:ReactNode;
+function draftFragmentForRange(
+  range: EditableRange,
+  index: number,
+  source: SourceFile,
+  peaks: number[],
+  bpm: number | null | undefined,
+): Fragment {
+  return {
+    id: range.id,
+    name: `Untitled fragment ${index + 1}`,
+    sourceId: source.id,
+    source: source.name,
+    start: range.start,
+    end: range.end,
+    date: source.date,
+    dateLabel: source.date,
+    duration: formatSeconds(range.end - range.start),
+    key: "—",
+    alternateKeys: [],
+    bpm: bpm ?? 0,
+    role: "Texture" as MusicalRole,
+    roles: ["Texture"],
+    brightness: 0,
+    waveform: slicePeaks(peaks, range.start, range.end, source.duration),
+    beats: 0,
+    bars: 0,
+    confidence: 0,
+    userTags: [],
+    analysisRevision: 0,
+    audio: "",
+    sourceTypes: source.sourceTypes,
+  };
+}
+
+export function FragmentationWorkbench({
+  source,
+  ranges,
+  fragments,
+  sensitivity,
+  focusedFragmentId,
+  onRangesChange,
+  onSensitivityChange,
+  onAddRange,
+  onSave,
+  onClose,
+  onOpenFragment,
+  saveLabel = "Save boundaries",
+  footerContent,
+}: {
+  source: SourceFile;
+  ranges: EditableRange[];
+  fragments: Fragment[];
+  sensitivity: number;
+  focusedFragmentId?: string;
+  onRangesChange: (ranges: EditableRange[]) => void;
+  onSensitivityChange: (value: number) => void;
+  onAddRange: () => void;
+  onSave: () => void;
+  onClose: () => void;
+  onOpenFragment?: (id: string) => void;
+  saveLabel?: string;
+  footerContent?: ReactNode;
 }) {
-  const [dragged,setDragged]=useState<{ rangeId:string;edge:Edge } | null>(null);
-  const [magnifier,setMagnifier]=useState<{ x:number;time:number;edge:Edge } | null>(null);
-  const [previewingId,setPreviewingId]=useState<string | null>(null);
+  const [dragged, setDragged] = useState<{ rangeId: string; edge: Edge } | null>(null);
+  const [magnifier, setMagnifier] = useState<{ x: number; time: number; edge: Edge } | null>(null);
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const [previewProgress, setPreviewProgress] = useState<number | null>(null);
   const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
   const waveform = cached?.peaks ?? source.waveform;
   const analysisMeta = cached?.analysis;
-  const audioRef=useRef<HTMLAudioElement | null>(null);
-  const timelineRef=useRef<HTMLDivElement>(null);
-  const rulerRef=useRef<HTMLDivElement>(null);
-  const rangesRef=useRef(ranges);
-  const onRangesChangeRef=useRef(onRangesChange);
-  const sensitivityDrag=useRef<{ y:number;value:number } | null>(null);
-  useEffect(() => { rangesRef.current=ranges; },[ranges]);
-  useEffect(() => { onRangesChangeRef.current=onRangesChange; },[onRangesChange]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const progressRaf = useRef(0);
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const rulerRef = useRef<HTMLDivElement>(null);
+  const rangesRef = useRef(ranges);
+  const onRangesChangeRef = useRef(onRangesChange);
 
-  const stopPreview=() => { if (audioRef.current) { audioRef.current.pause();audioRef.current.currentTime=0;audioRef.current=null; }setPreviewingId(null); };
-  const preview=(fragment:Fragment) => { if (previewingId === fragment.id) { stopPreview();return; }stopPreview();const audio=new Audio(fragment.audio);audio.loop=true;audio.volume=.72;audioRef.current=audio;setPreviewingId(fragment.id);audio.play().catch(() => setPreviewingId(null)); };
-  useEffect(() => () => { if (audioRef.current) audioRef.current.pause(); },[]);
+  useEffect(() => { rangesRef.current = ranges; }, [ranges]);
+  useEffect(() => { onRangesChangeRef.current = onRangesChange; }, [onRangesChange]);
 
-  const changeEdge=(range:EditableRange,edge:Edge,value:number) => {
-    const next=rangesRef.current.map((item) => item.id !== range.id ? item : edge === "start" ? { ...item,start:Math.max(0,Math.min(value,item.end - .5)) } : { ...item,end:Math.min(source.duration,Math.max(value,item.start + .5)) });
-    rangesRef.current=next;onRangesChangeRef.current(next);
+  const stopPreview = useCallback(() => {
+    cancelAnimationFrame(progressRaf.current);
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
+    setPreviewingId(null);
+    setPreviewProgress(null);
+  }, []);
+
+  const preview = useCallback((fragment: Fragment, startRatio = 0) => {
+    if (!fragment.audio) return;
+    if (previewingId === fragment.id) {
+      stopPreview();
+      return;
+    }
+    stopPreview();
+    const audio = new Audio(fragment.audio);
+    audio.loop = true;
+    audio.volume = 0.72;
+    audioRef.current = audio;
+    setPreviewingId(fragment.id);
+
+    const begin = () => {
+      if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
+        setPreviewProgress(0);
+      } else {
+        audio.currentTime = Math.min(1, Math.max(0, startRatio)) * audio.duration;
+        setPreviewProgress(startRatio);
+      }
+      audio.play().catch(() => stopPreview());
+    };
+
+    if (audio.readyState >= 1) begin();
+    else audio.addEventListener("loadedmetadata", begin, { once: true });
+  }, [previewingId, stopPreview]);
+
+  const seekPreview = useCallback((fragment: Fragment, ratio: number) => {
+    const audio = audioRef.current;
+    if (!audio || previewingId !== fragment.id || !Number.isFinite(audio.duration)) return;
+    const clamped = Math.min(1, Math.max(0, ratio));
+    audio.currentTime = clamped * audio.duration;
+    setPreviewProgress(clamped);
+  }, [previewingId]);
+
+  useEffect(() => {
+    if (!previewingId) return undefined;
+
+    const tick = () => {
+      const audio = audioRef.current;
+      if (audio && !audio.paused && Number.isFinite(audio.duration) && audio.duration > 0) {
+        setPreviewProgress(audio.currentTime / audio.duration);
+      }
+      progressRaf.current = requestAnimationFrame(tick);
+    };
+
+    progressRaf.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(progressRaf.current);
+  }, [previewingId]);
+
+  useEffect(() => () => {
+    cancelAnimationFrame(progressRaf.current);
+    if (audioRef.current) audioRef.current.pause();
+  }, []);
+
+  const changeEdge = (range: EditableRange, edge: Edge, value: number) => {
+    const next = rangesRef.current.map((item) => {
+      if (item.id !== range.id) return item;
+      if (edge === "start") {
+        return { ...item, start: Math.max(0, Math.min(value, item.end - 0.5)) };
+      }
+      return { ...item, end: Math.min(source.duration, Math.max(value, item.start + 0.5)) };
+    });
+    rangesRef.current = next;
+    onRangesChangeRef.current(next);
   };
 
   useEffect(() => {
     if (!dragged) return;
-    const move=(event:PointerEvent) => {
-      const rulerRect=rulerRef.current?.getBoundingClientRect();
-      const timelineRect=timelineRef.current?.getBoundingClientRect();
-      const active=rangesRef.current.find((range) => range.id === dragged.rangeId);
+    const move = (event: PointerEvent) => {
+      const rulerRect = rulerRef.current?.getBoundingClientRect();
+      const timelineRect = timelineRef.current?.getBoundingClientRect();
+      const active = rangesRef.current.find((range) => range.id === dragged.rangeId);
       if (!rulerRect || !timelineRect || !active) return;
-      const rulerX=Math.max(0,Math.min(rulerRect.width,event.clientX - rulerRect.left));
-      const time=rulerX / rulerRect.width * source.duration;
-      const next=rangesRef.current.map((item) => item.id !== active.id ? item : dragged.edge === "start" ? { ...item,start:Math.max(0,Math.min(time,item.end - .5)) } : { ...item,end:Math.min(source.duration,Math.max(time,item.start + .5)) });
-      rangesRef.current=next;onRangesChangeRef.current(next);
-      setMagnifier({ x:Math.max(90,Math.min(timelineRect.width - 90,event.clientX - timelineRect.left)),time,edge:dragged.edge });
+      const rulerX = Math.max(0, Math.min(rulerRect.width, event.clientX - rulerRect.left));
+      const time = (rulerX / rulerRect.width) * source.duration;
+      const next = rangesRef.current.map((item) => {
+        if (item.id !== active.id) return item;
+        if (dragged.edge === "start") {
+          return { ...item, start: Math.max(0, Math.min(time, item.end - 0.5)) };
+        }
+        return { ...item, end: Math.min(source.duration, Math.max(time, item.start + 0.5)) };
+      });
+      rangesRef.current = next;
+      onRangesChangeRef.current(next);
+      setMagnifier({
+        x: Math.max(90, Math.min(timelineRect.width - 90, event.clientX - timelineRect.left)),
+        time,
+        edge: dragged.edge,
+      });
     };
-    const finish=() => { setDragged(null);setMagnifier(null); };
-    window.addEventListener("pointermove",move);
-    window.addEventListener("pointerup",finish,{ once:true });
-    return () => { window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",finish); };
-  },[dragged,source.duration]);
+    const finish = () => {
+      setDragged(null);
+      setMagnifier(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+    };
+  }, [dragged, source.duration]);
 
-  const beginRangeDrag=(event:ReactPointerEvent<HTMLButtonElement>,range:EditableRange,edge:Edge) => {
-    event.preventDefault();event.stopPropagation();
-    const timelineRect=timelineRef.current?.getBoundingClientRect();
-    const rulerRect=rulerRef.current?.getBoundingClientRect();
-    const time=edge === "start" ? range.start : range.end;
-    const clientX=(rulerRect?.left ?? 0) + time / source.duration * (rulerRect?.width ?? 0);
-    setMagnifier({ x:timelineRect ? Math.max(90,Math.min(timelineRect.width - 90,clientX - timelineRect.left)) : 90,time,edge });
-    setDragged({ rangeId:range.id,edge });
+  const beginRangeDrag = (event: ReactPointerEvent<HTMLButtonElement>, range: EditableRange, edge: Edge) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const timelineRect = timelineRef.current?.getBoundingClientRect();
+    const rulerRect = rulerRef.current?.getBoundingClientRect();
+    const time = edge === "start" ? range.start : range.end;
+    const clientX = (rulerRect?.left ?? 0) + (time / source.duration) * (rulerRect?.width ?? 0);
+    setMagnifier({
+      x: timelineRect ? Math.max(90, Math.min(timelineRect.width - 90, clientX - timelineRect.left)) : 90,
+      time,
+      edge,
+    });
+    setDragged({ rangeId: range.id, edge });
   };
 
-  const beginSensitivityDrag=(event:ReactPointerEvent<HTMLButtonElement>) => { event.preventDefault();event.currentTarget.setPointerCapture(event.pointerId);sensitivityDrag.current={ y:event.clientY,value:sensitivity }; };
-  const moveSensitivityDrag=(event:ReactPointerEvent<HTMLButtonElement>) => { if (!sensitivityDrag.current) return;onSensitivityChange(Math.max(10,Math.min(90,Math.round(sensitivityDrag.current.value + (sensitivityDrag.current.y - event.clientY) * .75)))); };
-  const finishSensitivityDrag=(event:ReactPointerEvent<HTMLButtonElement>) => { sensitivityDrag.current=null;if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); };
-  const fragmentFor=(range:EditableRange) => range.fragmentId ? fragments.find((fragment) => fragment.id === range.fragmentId) ?? null : null;
-  const close=() => { stopPreview();onClose(); };
+  const fragmentFor = (range: EditableRange) => (
+    range.fragmentId ? fragments.find((fragment) => fragment.id === range.fragmentId) ?? null : null
+  );
 
-  return <aside className="source-editor fragmentation-workbench">
-    <div className="source-editor-title"><h2>Fragmentation</h2><button className="panel-close" onClick={close} aria-label="Close fragmentation panel">×</button></div>
-    <div className="source-editor-head"><div><h3>{source.name}</h3><p>{source.format} · {source.device}{analysisMeta?.bpm ? ` · ${analysisMeta.bpm} BPM` : ""}{analysisMeta?.key && analysisMeta.scale ? ` · ${analysisMeta.key} ${analysisMeta.scale}` : ""}</p></div>{source.fragmentIds[0] && fragments.find((fragment) => fragment.id === source.fragmentIds[0]) && <button className="soft-button" onClick={() => preview(fragments.find((fragment) => fragment.id === source.fragmentIds[0])!)}>{previewingId === source.fragmentIds[0] ? "Ⅱ Stop" : "▶ Play"}</button>}</div>
-    <div className="timeline-card" ref={timelineRef}>
-      <div className="fragment-lanes-scroll"><div className="fragment-lanes" ref={rulerRef} style={{ height:`${ranges.length * 23 + 4}px` }}>{ranges.map((range,index) => <div className={`fragment-lane ${range.fragmentId === focusedFragmentId ? "focused" : ""}`} key={range.id} style={{ top:`${index * 23}px`,"--fragment-color":range.color } as CSSProperties}>
-        <div className="fragment-bar" style={{ left:`${range.start / source.duration * 100}%`,width:`${(range.end - range.start) / source.duration * 100}%` }}>
-          <button className="range-handle start" onPointerDown={(event) => beginRangeDrag(event,range,"start")} onKeyDown={(event) => { const step=event.shiftKey ? 1 : .25;if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault();changeEdge(range,"start",range.start + (event.key === "ArrowLeft" ? -step : step)); } }} aria-label={`Adjust start of fragment ${index + 1}`} />
-          <span>F{String(index + 1).padStart(2,"0")} · {formatSeconds(range.start)}–{formatSeconds(range.end)}</span>
-          <button className="range-handle end" onPointerDown={(event) => beginRangeDrag(event,range,"end")} onKeyDown={(event) => { const step=event.shiftKey ? 1 : .25;if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault();changeEdge(range,"end",range.end + (event.key === "ArrowLeft" ? -step : step)); } }} aria-label={`Adjust end of fragment ${index + 1}`} />
+  const displayFragments = useMemo(
+    () => ranges.map((range, index) => fragmentFor(range) ?? draftFragmentForRange(range, index, source, waveform, analysisMeta?.bpm)),
+    [ranges, fragments, source, waveform, analysisMeta?.bpm],
+  );
+
+  const headerFragment = displayFragments.find((fragment) => fragment.audio) ?? displayFragments[0];
+  const previewingRange = ranges.find((range) => range.fragmentId === previewingId);
+  const timelinePlayheadLeft = previewingRange && previewProgress != null
+    ? ((previewingRange.start + previewProgress * (previewingRange.end - previewingRange.start)) / source.duration) * 100
+    : null;
+
+  const close = () => {
+    stopPreview();
+    onClose();
+  };
+
+  return (
+    <aside className="source-editor fragmentation-workbench">
+      <ModalTitlebar
+        eyebrow="Fragment"
+        title={source.name}
+        onClose={close}
+        closeLabel="Close fragment panel"
+      />
+
+      <div className="source-editor-head">
+        <div>
+          <p>
+            {source.format} · {source.device}
+            {analysisMeta?.bpm ? ` · ${analysisMeta.bpm} BPM` : ""}
+            {analysisMeta?.key && analysisMeta.scale ? ` · ${analysisMeta.key} ${analysisMeta.scale}` : ""}
+          </p>
         </div>
-      </div>)}</div></div>
-      {magnifier && dragged && <div className="ruler-edge-magnifier" style={{ left:`${magnifier.x}px` }}><strong>{magnifier.edge} · {formatSeconds(magnifier.time)}</strong><ContinuousWaveform values={waveformSlice(waveform,magnifier.time,source.duration)} /></div>}
-      <div className="timeline-labels"><span>0:00</span><span>{formatSeconds(source.duration / 2)}</span><span>{formatSeconds(source.duration)}</span></div>
-      <div className="continuous-wave-wrap"><ContinuousWaveform values={waveform}/>{ranges.map((range,index) => { const fragment=fragmentFor(range);return <div className={`wave-range ${fragment && previewingId === fragment.id ? "auditioning" : ""}`} key={range.id} style={{ left:`${range.start / source.duration * 100}%`,width:`${(range.end - range.start) / source.duration * 100}%`,"--fragment-color":range.color } as CSSProperties}><span>F{index + 1}</span>{fragment && previewingId === fragment.id && <i className="fragment-scan-playhead" />}</div>; })}</div>
-      <div className="fragment-summary"><strong>{ranges.length} fragments</strong><span>Drag a ruler edge to trim · Shift + arrow for 1 second</span></div>
-    </div>
-    <div className="source-lower">
-      <div className="sensitivity-card"><div><h3>Sensitivity</h3><p>Higher sensitivity surfaces shorter gestures and adds fragment ranges.</p></div><div className="knob-control"><button className="knob" role="slider" aria-label="Fragmentation sensitivity" aria-valuemin={10} aria-valuemax={90} aria-valuenow={sensitivity} style={{ "--angle":`${-130 + (sensitivity - 10) / 80 * 260}deg`,"--sweep":`${(sensitivity - 10) / 80 * 260}deg` } as CSSProperties} onPointerDown={beginSensitivityDrag} onPointerMove={moveSensitivityDrag} onPointerUp={finishSensitivityDrag} onPointerCancel={finishSensitivityDrag} onKeyDown={(event) => { if (event.key === "ArrowUp" || event.key === "ArrowRight") { event.preventDefault();onSensitivityChange(Math.min(90,sensitivity + 4)); }if (event.key === "ArrowDown" || event.key === "ArrowLeft") { event.preventDefault();onSensitivityChange(Math.max(10,sensitivity - 4)); } }}><i /></button><strong>{sensitivity < 36 ? "Broad" : sensitivity > 66 ? "Sensitive" : "Balanced"}</strong></div></div>
-      <div className="detected-card"><div className="detected-head"><h3>Fragments</h3><div className="detected-actions"><button onClick={onAddRange}>＋ Add fragment</button><button onClick={onSave}>{saveLabel}</button></div></div>{ranges.map((range,index) => { const fragment=fragmentFor(range);return <div className={`detected-row ${range.fragmentId === focusedFragmentId ? "focused" : ""}`} key={range.id}><i className="range-swatch" style={{ background:range.color }} />{fragment ? <button className={`fragment-audition ${previewingId === fragment.id ? "playing" : ""}`} onClick={() => preview(fragment)} aria-label={`${previewingId === fragment.id ? "Stop" : "Play"} fragment ${fragment.name}`}>{previewingId === fragment.id ? "Ⅱ" : "▶"}</button> : <button className="fragment-audition" disabled aria-label="Save this fragment before auditioning">▶</button>}<span><b>{fragment?.name ?? `Untitled fragment ${index + 1}`}</b><small>{formatSeconds(range.start)}–{formatSeconds(range.end)} · {Math.round(range.end - range.start)} sec</small></span>{fragment && onOpenFragment ? <button onClick={() => onOpenFragment(fragment.id)}>Open →</button> : <em>{fragment ? (fragment.id === focusedFragmentId ? "Editing" : "Saved") : "New"}</em>}</div>; })}</div>
-    </div>
-    {footerContent}
-  </aside>;
+        <div className="source-editor-head-controls">
+          <SensitivityKnob sensitivity={sensitivity} onSensitivityChange={onSensitivityChange} />
+          {headerFragment && (
+            <Button
+              type="button"
+              variant="lime"
+              size="sm"
+              className="fragment-workbench-play"
+              disabled={!headerFragment.audio}
+              onClick={() => preview(headerFragment)}
+            >
+              {previewingId === headerFragment.id ? (
+                <><Square className="size-3.5 fill-current" /> Stop</>
+              ) : (
+                <><Play className="size-3.5 fill-current" /> Play</>
+              )}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="timeline-card" ref={timelineRef}>
+        <div className="fragment-lanes-scroll">
+          <div className="fragment-lanes" ref={rulerRef} style={{ height: `${ranges.length * 23 + 4}px` }}>
+            {ranges.map((range, index) => (
+              <div
+                className={cn("fragment-lane", range.fragmentId === focusedFragmentId && "focused")}
+                key={range.id}
+                style={{ top: `${index * 23}px`, "--fragment-color": range.color } as CSSProperties}
+              >
+                <div
+                  className="fragment-bar"
+                  style={{
+                    left: `${(range.start / source.duration) * 100}%`,
+                    width: `${((range.end - range.start) / source.duration) * 100}%`,
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="range-handle start"
+                    onPointerDown={(event) => beginRangeDrag(event, range, "start")}
+                    onKeyDown={(event) => {
+                      const step = event.shiftKey ? 1 : 0.25;
+                      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                        event.preventDefault();
+                        changeEdge(range, "start", range.start + (event.key === "ArrowLeft" ? -step : step));
+                      }
+                    }}
+                    aria-label={`Adjust start of fragment ${index + 1}`}
+                  />
+                  <span>
+                    F{String(index + 1).padStart(2, "0")} · {formatSeconds(range.start)}–{formatSeconds(range.end)}
+                  </span>
+                  <button
+                    type="button"
+                    className="range-handle end"
+                    onPointerDown={(event) => beginRangeDrag(event, range, "end")}
+                    onKeyDown={(event) => {
+                      const step = event.shiftKey ? 1 : 0.25;
+                      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                        event.preventDefault();
+                        changeEdge(range, "end", range.end + (event.key === "ArrowLeft" ? -step : step));
+                      }
+                    }}
+                    aria-label={`Adjust end of fragment ${index + 1}`}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {magnifier && dragged && (
+          <div className="ruler-edge-magnifier" style={{ left: `${magnifier.x}px` }}>
+            <strong>{magnifier.edge} · {formatSeconds(magnifier.time)}</strong>
+            <ContinuousWaveform values={waveformSlice(waveform, magnifier.time, source.duration)} />
+          </div>
+        )}
+        <div className="timeline-labels">
+          <span>0:00</span>
+          <span>{formatSeconds(source.duration / 2)}</span>
+          <span>{formatSeconds(source.duration)}</span>
+        </div>
+        <div className="continuous-wave-wrap">
+          <ContinuousWaveform values={waveform} active={Boolean(previewingId)} />
+          {ranges.map((range, index) => (
+            <div
+              className={cn("wave-range", range.fragmentId === previewingId && "auditioning")}
+              key={range.id}
+              style={{
+                left: `${(range.start / source.duration) * 100}%`,
+                width: `${((range.end - range.start) / source.duration) * 100}%`,
+                "--fragment-color": range.color,
+              } as CSSProperties}
+            >
+              <span>F{index + 1}</span>
+            </div>
+          ))}
+          {timelinePlayheadLeft != null && (
+            <div
+              className="fragment-timeline-playhead library-wave-playhead"
+              style={{ left: `${timelinePlayheadLeft}%` }}
+              aria-hidden="true"
+            />
+          )}
+        </div>
+        <div className="fragment-summary">
+          <strong>{ranges.length} fragments</strong>
+          <span>Drag a ruler edge to trim · Shift + arrow for 1 second</span>
+        </div>
+      </div>
+
+      <div className="source-lower fragment-workbench-lower">
+        <div className="fragment-workbench-cards">
+          <div className="fragment-workbench-cards-head">
+            <h3>Fragments</h3>
+            <div className="detected-actions">
+              <Button type="button" variant="outline" size="sm" className="library-card-action" onClick={onAddRange}>
+                ＋ Add fragment
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="library-card-action" onClick={onSave}>
+                {saveLabel}
+              </Button>
+            </div>
+          </div>
+          <div className="fragment-workbench-card-list library-card-stack">
+            {ranges.map((range, index) => {
+              const fragment = displayFragments[index];
+              const saved = Boolean(fragmentFor(range));
+              const isPreviewing = previewingId === fragment.id && Boolean(fragment.audio);
+              return (
+                <div
+                  key={range.id}
+                  className="fragment-workbench-card"
+                  style={{ "--fragment-color": range.color } as CSSProperties}
+                >
+                  <LibraryCard
+                    item={{ kind: "fragment", id: fragment.id, fragment }}
+                    isSelected={range.fragmentId === focusedFragmentId}
+                    isPreviewing={isPreviewing}
+                    previewProgress={isPreviewing ? previewProgress : null}
+                    showActions={false}
+                    embedded
+                    sourceNameFor={() => source.name}
+                    sourceForId={() => source}
+                    linkSummaryFor={noopLinkSummary}
+                    fragmentAudioFor={() => fragment.audio}
+                    onSelect={() => {
+                      if (saved && onOpenFragment) onOpenFragment(fragment.id);
+                    }}
+                    onPreview={() => preview(fragment)}
+                    onSeek={(ratio) => seekPreview(fragment, ratio)}
+                    onOpenMatches={() => {}}
+                    onOpenInfo={() => {}}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {footerContent}
+    </aside>
+  );
 }

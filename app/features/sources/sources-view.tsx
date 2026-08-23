@@ -60,8 +60,6 @@ export function SourcesView({
     <section className="page-view source-page">
       <div className={`source-workspace ${editorOpen && !editorModal ? "editor-open" : ""}`}>
         <div className="sources-panel">
-          <div className="panel-titlebar">
-          </div>
           <SourcesToolbar
             importComplete={importComplete}
             query={query}

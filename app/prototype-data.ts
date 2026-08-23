@@ -1,4 +1,5 @@
 import prototypeWaveforms from "./prototype-waveforms.json";
+import { parseMusicalKeyLabel } from "@/lib/audio/source-metadata";
 
 export type MusicalRole = "Melody" | "Rhythm" | "Harmony" | "Bass" | "Voice" | "Texture";
 export type SearchContext = "whole" | "melody" | "rhythm" | "harmony" | "bass";
@@ -242,6 +243,8 @@ export const SOURCE_FILES: SourceFile[] = uniqueSourceNames.map((name,index) => 
   const imported=name === IMPORT_SOURCE_NAME;
   const maxEnd=Math.max(...fragments.map((fragment) => fragment.end));
   const duration=imported ? 522 : Math.max(93,maxEnd + 38 + (index % 4) * 31);
+  const lead=fragments[0];
+  const parsedKey=parseMusicalKeyLabel(lead?.key);
   return {
     id:sourceIdByName.get(name)!, name, date:imported ? "Aug 20, 2026" : fragments[0].dateLabel, duration,
     format:name.toLowerCase().endsWith(".m4a") ? "M4A · 11.4 MB" : name.toLowerCase().endsWith(".aif") ? "AIFF · 38.7 MB" : "WAV · 24.1 MB",
@@ -249,6 +252,10 @@ export const SOURCE_FILES: SourceFile[] = uniqueSourceNames.map((name,index) => 
     fragmentIds:fragments.map((fragment) => fragment.id),waveform:composeSourceWaveform(fragments,duration),sensitivity:imported ? 68 : 38 + (index * 9) % 34,
     start:Math.min(...fragments.map((fragment) => fragment.start)),end:Math.max(...fragments.map((fragment) => fragment.end)),
     sourceTypes:sourceTypesFor(name),analysisProfile:imported ? MESSY_PHONE_PROFILE : { ...DEFAULT_PROFILE },imported,
+    bpm:lead?.bpm ?? null,
+    key:parsedKey.key,
+    scale:parsedKey.scale,
+    audioUrl:lead?.audio,
   };
 });
 

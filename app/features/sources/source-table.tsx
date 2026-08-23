@@ -3,6 +3,7 @@
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { KeyboardEvent } from "react";
 import { SignalCell } from "@/lib/audio/signal-cell";
+import { resolveSourceAudioUrl } from "@/lib/audio/source-playback";
 import { Button } from "@/lib/ui/button";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import type { ProcessedAudio } from "@/lib/audio/types";
@@ -108,6 +109,10 @@ function columnHeadClass(columnId: SourceSortColumn) {
   );
 }
 
+function sourceTableCellClass(extra?: string) {
+  return cn("source-table-cell", extra);
+}
+
 function SourceTableCell({
   columnId,
   source,
@@ -130,32 +135,32 @@ function SourceTableCell({
   switch (columnId) {
     case "name":
       return (
-        <TableCell className="max-w-[180px] px-2 py-2 font-medium text-foreground">
-          <span className="block truncate" title={source.name}>
+        <TableCell className={sourceTableCellClass("max-w-[180px]")}>
+          <span className="source-table-name block truncate" title={source.name}>
             {source.name}
           </span>
         </TableCell>
       );
     case "signal":
       return (
-        <TableCell className="px-2 py-1.5">
+        <TableCell className={sourceTableCellClass()}>
           <SourceSignalCell source={source} isPreviewing={isPreviewing} canPlay={canPlay} onPreview={onPreview} />
         </TableCell>
       );
     case "date":
-      return <TableCell className="px-2 py-2">{source.date}</TableCell>;
+      return <TableCell className={sourceTableCellClass()}>{source.date}</TableCell>;
     case "duration":
-      return <TableCell className="px-2 py-2">{formatSeconds(source.duration)}</TableCell>;
+      return <TableCell className={sourceTableCellClass()}>{formatSeconds(source.duration)}</TableCell>;
     case "type":
       return (
-        <TableCell className="max-w-[120px] truncate px-2 py-2" title={source.sourceTypes.join(", ")}>
+        <TableCell className={sourceTableCellClass("max-w-[120px] truncate")} title={source.sourceTypes.join(", ")}>
           {source.sourceTypes.join(" · ")}
         </TableCell>
       );
     case "profile":
       return (
         <TableCell
-          className="max-w-[140px] truncate px-2 py-2"
+          className={sourceTableCellClass("max-w-[140px] truncate")}
           title={`${source.analysisProfile.detectors.join(", ")} · ${source.analysisProfile.tempoStrategy}`}
         >
           {source.analysisProfile.name}
@@ -163,24 +168,24 @@ function SourceTableCell({
       );
     case "format":
       return (
-        <TableCell className="px-2 py-2" title={source.format}>
+        <TableCell className={sourceTableCellClass()} title={source.format}>
           {source.format.split(" · ")[0]}
         </TableCell>
       );
     case "tempoKey":
       return (
-        <TableCell className="max-w-[160px] truncate px-2 py-2 text-foreground/90">
+        <TableCell className={sourceTableCellClass("max-w-[160px] truncate text-foreground/90")}>
           <SourceTempoKeyCell source={source} />
         </TableCell>
       );
     case "fragments":
       return (
-        <TableCell className="px-2 py-2">
+        <TableCell className={sourceTableCellClass()}>
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="h-7 px-2.5 text-[11px] font-medium"
+            className="library-card-action h-8 px-3 text-[12px] font-medium"
             onClick={(event) => {
               event.stopPropagation();
               onOpenFragmentation();
@@ -192,7 +197,7 @@ function SourceTableCell({
       );
     case "actions":
       return (
-        <TableCell className="w-10 px-2 py-2">
+        <TableCell className={sourceTableCellClass("w-10")}>
           <SourceRowActions source={source} onRemove={onRemoveSource} />
         </TableCell>
       );
@@ -226,14 +231,14 @@ export function SourceTable({
 
   return (
     <div className="source-table rounded-md border border-border bg-card/40">
-      <Table>
+      <Table className="table-fixed">
         <TableHeader>
           <TableRow className="border-border/80 hover:bg-transparent">
             {SOURCE_COLUMNS.map((column) => (
               <TableHead
                 key={column.id}
                 className={cn(
-                  "h-8 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground",
+                  "h-9 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground",
                   columnHeadClass(column.id),
                   column.id === "actions" && "w-10",
                 )}
@@ -277,7 +282,7 @@ export function SourceTable({
                 key={source.id}
                 tabIndex={0}
                 className={cn(
-                  "cursor-pointer border-border/60 text-[11px] text-muted-foreground transition-colors",
+                  "source-table-data-row cursor-pointer border-border/60 transition-colors",
                   "hover:bg-white/[0.04] hover:text-foreground/85",
                   isSelected && "source-row-selected border-l-2 border-l-[var(--violet)] text-foreground",
                 )}
@@ -295,7 +300,7 @@ export function SourceTable({
                     source={source}
                     fragmentCount={fragmentCount}
                     isPreviewing={isPreviewing}
-                    canPlay={Boolean(auditionFragment || source.audioUrl)}
+                    canPlay={Boolean(resolveSourceAudioUrl(source, (id) => getFragmentById(id).audio))}
                     onPreview={() => {
                       if (auditionFragment) onPreviewFragment(auditionFragment);
                       else onPreviewSource(source);

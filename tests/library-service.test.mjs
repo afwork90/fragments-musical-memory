@@ -256,6 +256,27 @@ test("finalizeImport accepts null-valued analysis fields", async () => {
   });
 });
 
+test("updateSourceAnalysis merges analysis into an existing source document", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const fixturePath = await makeFixtureFile(fixturesDir, "update-analysis.wav", Buffer.from("analysis fixture"));
+    const service = createLibraryService(libraryRoot);
+    const created = await service.beginImport(fixturePath);
+    await service.finalizeImport(created.id, validFinalizeMetadata());
+
+    const updated = await service.updateSourceAnalysis(created.id, {
+      bpm: 104,
+      key: "A",
+      scale: "minor",
+      keyStrength: 72,
+    });
+
+    assert.equal(updated.analysis.bpm, 104);
+    assert.equal(updated.analysis.key, "A");
+    const listed = await service.listSources();
+    assert.equal(listed.find((item) => item.id === created.id)?.analysis.bpm, 104);
+  });
+});
+
 test("resolveAudioPath returns the managed copy path for a known source", async () => {
   await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
     const fixturePath = await makeFixtureFile(fixturesDir, "resolve-me.wav", Buffer.from("fourth fixture"));

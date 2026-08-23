@@ -39,7 +39,7 @@ export function SignalCell({
   onPreview,
   ariaLabel,
   className,
-  waveClassName = "source-signal-wave h-11 min-w-[180px] flex-1",
+  waveClassName,
   desktopDrag,
 }: SignalCellProps) {
   const cached = useCachedAudioBySourceId(cacheSourceAudio && sourceId ? sourceId : null);
@@ -52,12 +52,12 @@ export function SignalCell({
   }, [cached?.peaks, values, slice]);
 
   return (
-    <div className={cn("source-signal-cell flex items-center gap-2", className)}>
+    <div className={cn("source-signal-cell flex w-full min-w-0 items-stretch gap-2", className)}>
       <Button
         type="button"
         variant="ghost"
         size="icon"
-        className={cn("source-play-button size-7 shrink-0", isPreviewing && "text-primary")}
+        className={cn("source-play-button size-9 shrink-0 self-center", isPreviewing && "text-[var(--card-action)]")}
         disabled={!canPlay}
         onClick={(event) => {
           event.stopPropagation();
@@ -65,10 +65,13 @@ export function SignalCell({
         }}
         aria-label={ariaLabel}
       >
-        {isPreviewing ? <Square className="size-3.5 fill-current" /> : <Play className="size-3.5 fill-current" />}
+        {isPreviewing ? <Square className="size-4 fill-current" /> : <Play className="size-4 fill-current" />}
       </Button>
       <div
-        className={cn(sourceId && desktopDrag && "cursor-grab active:cursor-grabbing")}
+        className={cn(
+          "waveform-frame waveform-frame-fill source-signal-wave-slot min-w-0 flex-1",
+          sourceId && desktopDrag && "cursor-grab active:cursor-grabbing",
+        )}
         draggable={Boolean(sourceId && desktopDrag)}
         onDragStart={(event) => {
           if (!sourceId || !desktopDrag) return;
@@ -76,7 +79,11 @@ export function SignalCell({
         }}
         title={sourceId && desktopDrag ? "Drag onto your desktop or into a DAW" : undefined}
       >
-        <ContinuousWaveform values={peaks} active={isPreviewing} className={waveClassName} />
+        <ContinuousWaveform
+          values={peaks}
+          active={isPreviewing}
+          className={cn("source-signal-wave h-full w-full", waveClassName)}
+        />
       </div>
     </div>
   );

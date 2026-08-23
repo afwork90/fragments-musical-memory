@@ -14,7 +14,7 @@ export function SourcesToolbar({ importComplete, query, onQueryChange, onImportC
         type="button"
         size="sm"
         variant="outline"
-        className="import-button h-[30px] border-[#74d8ff8c] bg-[#74d8ff18] text-[#9ce5ff] hover:bg-[#74d8ff] hover:text-[#0d1519]"
+        className="library-card-action h-[30px]"
         onClick={onImportClick}
       >
         {importComplete ? "✓ Imported" : "＋ Import"}

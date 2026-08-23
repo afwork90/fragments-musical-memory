@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/lib/ui/dialog";
+import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { cn } from "@/lib/utils";
 import {
   processAudioFile,
@@ -266,25 +267,30 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg">
         <DialogHeader className="border-b border-border px-6 py-4 text-left">
-          <DialogTitle>Import recording</DialogTitle>
-          <DialogDescription>Electron imports are saved; browser imports last for this session.</DialogDescription>
+          <ModalTitlebar
+            className="mb-0"
+            eyebrow="Import"
+            title={<DialogTitle className="modal-titlebar-title">{decoded?.name ?? "Recording"}</DialogTitle>}
+          />
+          <DialogDescription className="mt-2">
+            Electron imports are saved; browser imports last for this session.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="px-6 py-5">
           {decoded ? (
             <div className="space-y-4">
               <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="truncate font-medium text-foreground">{decoded.name}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {formatSeconds(decoded.duration)} · {decoded.format}
-                  </p>
-                </div>
+                <p className="text-sm text-muted-foreground">
+                  {formatSeconds(decoded.duration)} · {decoded.format}
+                </p>
                 <Button type="button" variant="ghost" size="sm" onClick={reset}>
                   Change file
                 </Button>
               </div>
-              <ContinuousWaveform values={decoded.peaks} active className="h-32 w-full" />
+              <div className="waveform-frame h-32">
+                <ContinuousWaveform values={decoded.peaks} active className="h-full w-full" />
+              </div>
               <AnalysisMetadata audio={decoded} status={metadataStatus} />
             </div>
           ) : status === "decoding" ? (

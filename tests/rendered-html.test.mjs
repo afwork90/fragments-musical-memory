@@ -35,7 +35,7 @@ test("renders the packaged Fragments shell", async () => {
 });
 
 test("ships the complete staged musical corpus and interface data", async () => {
-  const [data, page, workflow, workbench, filters, sourcesToolbar, libraryToolbar, libraryTable, libraryColumns, connectionsTable, duplicateDialog, styles, audioFiles] = await Promise.all([
+  const [data, page, workflow, workbench, filters, sourcesToolbar, libraryToolbar, libraryCardList, libraryListControls, libraryColumns, connectionsTable, duplicateDialog, styles, audioFiles] = await Promise.all([
     readFile(new URL("../app/prototype-data.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/fragments-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/hero-workflow.tsx", import.meta.url), "utf8"),
@@ -43,7 +43,8 @@ test("ships the complete staged musical corpus and interface data", async () => 
     readFile(new URL("../app/library-filter-popover.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/sources/sources-toolbar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/library-toolbar.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/features/library/library-table.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/features/library/library-card-list.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/features/library/library-list-controls.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/library-columns.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/connections-table.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/duplicate-takes-dialog.tsx", import.meta.url), "utf8"),
@@ -59,7 +60,9 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(page, /SourcesView/);
   assert.match(libraryToolbar, /sources-toolbar/);
   assert.doesNotMatch(libraryToolbar, /filter-row/);
-  assert.match(libraryTable, /Filter by \$\{column\.label\}/);
+  assert.match(libraryListControls, /Filter by \$\{column\.label\}/);
+  assert.match(libraryCardList, /LibraryCard/);
+  assert.match(page, /LibraryCardList/);
   assert.match(libraryColumns, /Bars\/Beats/);
   assert.match(page, /ConnectionsTable/);
   assert.match(connectionsTable, /relationship\.score/);
@@ -92,7 +95,7 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(page, /restoreReturn\("map-full"\)/);
   assert.match(page, /next\.length \? next : null/);
   assert.doesNotMatch(page, /CorrectionOverlay/);
-  assert.match(workbench, /Fragmentation sensitivity/);
+  assert.match(workbench, /Fragment sensitivity/);
   assert.match(workbench, /fragment-lanes-scroll/);
   assert.match(workbench, /ruler-edge-magnifier/);
   assert.match(workbench, /fragment-scan-playhead/);

@@ -133,7 +133,7 @@ export function ConnectionsTable({
                       className="h-6 border-[#a99cff35] bg-[#a99cff12] px-2 text-[10px] text-[var(--violet)] hover:bg-[#a99cff22] hover:text-[var(--violet)]"
                       onClick={() => onCombine(relationship)}
                     >
-                      Combine
+                      Affinities
                     </Button>
                   </div>
                 </TableCell>

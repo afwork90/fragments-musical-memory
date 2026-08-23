@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/lib/ui/dialog";
+import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { Fragment } from "@/app/prototype-data";
 
 type DuplicateTakesDialogProps = {
@@ -39,8 +40,12 @@ export function DuplicateTakesDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto border-border bg-card sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Takes</DialogTitle>
-          <DialogDescription>
+          <ModalTitlebar
+            className="mb-0"
+            eyebrow="Takes"
+            title={<DialogTitle className="modal-titlebar-title">Related recordings</DialogTitle>}
+          />
+          <DialogDescription className="mt-2">
             Compare related recordings and choose which take to keep for matching.
           </DialogDescription>
         </DialogHeader>

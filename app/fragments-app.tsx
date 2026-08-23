@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_WEIGHTS,
   DEFAULT_TOLERANCES,
@@ -27,17 +27,28 @@ import { SourceDetailPanel } from "./features/sources/source-detail-panel";
 import { SourcesView } from "./features/sources/sources-view";
 import { SourceSort } from "./features/sources/types";
 import { CombineCandidate, CombineWorkspace, ExportSheet } from "./hero-workflow";
+import fragmentsLogo from "./assets/fragments_logo.svg";
 import { EditableRange, FragmentationWorkbench } from "./fragmentation-workbench";
 import { LibraryFilters, createLibraryFilters } from "./library-filter-popover";
 import { formatSeconds } from "@/lib/format";
 import { bindSourceAudio, retainCachedAudio } from "@/lib/audio/audio-service";
-import { MAP_WORLD, clampMapCamera, fitMapCamera, musicalMapPoint, panMapCamera, zoomMapCameraAt } from "./map-layout.mjs";
+import {
+  PreviewScope,
+  buildFragmentPreviewScope,
+  buildSourcePreviewScope,
+  progressForAudio,
+  resolveSourceAudioUrl,
+  timeForProgress,
+} from "@/lib/audio/source-playback";
+import { analysisNeedsInvention, inventAnalysis } from "@/lib/audio/source-metadata";
+import { SourceAnalysisValues } from "./features/sources/source-detail-panel";
+import { LibraryCard } from "./features/library/library-card";
+import { MAP_WORLD, musicalMapPoint } from "./map-layout.mjs";
 
 type View = "library" | "source" | "map" | "archive";
 type RangeMode = "reasonable" | "experimental";
 type ScoredRelationship = Relationship & { score: number; otherId: string };
-type MapCamera = { x:number;y:number;scale:number };
-type ReturnSnapshot = { kind:"source-edit" | "map-full";view:View;selectedId:string;selectedSourceId:string;connectionsOpen:boolean;advancedOpen:boolean;mapSelectedId:string | null;mapCamera:MapCamera;scrollY:number };
+type ReturnSnapshot = { kind:"source-edit";view:View;selectedId:string;selectedSourceId:string;connectionsOpen:boolean;advancedOpen:boolean;scrollY:number };
 type CorrectionPhase = "edit" | "recompute" | "prompt";
 type SourcePanelMode = "detail" | "fragmentation";
 
@@ -89,10 +100,6 @@ function scoreRelationship(relationship: Relationship, weights: SearchWeights, c
   return Math.round(Math.max(0, Math.min(99, (similarity * .9 + relationship.base * .1 - penalty) * 100)));
 }
 
-function TransformChips({ relationship }: { relationship:Relationship }) {
-  return <div className="chips">{(relationship.transform?.labels ?? ["As recorded"]).map((label) => <span key={label}>{label}</span>)}</div>;
-}
-
 export default function FragmentsApp() {
   const [view, setView] = useState<View>("library");
   const [selectedId, setSelectedId] = useState("f02");
@@ -110,6 +117,7 @@ export default function FragmentsApp() {
   const [sources, setSources] = useState<SourceFile[]>(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));
   const [selectedSourceId, setSelectedSourceId] = useState(OPENING_SOURCE_ID);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const [previewProgress, setPreviewProgress] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -135,17 +143,13 @@ export default function FragmentsApp() {
   const [manualRelationshipIds,setManualRelationshipIds] = useState<Set<string>>(() => new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));
   const [mapSelectedId,setMapSelectedId] = useState<string | null>(null);
   const [hoveredMapId,setHoveredMapId] = useState<string | null>(null);
-  const [mapCamera,setMapCamera] = useState<MapCamera>({ x:0,y:0,scale:1 });
-  const [mapPanning,setMapPanning] = useState(false);
   const returnScroll = useRef(0);
   const returnStack = useRef<ReturnSnapshot[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
   const previewAudio = useRef<HTMLAudioElement | null>(null);
-  const mapViewportRef = useRef<HTMLDivElement>(null);
-  const mapSizeRef = useRef({ width:0,height:0 });
-  const mapDragRef = useRef<{ pointerId:number;startX:number;startY:number;origin:MapCamera } | null>(null);
+  const previewCleanupRef = useRef<(() => void) | null>(null);
+  const previewScopeRef = useRef<PreviewScope | null>(null);
   const mapInspectorCloseRef = useRef<HTMLButtonElement>(null);
-  const mapDidFit = useRef(false);
   const filterMenuOpenRef=useRef(false);
   const closeFilterMenu=useCallback(() => setFilterMenu(null),[]);
 
@@ -154,8 +158,15 @@ export default function FragmentsApp() {
   useEffect(() => {
     const bridge = (window as any).fragments;
     if (!bridge) return;
-    void bridge.listSources().then((documents:any[]) => {
-      const persisted = documents.map((document) => ({
+    void bridge.listSources().then(async (documents:any[]) => {
+      const backfill: Array<{ id: string; analysis: ReturnType<typeof inventAnalysis> }> = [];
+      const persisted = documents.map((document) => {
+        let analysis = document.analysis;
+        if (analysisNeedsInvention(analysis)) {
+          analysis = inventAnalysis(document.id);
+          backfill.push({ id: document.id, analysis });
+        }
+        return {
         id: document.id,
         name: document.originalName,
         date: new Date(document.importedAt).toLocaleDateString("en-US", { month:"short",day:"2-digit",year:"numeric" }),
@@ -171,10 +182,11 @@ export default function FragmentsApp() {
         analysisProfile: MESSY_PHONE_PROFILE,
         imported: true,
         audioUrl: document.audioUrl,
-        bpm: document.analysis?.bpm ?? null,
-        key: document.analysis?.key ?? null,
-        scale: document.analysis?.scale ?? null,
-      })) as SourceFile[];
+        audioCacheKey: document.id,
+        bpm: analysis?.bpm ?? null,
+        key: analysis?.key ?? null,
+        scale: analysis?.scale ?? null,
+      }}) as SourceFile[];
       setSources((current) => [...current.filter((source) => !persisted.some((item) => item.id === source.id)),...persisted]);
       setSourceRanges((current) => ({
         ...current,
@@ -186,6 +198,13 @@ export default function FragmentsApp() {
           color: RANGE_COLORS[index % RANGE_COLORS.length],
         }))])),
       }));
+      for (const item of backfill) {
+        try {
+          await bridge.updateSourceAnalysis(item.id, item.analysis);
+        } catch (error) {
+          console.warn("Could not persist invented analysis:", error);
+        }
+      }
     }).catch((error:any) => console.error("Could not load managed library:", error));
   }, []);
 
@@ -197,12 +216,64 @@ export default function FragmentsApp() {
   const selectedSource = sources.find((source) => source.id === selectedSourceId)!;
   const selectedRanges = sourceRanges[selectedSourceId] ?? [];
 
-  const stopAllAudio = () => {
-    if (previewAudio.current) { previewAudio.current.pause(); previewAudio.current = null; }
-    setPreviewingId(null);
+  const clearPreviewListeners = () => {
+    previewCleanupRef.current?.();
+    previewCleanupRef.current = null;
   };
 
-  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setFilterMenu(null);setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");if (next !== "map") setMapSelectedId(null);setView(next); };
+  const stopAllAudio = () => {
+    clearPreviewListeners();
+    if (previewAudio.current) { previewAudio.current.pause(); previewAudio.current = null; }
+    previewScopeRef.current = null;
+    setPreviewingId(null);
+    setPreviewProgress(0);
+  };
+
+  const fragmentAudioFor = (fragmentId: string) => activeFragments.find((fragment) => fragment.id === fragmentId)?.audio;
+
+  const bindPreviewAudio = (audio: HTMLAudioElement, scope: PreviewScope) => {
+    clearPreviewListeners();
+    previewScopeRef.current = scope;
+    const onTimeUpdate = () => {
+      if (!previewScopeRef.current) return;
+      if (scope.clip && audio.currentTime >= scope.clip.end) {
+        audio.currentTime = scope.clip.start;
+      }
+      setPreviewProgress(progressForAudio(scope, audio.currentTime, audio.duration));
+    };
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    previewCleanupRef.current = () => audio.removeEventListener("timeupdate", onTimeUpdate);
+  };
+
+  const startPreviewScope = (scope: PreviewScope, startRatio = 0) => {
+    stopAllAudio();
+    const audio = new Audio(scope.url);
+    previewAudio.current = audio;
+    audio.loop = !scope.clip;
+    audio.volume = 0.72;
+    setPreviewingId(scope.id);
+
+    const begin = () => {
+      audio.currentTime = timeForProgress(scope, startRatio, audio.duration);
+      setPreviewProgress(startRatio);
+      bindPreviewAudio(audio, scope);
+      audio.play().catch(() => notify("Playback needs one more click in this browser."));
+    };
+
+    if (audio.readyState >= 1) begin();
+    else audio.addEventListener("loadedmetadata", begin, { once: true });
+  };
+
+  const seekPreview = (ratio: number) => {
+    const audio = previewAudio.current;
+    const scope = previewScopeRef.current;
+    if (!audio || !scope || !Number.isFinite(audio.duration)) return;
+    const clamped = Math.min(1, Math.max(0, ratio));
+    audio.currentTime = timeForProgress(scope, clamped, audio.duration);
+    setPreviewProgress(clamped);
+  };
+
+  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setFilterMenu(null);setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCombineCandidates(null);setExportRelationship(null);setDuplicateGroup(null);setImportOpen(false);if (next !== "map") setMapSelectedId(null);setView(next); };
   const notify = (message:string) => { setToast(message); window.setTimeout(() => setToast(null), 2400); };
 
   useEffect(() => {
@@ -226,33 +297,6 @@ export default function FragmentsApp() {
     window.addEventListener("pointerup", finish, { once:true });
     return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); };
   }, [resizingConnections]);
-
-  useEffect(() => {
-    if (view !== "map") return;
-    const viewport=mapViewportRef.current;
-    if (!viewport) return;
-    const measure=() => {
-      const rect=viewport.getBoundingClientRect();
-      const size={ width:rect.width,height:rect.height };
-      if (!size.width || !size.height) return;
-      mapSizeRef.current=size;
-      if (!mapDidFit.current) { mapDidFit.current=true;setMapCamera(fitMapCamera(size)); }
-      else setMapCamera((camera) => clampMapCamera(camera,size));
-    };
-    const observer=new ResizeObserver(measure);
-    observer.observe(viewport);measure();
-    const wheel=(event:WheelEvent) => {
-      if (mapDragRef.current || (event.target as HTMLElement).closest(".map-inspector,.map-controls")) return;
-      event.preventDefault();
-      const rect=viewport.getBoundingClientRect();
-      const unit=event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1;
-      const delta=Math.max(-100,Math.min(100,event.deltaY * unit));
-      const cursor={ x:event.clientX - rect.left,y:event.clientY - rect.top };
-      setMapCamera((camera) => zoomMapCameraAt(camera,camera.scale * Math.exp(-delta * .002),cursor,mapSizeRef.current));
-    };
-    viewport.addEventListener("wheel",wheel,{ passive:false });
-    return () => { observer.disconnect();viewport.removeEventListener("wheel",wheel); };
-  },[view]);
 
   const rankedConnectionsFor = (sourceId:string,limit=6):ScoredRelationship[] => {
     const sourceFragment=activeFragmentById(sourceId);
@@ -347,20 +391,60 @@ export default function FragmentsApp() {
 
   const selectedDuplicates = duplicateGroup ? activeFragments.filter((fragment) => fragment.duplicateGroup === duplicateGroup && !duplicateExclusions.has(fragment.id) && !archived.has(fragment.id)) : [];
 
-  const previewSingle = (fragment:Fragment) => {
-    if (previewingId === fragment.id && previewAudio.current) { previewAudio.current.pause(); previewAudio.current = null; setPreviewingId(null); return; }
-    stopAllAudio();
-    const audio = new Audio(fragment.audio); audio.loop = true; audio.volume = .72; previewAudio.current = audio; setPreviewingId(fragment.id);
-    audio.play().catch(() => notify("Playback needs one more click in this browser."));
+  const previewSingle = (fragment:Fragment, startRatio = 0) => {
+    const scope = buildFragmentPreviewScope(fragment, sourceForId(fragment.sourceId), fragmentAudioFor);
+    if (!scope) return;
+    if (startRatio === 0 && previewingId === fragment.id && previewAudio.current) {
+      stopAllAudio();
+      return;
+    }
+    if (previewingId === fragment.id && previewAudio.current && startRatio > 0) {
+      seekPreview(startRatio);
+      if (previewAudio.current.paused) previewAudio.current.play().catch(() => notify("Playback needs one more click in this browser."));
+      return;
+    }
+    startPreviewScope(scope, startRatio);
   };
 
-  const previewSource = (source: SourceFile) => {
-    const previewKey = `source:${source.id}`;
-    if (previewingId === previewKey && previewAudio.current) { previewAudio.current.pause(); previewAudio.current = null; setPreviewingId(null); return; }
-    if (!source.audioUrl) return;
+  const previewSource = (source: SourceFile, startRatio = 0) => {
+    const scope = buildSourcePreviewScope(source, fragmentAudioFor);
+    if (!scope) return;
+    const previewKey = scope.id;
+    if (startRatio === 0 && previewingId === previewKey && previewAudio.current) {
+      stopAllAudio();
+      return;
+    }
+    if (previewingId === previewKey && previewAudio.current && startRatio > 0) {
+      seekPreview(startRatio);
+      if (previewAudio.current.paused) previewAudio.current.play().catch(() => notify("Playback needs one more click in this browser."));
+      return;
+    }
+    startPreviewScope(scope, startRatio);
+  };
+
+  const saveSourceAnalysis = async (sourceId: string, analysis: SourceAnalysisValues) => {
+    const bridge = (window as any).fragments;
+    if (bridge?.updateSourceAnalysis) {
+      try {
+        await bridge.updateSourceAnalysis(sourceId, { ...analysis, keyStrength: null });
+      } catch (error) {
+        console.error("Could not persist source analysis:", error);
+        notify("Could not save metadata to disk.");
+        return;
+      }
+    }
+    setSources((current) => current.map((source) => source.id === sourceId
+      ? { ...source, bpm: analysis.bpm, key: analysis.key, scale: analysis.scale }
+      : source));
+    notify("Source metadata saved.");
+  };
+
+  const openSourceInfo = (sourceId: string, modal = false) => {
     stopAllAudio();
-    const audio = new Audio(source.audioUrl); audio.loop = true; audio.volume = .72; previewAudio.current = audio; setPreviewingId(previewKey);
-    audio.play().catch(() => notify("Playback needs one more click in this browser."));
+    setSelectedSourceId(sourceId);
+    setSourcePanelMode("detail");
+    setSourceEditorModal(modal);
+    setSourceEditorOpen(true);
   };
 
   const archiveFragment = (id:string) => {
@@ -378,15 +462,17 @@ export default function FragmentsApp() {
   const resetDemo = () => {
     stopAllAudio(); setView("library"); setSelectedId("f02"); setQuery("");setLibraryFilters(createLibraryFilters());setFilterMenu(null);setSort({ column:"date", direction:"desc" });
     setContext("whole"); setRangeMode("reasonable"); setWeights({ ...DEFAULT_WEIGHTS }); setTolerances({ ...DEFAULT_TOLERANCES });setArchived(new Set()); setDuplicateExclusions(new Set());
-    returnStack.current=[];setDuplicateGroup(null);setConnectionsOpen(false);setAdvancedOpen(false);setConnectionsWidth(520);setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(OPENING_SOURCE_ID);setSourceQuery("");setSourceSort({ column:"date",direction:"desc" });setSourceEditorOpen(false);setSourceEditorModal(false);setSourcePanelMode("fragmentation");setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null);setMapCamera({ x:0,y:0,scale:1 });mapDidFit.current=false;notify("Demo restored to 24 fragments before import.");
+    returnStack.current=[];setDuplicateGroup(null);setConnectionsOpen(false);setAdvancedOpen(false);setConnectionsWidth(520);setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(OPENING_SOURCE_ID);setSourceQuery("");setSourceSort({ column:"date",direction:"desc" });setSourceEditorOpen(false);setSourceEditorModal(false);setSourcePanelMode("fragmentation");setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null);notify("Demo restored to 24 fragments before import.");
   };
-  const pushReturn = (kind:ReturnSnapshot["kind"]) => returnStack.current.push({ kind,view,selectedId,selectedSourceId,connectionsOpen,advancedOpen,mapSelectedId,mapCamera:{ ...mapCamera },scrollY:window.scrollY });
+  const pushReturn = (kind:ReturnSnapshot["kind"]) => returnStack.current.push({ kind,view,selectedId,selectedSourceId,connectionsOpen,advancedOpen,scrollY:window.scrollY });
   const restoreReturn = (kind:ReturnSnapshot["kind"]) => {
     const snapshot=returnStack.current.at(-1);
     if (!snapshot || snapshot.kind !== kind) return false;
-    returnStack.current.pop();stopAllAudio();setView(snapshot.view);setSelectedId(snapshot.selectedId);setSelectedSourceId(snapshot.selectedSourceId);setConnectionsOpen(snapshot.connectionsOpen);setAdvancedOpen(snapshot.advancedOpen);setMapSelectedId(snapshot.mapSelectedId);setMapCamera(snapshot.mapCamera);setSourceEditorOpen(false);window.setTimeout(() => window.scrollTo({ top:snapshot.scrollY }),0);return true;
+    returnStack.current.pop();stopAllAudio();setView(snapshot.view);setSelectedId(snapshot.selectedId);setSelectedSourceId(snapshot.selectedSourceId);setConnectionsOpen(snapshot.connectionsOpen);setAdvancedOpen(snapshot.advancedOpen);setSourceEditorOpen(false);window.setTimeout(() => window.scrollTo({ top:snapshot.scrollY }),0);return true;
   };
   const openFragment = (id:string) => { stopAllAudio(); setSelectedId(id); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
+  const highlightLibraryFragment = (id: string) => { setSelectedId(id); };
+  const highlightLibrarySource = (source: SourceFile) => { setSelectedId(`source:${source.id}`); };
   const selectLibrarySource = (source: SourceFile) => {
     stopAllAudio();
     setSelectedId(`source:${source.id}`);
@@ -442,8 +528,7 @@ export default function FragmentsApp() {
     setView("source");
   };
   const sourceForId = (sourceId: string) => sources.find((source) => source.id === sourceId);
-  const openFragmentFromMap = (id:string) => { pushReturn("map-full");openFragment(id); };
-  const closeConnections = () => { if (restoreReturn("map-full")) return;stopAllAudio();setConnectionsOpen(false);setAdvancedOpen(false); };
+  const closeConnections = () => { stopAllAudio();setConnectionsOpen(false);setAdvancedOpen(false); };
   const closeSourceEditor = () => {
     if (correctionRelationship) { setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);return; }
     if (restoreReturn("source-edit")) return;
@@ -486,12 +571,40 @@ export default function FragmentsApp() {
     setSourceRanges((current) => ({ ...current, [id]: [] }));
     setSelectedSourceId(id);
     setSourcePanelMode("fragmentation");
+    setSourceEditorModal(true);
     setSourceEditorOpen(true);
     setImportComplete(true);
     setView("source");
     notify(`Imported ${imported.name}.`);
   };
-  const openCombine = (relationship:ScoredRelationship) => { stopAllAudio();returnScroll.current=window.scrollY;setRelationshipStatuses((current) => ({ ...current,[relationship.id]:current[relationship.id] ?? "auditioned" }));setCombineCandidates([relationship,...connections.filter((item) => item.id !== relationship.id)].slice(0,3));window.scrollTo({ top:0 }); };
+  const openCombine = (relationship:ScoredRelationship) => { stopAllAudio();returnScroll.current=window.scrollY;setRelationshipStatuses((current) => ({ ...current,[relationship.id]:current[relationship.id] ?? "auditioned" }));setCombineCandidates([relationship,...connections.filter((item) => item.id !== relationship.id)]);window.scrollTo({ top:0 }); };
+  const openCombineForAnchor = (fragmentId:string) => {
+    const anchorConnections=rankedConnectionsFor(fragmentId);
+    const top=anchorConnections[0];
+    if (!top) return;
+    stopAllAudio();
+    setSelectedId(fragmentId);
+    setConnectionsOpen(false);
+    setAdvancedOpen(false);
+    setView("library");
+    returnScroll.current=window.scrollY;
+    setRelationshipStatuses((current) => ({ ...current,[top.id]:current[top.id] ?? "auditioned" }));
+    setCombineCandidates([top,...anchorConnections.filter((item) => item.id !== top.id)]);
+    window.scrollTo({ top:0 });
+  };
+  const openMatchesForFragment = (fragmentId:string) => openCombineForAnchor(fragmentId);
+  const openMatchesForSource = (source:SourceFile) => {
+    let anchorId:string | null=null;
+    let bestScore=-1;
+    for (const id of source.fragmentIds) {
+      if (!activeFragments.some((fragment) => fragment.id === id) || archived.has(id)) continue;
+      const top=rankedConnectionsFor(id)[0];
+      if (!top || top.score <= bestScore) continue;
+      bestScore=top.score;
+      anchorId=id;
+    }
+    if (anchorId) openCombineForAnchor(anchorId);
+  };
   const closeCombine = () => { stopAllAudio();setSourceEditorOpen(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setCombineCandidates(null);window.setTimeout(() => window.scrollTo({ top:returnScroll.current }),0); };
   const markRelationship = (relationship:CombineCandidate,status:RelationshipStatus) => setRelationshipStatuses((current) => ({ ...current,[relationship.id]:status }));
   const rejectRelationship = (relationship:CombineCandidate) => { const next=(combineCandidates ?? []).filter((item) => item.id !== relationship.id);markRelationship(relationship,"rejected");setCombineCandidates(next.length ? next : null);if (!next.length) window.setTimeout(() => window.scrollTo({ top:returnScroll.current }),0);notify(next.length ? "Candidate rejected for this session." : "Last candidate rejected. Returned to the search."); };
@@ -522,80 +635,41 @@ export default function FragmentsApp() {
   const mapRelationships=RELATIONSHIPS.filter((relationship) => mapRelationshipScores.has(relationship.id) && !archived.has(relationship.source) && !archived.has(relationship.target) && relationshipStatuses[relationship.id] !== "rejected");
   const mapDegreeFor=(id:string) => mapRelationships.filter((relationship) => relationship.source === id || relationship.target === id);
   const mapFragment=mapSelectedId && !archived.has(mapSelectedId) ? activeFragments.find((fragment) => fragment.id === mapSelectedId) ?? null : null;
-  const mapConnections:ScoredRelationship[]=mapFragment ? mapDegreeFor(mapFragment.id).map((relationship) => ({ ...relationship,score:mapRelationshipScores.get(relationship.id) ?? Math.round(relationship.base * 100),otherId:otherIdFor(relationship,mapFragment.id) })).sort((a,b) => b.score - a.score).slice(0,4) : [];
-  const mapFragmentRelationships=mapFragment ? mapDegreeFor(mapFragment.id) : [];
-  const mapLinks=mapFragment ? { total:mapFragmentRelationships.length,manual:mapFragmentRelationships.filter((relationship) => manualRelationshipIds.has(relationship.id)).length } : { total:0,manual:0 };
-  const mapTakes=mapFragment?.duplicateGroup ? activeFragments.filter((fragment) => fragment.duplicateGroup === mapFragment.duplicateGroup && fragment.id !== mapFragment.id && !archived.has(fragment.id) && !duplicateExclusions.has(fragment.id)).length : 0;
-  const fitCurrentMap=() => { const size=mapSizeRef.current;if (size.width && size.height) setMapCamera(fitMapCamera(size)); };
-  const zoomMapBy=(factor:number) => {
-    const size=mapSizeRef.current;
-    if (!size.width || !size.height) return;
-    setMapCamera((camera) => zoomMapCameraAt(camera,camera.scale * factor,{ x:size.width / 2,y:size.height / 2 },size));
-  };
-  const beginMapPan=(event:ReactPointerEvent<HTMLDivElement>) => {
-    if (!event.isPrimary || mapDragRef.current || event.button !== 0 || (event.target as HTMLElement).closest("button,.map-inspector,.map-controls")) return;
-    event.preventDefault();
-    event.currentTarget.focus({ preventScroll:true });
-    mapDragRef.current={ pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,origin:mapCamera };
-    event.currentTarget.setPointerCapture(event.pointerId);setMapPanning(true);
-  };
-  const moveMapPan=(event:ReactPointerEvent<HTMLDivElement>) => {
-    const drag=mapDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    setMapCamera(panMapCamera(drag.origin,event.clientX - drag.startX,event.clientY - drag.startY,mapSizeRef.current));
-  };
-  const endMapPan=(event:ReactPointerEvent<HTMLDivElement>) => {
-    if (mapDragRef.current?.pointerId !== event.pointerId) return;
-    mapDragRef.current=null;setMapPanning(false);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-  };
-  const handleMapKeyboard=(event:ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.target !== event.currentTarget) return;
-    const size=mapSizeRef.current;
-    if (["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","+","=","-","0","Home"].includes(event.key)) event.preventDefault();
-    if (event.key === "ArrowLeft") setMapCamera((camera) => panMapCamera(camera,40,0,size));
-    if (event.key === "ArrowRight") setMapCamera((camera) => panMapCamera(camera,-40,0,size));
-    if (event.key === "ArrowUp") setMapCamera((camera) => panMapCamera(camera,0,40,size));
-    if (event.key === "ArrowDown") setMapCamera((camera) => panMapCamera(camera,0,-40,size));
-    if (event.key === "+" || event.key === "=") zoomMapBy(1.25);
-    if (event.key === "-") zoomMapBy(.8);
-    if (event.key === "0" || event.key === "Home") fitCurrentMap();
-  };
   const focusMapInspector=() => window.setTimeout(() => mapInspectorCloseRef.current?.focus({ preventScroll:true }),0);
   const closeMapInspector=() => { const id=mapSelectedId;stopAllAudio();setMapSelectedId(null);if (id) window.setTimeout(() => document.querySelector<HTMLButtonElement>(`[data-map-node="${id}"]`)?.focus({ preventScroll:true }),0); };
   const selectAndRevealMapNode=(id:string,moveFocus=false) => {
     stopAllAudio();setSelectedId(id);setMapSelectedId(id);
-    const point=mapPoints.get(id),size=mapSizeRef.current;
     if (moveFocus) focusMapInspector();
-    if (!point || !size.width || !size.height) return;
-    setMapCamera((camera) => {
-      const screenX=camera.x + point.x * camera.scale,screenY=camera.y + point.y * camera.scale;
-      const safeSize={ width:size.width,height:Math.max(280,size.height - 175) };
-      const left=42,right=Math.max(left,safeSize.width - 42),top=50,bottom=Math.max(top,safeSize.height - 24);
-      const dx=screenX < left ? left - screenX : screenX > right ? right - screenX : 0;
-      const dy=screenY < top ? top - screenY : screenY > bottom ? bottom - screenY : 0;
-      return dx || dy ? panMapCamera(camera,dx,dy,safeSize) : camera;
-    });
   };
   const editorRanges=correctionRelationship ? (combineDraftRanges ?? []) : selectedRanges;
   const editorSensitivity=correctionRelationship ? (combineDraftSensitivity ?? selectedSource.sensitivity) : selectedSource.sensitivity;
   const correctedRange=correctionRelationship ? editorRanges.find((range) => range.fragmentId === correctionRelationship.otherId) : null;
   const correctionFooter=correctionRelationship && correctionPhase === "recompute" ? <div className="recompute workbench-result"><i/><strong>Recomputing metadata and active match…</strong><span>Revision {(correctionOriginal?.analysisRevision ?? 1) + 1}</span></div> : correctionRelationship && correctionPhase === "prompt" && correctionOriginal ? <div className="correction-result workbench-result"><div className="metadata-diff"><span>Field</span><span>Before</span><span>After</span>{[["Duration",correctionOriginal.duration,formatSeconds((correctedRange?.end ?? 0) - (correctedRange?.start ?? 0))],["Key",correctionOriginal.key,"C minor"],["BPM",correctionOriginal.bpm,"90"],["Bars",correctionOriginal.bars,"3"],["Beats",correctionOriginal.beats,"17"],["Confidence",`${Math.round(correctionOriginal.confidence * 100)}%`,`93%`],["Match",`${correctionRelationship.score}%`,`76%`]].map((row) => row.map((cell,index) => <span className={index === 2 ? "changed" : ""} key={`${row[0]}-${index}`}>{cell}</span>))}</div><div className="link-prompt"><span className="relationship-badge manual">criteria changed</span><h3>This fragment no longer matches the original search. Keep it linked to this comparison?</h3><p>The boundary correction is saved either way. A manual link preserves your musical judgment.</p><div><button onClick={rejectCorrectionLink}>Reject and show next</button><button className="primary-button" onClick={keepCorrectionLink}>Yes, keep linked</button></div></div></div> : null;
   const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => correctionRelationship ? setCombineDraftRanges(ranges) : setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges }))} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} saveLabel={correctionRelationship ? "Save & recompute" : "Save boundaries"} footerContent={correctionFooter}/> : null;
-  const detailAuditionFragment=selectedSource.fragmentIds[0] ? activeFragmentById(selectedSource.fragmentIds[0]) : null;
-  const detailPanel=sourceEditorOpen && sourcePanelMode === "detail" ? <SourceDetailPanel source={selectedSource} fragmentCount={selectedRanges.length} isPreviewing={previewingId === (detailAuditionFragment?.id ?? `source:${selectedSource.id}`)} canPlay={Boolean(detailAuditionFragment || selectedSource.audioUrl)} onPreview={() => detailAuditionFragment ? previewSingle(detailAuditionFragment) : previewSource(selectedSource)} onClose={closeSourceEditor}/> : null;
+  const detailPanel=sourceEditorOpen && sourcePanelMode === "detail" ? <SourceDetailPanel
+    source={selectedSource}
+    fragmentCount={selectedRanges.length}
+    isPreviewing={previewingId === `source:${selectedSource.id}`}
+    canPlay={Boolean(resolveSourceAudioUrl(selectedSource, fragmentAudioFor))}
+    editable={!sourceEditorModal}
+    onPreview={() => previewSource(selectedSource)}
+    onClose={closeSourceEditor}
+    onSaveAnalysis={(analysis) => saveSourceAnalysis(selectedSource.id, analysis)}
+  /> : null;
 
   return (
     <main className="app-shell">
       <header className="topbar">
-        <button className="brand" onClick={() => navigate("library")} aria-label="Fragments home"><span className="brand-mark">F</span><span>Fragments</span></button>
+        <button className="brand" onClick={() => navigate("library")} aria-label="Fragments home">
+          <img src={fragmentsLogo.src} alt="Fragments" className="brand-logo" width={113} height={29} />
+        </button>
         <nav aria-label="Primary">
           <button className={view === "library" ? "nav-active" : ""} onClick={() => navigate("library")}>Library</button>
           <button className={view === "source" ? "nav-active" : ""} onClick={() => navigate("source")}>Sources</button>
           <button className={view === "map" ? "nav-active" : ""} onClick={() => navigate("map")}>Map</button>
           {/* <button className={view === "archive" ? "nav-active" : ""} onClick={() => navigate("archive")}>Archive {archived.size > 0 && <b>{archived.size}</b>}</button> */}
         </nav>
-        <div className="index-status"><span /><small>{activeFragments.length} surfaced · 2,418 indexed</small></div>
+        {/* <div className="index-status"><span /><small>{activeFragments.length} surfaced · 2,418 indexed</small></div> */}
         {/* <button className="reset" onClick={resetDemo}>↺ Reset demo</button> */}
       </header>
 
@@ -608,12 +682,12 @@ export default function FragmentsApp() {
         onClose={closeCombine}
         onEdit={beginCombineSourceEdit}
         onExport={setExportRelationship}
-        onSave={(relationship) => { markRelationship(relationship,"preferred");notify("Combination saved as Preferred."); }}
+        onSave={(relationship) => { markRelationship(relationship,"preferred");notify("Affinity saved as Preferred."); }}
         onReject={rejectRelationship}
         onAuditioned={(relationship) => { if (!relationshipStatuses[relationship.id]) markRelationship(relationship,"auditioned"); }}
       />}
       {combineCandidates && correctionRelationship && sourceEditorOpen && <div className="source-editor-overlay" role="dialog" aria-modal="true" aria-label="Edit source boundaries">{fragmentationPanel}</div>}
-      {!combineCandidates && sourceEditorOpen && sourceEditorModal && <div className="source-editor-overlay" role="dialog" aria-modal="true" aria-label="Fragmentation">{fragmentationPanel}</div>}
+      {!combineCandidates && sourceEditorOpen && sourceEditorModal && sourcePanelMode === "fragmentation" && <div className="source-editor-overlay" role="dialog" aria-modal="true" aria-label="Fragment">{fragmentationPanel}</div>}
 
       {!combineCandidates && view === "library" && <LibraryView
         sources={sources}
@@ -623,6 +697,7 @@ export default function FragmentsApp() {
         resizingConnections={resizingConnections}
         connectionsWidth={connectionsWidth}
         previewingId={previewingId}
+        previewProgress={previewProgress}
         query={query}
         sort={sort}
         filters={libraryFilters}
@@ -636,10 +711,18 @@ export default function FragmentsApp() {
         onFiltersChange={setLibraryFilters}
         onOpenColumnFilter={openColumnFilter}
         onCloseFilterMenu={closeFilterMenu}
-        onSelectFragment={openFragment}
-        onSelectSource={selectLibrarySource}
+        onHighlightFragment={highlightLibraryFragment}
+        onHighlightSource={highlightLibrarySource}
+        onOpenMatchesFragment={openMatchesForFragment}
+        onOpenMatchesSource={openMatchesForSource}
+        onOpenInfo={(sourceId) => openSourceInfo(sourceId, false)}
+        fragmentAudioFor={fragmentAudioFor}
         onPreviewFragment={previewSingle}
         onPreviewSource={previewSource}
+        onSeekFragment={(fragment, ratio) => previewSingle(fragment, ratio)}
+        onSeekSource={(source, ratio) => previewSource(source, ratio)}
+        infoPanelOpen={sourceEditorOpen && !sourceEditorModal && sourcePanelMode === "detail"}
+        infoPanel={detailPanel}
         connectionsPanel={connectionsOpen && (connectionAnchorFragmentId || selectedLibrarySourceId) ? <aside className="connections">
           <button type="button" className="panel-resizer" role="slider" aria-label="Resize matches panel" aria-orientation="vertical" aria-valuemin={420} aria-valuemax={760} aria-valuenow={connectionsWidth} onPointerDown={(event) => { event.preventDefault(); setResizingConnections(true); }} onDoubleClick={() => setConnectionsWidth(520)} onKeyDown={(event) => { if (event.key === "ArrowLeft") { event.preventDefault(); setConnectionsWidth((width) => Math.min(760,width + 20)); } if (event.key === "ArrowRight") { event.preventDefault(); setConnectionsWidth((width) => Math.max(420,width - 20)); } }}><span /></button>
           <div className="connections-head"><h2>Matches</h2><button className="panel-close" onClick={closeConnections} aria-label="Close matches">×</button></div>
@@ -691,7 +774,7 @@ export default function FragmentsApp() {
         onQueryChange={setSourceQuery}
         onSortChange={setSourceSort}
         onImportClick={() => setImportOpen(true)}
-        onSelectSource={(sourceId) => openSourceEditor(sourceId, "detail", false)}
+        onSelectSource={(sourceId) => openSourceInfo(sourceId, false)}
         onOpenFragmentation={(sourceId) => openSourceEditor(sourceId, "fragmentation", true)}
         onPreviewFragment={previewSingle}
         onPreviewSource={previewSource}
@@ -701,29 +784,41 @@ export default function FragmentsApp() {
       />}
 
       {!combineCandidates && view === "map" && <section className="page-view map-page">
-        <div className="panel-titlebar map-heading"><h1>Map</h1><div className="map-legend"><span><i className="dot violet"/>Direct affinity</span><span><i className="line amber"/>Transformed bridge</span><span><i className="line take"/>Related takes</span><span><i className="node-size"/>Size = matches</span><span className="dimension-legend">Position · tonal focus × timbral brightness</span></div></div>
-        {/* A focusable region provides keyboard pan/zoom without forcing screen readers into application mode. */}
-        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
-        <div ref={mapViewportRef} className={`graph-board ${mapPanning ? "panning" : ""}`} role="region" aria-label="Musical fragment map" aria-describedby="map-help" tabIndex={0} onPointerDown={beginMapPan} onPointerMove={moveMapPan} onPointerUp={endMapPan} onPointerCancel={endMapPan} onLostPointerCapture={endMapPan} onKeyDown={handleMapKeyboard}>
-          <div className="map-controls" role="group" aria-label="Map zoom controls"><button onClick={() => zoomMapBy(.8)} aria-label="Zoom out">−</button><output aria-label="Map zoom" aria-live="polite">{Math.round(mapCamera.scale * 100)}%</output><button onClick={() => zoomMapBy(1.25)} aria-label="Zoom in">＋</button><button className="map-fit" onClick={fitCurrentMap}>Fit</button></div>
-          <div className="graph-canvas" style={{ width:MAP_WORLD.width,height:MAP_WORLD.height,transform:`translate3d(${mapCamera.x}px,${mapCamera.y}px,0) scale(${mapCamera.scale})`,"--axis-font":`${7 / mapCamera.scale}px`,"--edge-height":`${1 / mapCamera.scale}px` } as CSSProperties}>
+        <div className="panel-titlebar map-heading"><div className="map-legend"><span><i className="dot violet"/>Direct affinity</span><span><i className="line amber"/>Transformed bridge</span><span><i className="line take"/>Related takes</span><span><i className="node-size"/>Size = matches</span><span className="dimension-legend">Position · tonal focus × timbral brightness</span></div></div>
+        <div className="graph-board" role="region" aria-label="Musical fragment map" aria-describedby="map-help">
+          <div className="graph-canvas">
             <div className="map-grid" aria-hidden="true"/>
             <div className="map-axis map-axis-x" aria-hidden="true"><span>Unpitched / textural</span><b>Tonal focus</b><span>Pitched / melodic</span></div>
             <div className="map-axis map-axis-y" aria-hidden="true"><span>Bright / airy</span><b>Timbral brightness</b><span>Dark / warm</span></div>
-            {mapTakeEdges.map((edge) => { const a=mapPoints.get(edge.source),b=mapPoints.get(edge.target);if (!a || !b || archived.has(edge.source) || archived.has(edge.target)) return null;const dx=b.x-a.x,dy=b.y-a.y;return <i key={`take-${edge.source}-${edge.target}`} className="graph-line take-edge" style={{ left:a.x,top:a.y,width:Math.hypot(dx,dy),transform:`rotate(${Math.atan2(dy,dx)*180/Math.PI}deg)` }}/>; })}
-            {mapRelationships.map((relationship) => {
-              const a=mapPoints.get(relationship.source),b=mapPoints.get(relationship.target);
-              if (!a || !b || archived.has(relationship.source) || archived.has(relationship.target)) return null;
-              const dx=b.x-a.x,dy=b.y-a.y;const highlighted=hoveredMapId === relationship.source || hoveredMapId === relationship.target;
-              return <i key={relationship.id} className={`graph-line ${relationshipIsTransformed(relationship) ? "bridge" : ""} ${highlighted ? "highlighted" : ""}`} style={{ left:a.x,top:a.y,width:Math.hypot(dx,dy),transform:`rotate(${Math.atan2(dy,dx)*180/Math.PI}deg)`,"--edge-opacity":Math.max(.24,relationship.base * .62) } as CSSProperties}/>;
-            })}
-            {mapFragments.map((fragment) => { if (archived.has(fragment.id)) return null;const point=mapPoints.get(fragment.id)!;const shortName=fragment.name.length > 19 ? `${fragment.name.slice(0,18)}…` : fragment.name;const links=mapDegreeFor(fragment.id);const size=17 + Math.min(6,links.length) * 1.25;const compensation=Math.max(1,24 / Math.max(1,size * mapCamera.scale));return <button key={fragment.id} data-map-node={fragment.id} title={fragment.name} className={`graph-node role-${fragment.role.toLowerCase()} ${mapSelectedId === fragment.id ? "selected" : ""}`} style={{ left:point.x,top:point.y,"--node-size":`${size}px`,"--node-compensation":compensation,"--node-hover-compensation":compensation * 1.25,"--label-opacity":mapCamera.scale < .45 ? 0 : .58 } as CSSProperties} onMouseEnter={() => setHoveredMapId(fragment.id)} onMouseLeave={() => setHoveredMapId(null)} onFocus={() => setHoveredMapId(fragment.id)} onBlur={() => setHoveredMapId(null)} onClick={(event) => { stopAllAudio();setSelectedId(fragment.id);setMapSelectedId(fragment.id);if (event.detail === 0) focusMapInspector(); }} aria-label={`Inspect ${fragment.name}, ${fragment.role}, ${fragment.key}, ${fragment.bpm} BPM, ${links.length} matches`}><i/><span>{shortName}</span><small>{fragment.name}</small></button>; })}
+            <svg className="graph-edges" viewBox={`0 0 ${MAP_WORLD.width} ${MAP_WORLD.height}`} preserveAspectRatio="none" aria-hidden="true">
+              {mapTakeEdges.map((edge) => { const a=mapPoints.get(edge.source),b=mapPoints.get(edge.target);if (!a || !b || archived.has(edge.source) || archived.has(edge.target)) return null;return <line key={`take-${edge.source}-${edge.target}`} className="take-edge" x1={a.x} y1={a.y} x2={b.x} y2={b.y}/>; })}
+              {mapRelationships.map((relationship) => {
+                const a=mapPoints.get(relationship.source),b=mapPoints.get(relationship.target);
+                if (!a || !b || archived.has(relationship.source) || archived.has(relationship.target)) return null;
+                const highlighted=hoveredMapId === relationship.source || hoveredMapId === relationship.target;
+                return <line key={relationship.id} className={`${relationshipIsTransformed(relationship) ? "bridge" : ""} ${highlighted ? "highlighted" : ""}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} style={{ opacity:Math.max(.24,relationship.base * .62) }}/>;
+              })}
+            </svg>
+            {mapFragments.map((fragment) => { if (archived.has(fragment.id)) return null;const point=mapPoints.get(fragment.id)!;const shortName=fragment.name.length > 22 ? `${fragment.name.slice(0,21)}…` : fragment.name;const links=mapDegreeFor(fragment.id);const size=17 + Math.min(6,links.length) * 1.25;return <button key={fragment.id} data-map-node={fragment.id} title={fragment.name} className={`graph-node role-${fragment.role.toLowerCase()} ${mapSelectedId === fragment.id ? "selected" : ""}`} style={{ left:`${(point.x / MAP_WORLD.width) * 100}%`,top:`${(point.y / MAP_WORLD.height) * 100}%`,"--node-size":`${size}px` } as CSSProperties} onMouseEnter={() => setHoveredMapId(fragment.id)} onMouseLeave={() => setHoveredMapId(null)} onFocus={() => setHoveredMapId(fragment.id)} onBlur={() => setHoveredMapId(null)} onClick={(event) => { stopAllAudio();setSelectedId(fragment.id);setMapSelectedId(fragment.id);if (event.detail === 0) focusMapInspector(); }} aria-label={`Inspect ${fragment.name}, ${fragment.role}, ${fragment.key}, ${fragment.bpm} BPM, ${links.length} matches`}><i/><span>{shortName}</span></button>; })}
           </div>
-          <span id="map-help" className="sr-only">Drag the background to pan. Use the mouse wheel or plus and minus buttons to zoom. Arrow keys pan, and Home fits the map. Horizontal position moves from unpitched and textural to pitched and melodic. Vertical position moves from bright and airy to dark and warm.</span>
+          <span id="map-help" className="sr-only">Horizontal position moves from unpitched and textural to pitched and melodic. Vertical position moves from bright and airy to dark and warm.</span>
           {mapFragment && <section className="map-inspector" aria-label={`Map details for ${mapFragment.name}`}>
             <button ref={mapInspectorCloseRef} className="map-inspector-close" onClick={closeMapInspector} aria-label="Close map details">×</button>
-            <div className="map-fragment-mini" role="row"><button className={`wave-play ${previewingId === mapFragment.id ? "playing" : ""}`} onClick={() => previewSingle(mapFragment)} aria-label={`${previewingId === mapFragment.id ? "Stop" : "Play"} ${mapFragment.name}`}><Waveform values={mapFragment.waveform} active={previewingId === mapFragment.id}/></button><span><b>{mapFragment.name}</b><small>{sourceNameFor(mapFragment)}</small></span><em>{mapFragment.key}</em><em>{mapFragment.bpm} BPM</em><em>{mapFragment.role}</em><span className="map-link-count"><b>{mapLinks.total} matches</b>{mapLinks.manual > 0 && <i>Manual matches {mapLinks.manual}</i>}</span><span>{mapTakes > 0 ? `${mapTakes + 1} takes` : "—"}</span></div>
-            <div className="map-connections-mini"><header><b>Matches</b><button onClick={() => openFragmentFromMap(mapFragment.id)}>Open full view →</button></header>{mapConnections.map((relationship) => { const target=activeFragmentById(relationship.otherId);return <div className="map-connection-mini" key={relationship.id}><strong>{relationship.score}%</strong><button className={`wave-play ${previewingId === target.id ? "playing" : ""}`} onClick={() => previewSingle(target)} aria-label={`${previewingId === target.id ? "Stop" : "Play"} ${target.name}`}><Waveform values={target.waveform} active={previewingId === target.id}/></button><button className="map-target" onClick={(event) => selectAndRevealMapNode(target.id,event.detail === 0)}>{target.name}</button><TransformChips relationship={relationship}/></div>;})}{mapConnections.length === 0 && <p>No active matches under the current criteria.</p>}</div>
+            <LibraryCard
+              item={{ kind:"fragment", id:mapFragment.id, fragment:mapFragment }}
+              isSelected={false}
+              isPreviewing={previewingId === mapFragment.id}
+              previewProgress={previewingId === mapFragment.id ? previewProgress : null}
+              sourceNameFor={sourceNameFor}
+              sourceForId={sourceForId}
+              linkSummaryFor={linkSummaryFor}
+              fragmentAudioFor={fragmentAudioFor}
+              onSelect={() => {}}
+              onPreview={() => previewSingle(mapFragment)}
+              onSeek={(ratio) => previewSingle(mapFragment, ratio)}
+              onOpenMatches={() => openMatchesForFragment(mapFragment.id)}
+              onOpenInfo={() => openSourceInfo(mapFragment.sourceId, true)}
+            />
           </section>}
         </div>
       </section>}
