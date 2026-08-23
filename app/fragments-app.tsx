@@ -27,7 +27,7 @@ import { SourceDetailPanel } from "./features/sources/source-detail-panel";
 import { SourcesView } from "./features/sources/sources-view";
 import { SourceSort } from "./features/sources/types";
 import { CombineCandidate, CombineWorkspace, ExportSheet } from "./hero-workflow";
-import fragmentsLogo from "./assets/fragments_logo.svg";
+import { FRAGMENTS_LOGO_SRC } from "./fragments-logo";
 import { EditableRange, FragmentationWorkbench } from "./fragmentation-workbench";
 import { LibraryFilters, createLibraryFilters } from "./library-filter-popover";
 import { formatSeconds } from "@/lib/format";
@@ -661,7 +661,7 @@ export default function FragmentsApp() {
     <main className="app-shell">
       <header className="topbar">
         <button className="brand" onClick={() => navigate("library")} aria-label="Fragments home">
-          <img src={fragmentsLogo.src} alt="Fragments" className="brand-logo" width={113} height={29} />
+          <img src={FRAGMENTS_LOGO_SRC} alt="Fragments" className="brand-logo" width={113} height={29} />
         </button>
         <nav aria-label="Primary">
           <button className={view === "library" ? "nav-active" : ""} onClick={() => navigate("library")}>Library</button>
