@@ -38,10 +38,6 @@
         "filter": ["f??.wav"]
       },
       {
-        "from": "resources",
-        "to": "resources"
-      },
-      {
         "from": "lib/domain/library-service.mjs",
         "to": "library-service.mjs"
       }
