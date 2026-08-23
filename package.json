@@ -12,6 +12,7 @@
     "dev:electron": "npm run build:electron && wait-on http://localhost:3000 && cross-env ELECTRON_RENDERER_URL=http://localhost:3000 node electron/launch.cjs",
     "start:electron": "npm run build && node electron/launch.cjs",
     "build:renderer": "vinext build",
+    "build:pages": "vinext build",
     "build:electron": "tsc -p electron/tsconfig.json && node electron/postbuild.cjs",
     "build": "npm run build:renderer && npm run build:electron",
     "compute-waveforms": "node scripts/compute-prototype-waveforms.mjs",
