@@ -10,6 +10,29 @@ export function formatMusicalKey(key: string | null | undefined, scale: string |
   return scale ? `${key} ${scale}` : key;
 }
 
+/** Prefer primary analysis fields, then fall back (e.g. fragment → source). */
+export function resolvedMusicalKey(
+  primary?: { key?: string | null; scale?: string | null } | null,
+  fallback?: { key?: string | null; scale?: string | null } | null,
+) {
+  const key = primary?.key?.trim() || fallback?.key?.trim() || null;
+  const scale = primary?.scale?.trim() || fallback?.scale?.trim() || null;
+  return formatMusicalKey(key, scale);
+}
+
+/** Persisted source.json analysis wins over quick preview analysis from the audio cache. */
+export function resolvedSourceAnalysis(
+  source: { bpm?: number | null; key?: string | null; scale?: string | null },
+  cached?: { analysis: { bpm?: number | null; key?: string | null; scale?: string | null; keyStrength?: number | null } } | null,
+) {
+  return {
+    bpm: source.bpm ?? cached?.analysis.bpm ?? null,
+    key: source.key ?? cached?.analysis.key ?? null,
+    scale: source.scale ?? cached?.analysis.scale ?? null,
+    keyStrength: cached?.analysis.keyStrength ?? null,
+  };
+}
+
 /** Case/spacing-insensitive key label for filter matching. */
 export function normalizeKeyLabel(label: string | null | undefined) {
   if (!label) return "";

@@ -404,10 +404,9 @@ test("archiveSource hides a source from listSources but keeps its folder on disk
   });
 });
 
-test("beginImport restores a soft-deleted source with the same content hash", async () => {
+test("beginImport restores a soft-deleted source with the same filename", async () => {
   await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
-    const fixtureContents = Buffer.from("restore-by-hash fixture");
-    const fixturePath = await makeFixtureFile(fixturesDir, "restore-me.wav", fixtureContents);
+    const fixturePath = await makeFixtureFile(fixturesDir, "restore-me.wav", Buffer.from("restore-by-filename fixture"));
     const service = createLibraryService(libraryRoot);
     const created = await service.beginImport(fixturePath);
     const sliced = [
@@ -418,7 +417,8 @@ test("beginImport restores a soft-deleted source with the same content hash", as
     await service.updateFragments(created.id, sliced);
     await service.archiveSource(created.id);
 
-    const restored = await service.beginImport(fixturePath);
+    const reimportPath = await makeFixtureFile(fixturesDir, "restore-me.wav", Buffer.from("different bytes, same name"));
+    const restored = await service.beginImport(reimportPath);
 
     assert.equal(restored.id, created.id);
     assert.equal(restored.restored, true);

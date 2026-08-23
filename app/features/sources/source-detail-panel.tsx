@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Play, Square } from "lucide-react";
 import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
-import { formatMusicalKey } from "@/lib/audio/source-metadata";
+import { formatMusicalKey, resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
 import { Button } from "@/lib/ui/button";
 import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
@@ -64,10 +64,7 @@ export function SourceDetailPanel({
 }: SourceDetailPanelProps) {
   const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
   const values = cached?.peaks ?? source.waveform;
-  const resolvedBpm = cached?.analysis.bpm ?? source.bpm ?? null;
-  const resolvedKey = cached?.analysis.key ?? source.key ?? null;
-  const resolvedScale = cached?.analysis.scale ?? source.scale ?? null;
-  const keyStrength = cached?.analysis.keyStrength ?? null;
+  const { bpm: resolvedBpm, key: resolvedKey, scale: resolvedScale, keyStrength } = resolvedSourceAnalysis(source, cached);
   const keyLabel = formatMusicalKey(resolvedKey, resolvedScale);
   const roleOptions = LIBRARY_ROLES.filter((role): role is MusicalRole => role !== "All");
 

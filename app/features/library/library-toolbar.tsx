@@ -9,7 +9,7 @@ import { Button } from "@/lib/ui/button";
 import { cn } from "@/lib/utils";
 
 const SORT_COLUMNS = LIBRARY_COLUMNS.filter((column) =>
-  ["name", "source", "date", "duration", "key", "tempo", "links"].includes(column.id),
+  ["name", "source", "date", "uploaded", "duration", "key", "tempo", "links"].includes(column.id),
 );
 
 type LibraryToolbarProps = {

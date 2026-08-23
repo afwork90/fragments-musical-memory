@@ -20,6 +20,7 @@ import {
   quickAnalyzeCached,
   releaseCachedAudio,
   retainCachedAudio,
+  updateCachedAnalysis,
 } from "@/lib/audio/audio-service";
 import type { ProcessedAudio } from "@/lib/audio/types";
 import { formatSeconds } from "@/lib/format";
@@ -206,7 +207,22 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
       pendingImportRef.current = pending;
       const next = await processAudioUrl(pending.audioUrl, pending.originalName, { analyze: false });
       applyDecoded(next);
-      runQuickAnalysis(next.cacheKey);
+      const persistedAnalysis = pending.analysis as { bpm?: number | null; key?: string | null; scale?: string | null; keyStrength?: number | null } | undefined;
+      if (pending.restored && persistedAnalysis && (persistedAnalysis.bpm != null || persistedAnalysis.key != null)) {
+        const enriched = updateCachedAnalysis(next.cacheKey, {
+          ...next.analysis,
+          bpm: persistedAnalysis.bpm ?? null,
+          key: persistedAnalysis.key ?? null,
+          scale: persistedAnalysis.scale ?? null,
+          keyStrength: persistedAnalysis.keyStrength ?? null,
+        });
+        if (enriched) setDecoded(enriched);
+        setMetadataStatus("ready");
+      } else if (next.analysis.bpm != null || next.analysis.key != null) {
+        setMetadataStatus("ready");
+      } else {
+        runQuickAnalysis(next.cacheKey);
+      }
     } catch (error) {
       console.error("Persistent import failed:", error);
       const message = error && typeof error === "object" && "code" in error && error.code === "DUPLICATE_SOURCE"
@@ -262,11 +278,11 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
     if (bridge && pending) {
       if (pending.restored || pending.duration) {
         const listed = await bridge.listSources();
-        const existing = listed.find((item: { id: string }) => item.id === pending.id) ?? pending;
-        persistedId = existing.id;
-        persistedAudioUrl = existing.audioUrl ?? pending.audioUrl;
+        const existing = listed.find((item: { id: string }) => item.id === pending.id);
+        persistedId = (existing ?? pending).id;
+        persistedAudioUrl = (existing ?? pending).audioUrl ?? pending.audioUrl;
         restored = Boolean(pending.restored);
-        persistedDocument = existing;
+        persistedDocument = existing ?? pending;
       } else {
         const finalized = await bridge.finalizeImport(pending.id, {
           duration: decoded.duration,

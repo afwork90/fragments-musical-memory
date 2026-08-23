@@ -26,6 +26,7 @@ export interface Fragment extends FragmentRef, AnalysisMetadata {
   source: string;
   date: string;
   dateLabel: string;
+  uploadedAt?: string;
   duration: string;
   key: string;
   alternateKeys: string[];
@@ -106,6 +107,7 @@ export interface SourceFile {
   bpm?: number | null;
   key?: string | null;
   scale?: string | null;
+  uploadedAt?: string;
 }
 
 export interface ImportSession { sourceId:string; tags:SourceType[]; stage:"classify" | "Importing" | "Segmenting" | "Extracting metadata" | "Matching" | "Ready"; }
@@ -194,6 +196,7 @@ export const FRAGMENTS: Fragment[] = rawFragments.map((fragment, index) => {
     beats, bars:["f01","f02","f04","f06"].includes(fragment.id) ? 4 : Math.max(1,Math.round(beats / 4)), confidence:fragment.id === "f01" ? .91 : .72 + ((index * 7) % 24) / 100,
     userTags:fragment.id === "f01" ? ["late night","guitar"] : [fragment.role.toLowerCase()], analysisRevision:1,
     sourceTypes:sourceTypesFor(fragment.source), waveform:fragmentWaveform(fragment.id), audio:`/audio/f${String(index + 1).padStart(2,"0")}.wav`,
+    uploadedAt:fragment.date,
   };
 });
 
@@ -256,6 +259,7 @@ export const SOURCE_FILES: SourceFile[] = uniqueSourceNames.map((name,index) => 
     key:parsedKey.key,
     scale:parsedKey.scale,
     audioUrl:lead?.audio,
+    uploadedAt:imported ? "2026-08-20" : lead?.date ?? "2020-01-01",
   };
 });
 

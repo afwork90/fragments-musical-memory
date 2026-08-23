@@ -62,8 +62,7 @@ export function SourceRowActions({ source, onRemove }: SourceRowActionsProps) {
             />
             <DialogDescription className="mt-2">
               This removes <strong className="font-medium text-foreground">{source.name}</strong> and its
-              fragments from Fragments. Your source folder and slices are kept on disk — import the same file
-              again to restore them.
+              fragments from Fragments. Your source folder and slices are kept on disk — import a file with the same name again to restore them.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

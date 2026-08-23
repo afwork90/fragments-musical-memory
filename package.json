@@ -18,10 +18,12 @@
     "build": "npm run build:renderer && npm run build:electron",
     "compute-waveforms": "node scripts/compute-prototype-waveforms.mjs",
     "test": "npm run build && node --test tests/*.test.mjs",
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder",
+    "pack": "npm run build && npm run prepack-electron && electron-builder --dir",
+    "dist": "npm run build && npm run prepack-electron && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",
-    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:win": "npm run build && npm run prepack-electron && electron-builder --win --x64",
+    "prepack-electron": "node scripts/prepack-electron.mjs",
+    "clean:release:win": "node scripts/clean-release-win.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "build": {

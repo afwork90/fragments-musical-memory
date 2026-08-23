@@ -47,9 +47,7 @@ type LibraryViewProps = {
   connectionsPanel: ReactNode;
   infoPanelOpen: boolean;
   infoPanel: ReactNode;
-  savedFragmentIds?: Set<string>;
   onRenameFragment?: (fragment: Fragment, name: string) => void;
-  onSaveFragment?: (fragment: Fragment) => void;
 };
 
 export function LibraryView({
@@ -87,9 +85,7 @@ export function LibraryView({
   connectionsPanel,
   infoPanelOpen,
   infoPanel,
-  savedFragmentIds,
   onRenameFragment,
-  onSaveFragment,
 }: LibraryViewProps) {
   const listContext = useMemo(
     () => ({ sourceNameFor, sourceForId, linkSummaryFor, relatedTakeCountFor: () => 0 }),
@@ -156,9 +152,7 @@ export function LibraryView({
             onPreviewSource={onPreviewSource}
             onSeekFragment={onSeekFragment}
             onSeekSource={onSeekSource}
-            savedFragmentIds={savedFragmentIds ?? new Set()}
             onRenameFragment={onRenameFragment ?? (() => {})}
-            onSaveFragment={onSaveFragment ?? (() => {})}
           />
         </div>
       </div>

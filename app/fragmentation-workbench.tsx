@@ -16,14 +16,15 @@ import { LibraryLinkSummary } from "@/app/features/library/library-list";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
+import { resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
 import { playMediaElement } from "@/lib/audio/browser-audio";
 import { resolveAudioUrl } from "@/lib/audio/resolve-audio-url";
 import {
   PreviewScope,
+  applyPreviewTime,
   buildFragmentPreviewScope,
   progressForAudio,
   resolveSourceAudioUrl,
-  timeForProgress,
 } from "@/lib/audio/source-playback";
 import { Button } from "@/lib/ui/button";
 import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
@@ -190,9 +191,11 @@ export function FragmentationWorkbench({
   const [previewProgress, setPreviewProgress] = useState<number | null>(null);
   const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
   const waveform = cached?.peaks ?? source.waveform;
-  const analysisMeta = cached?.analysis;
+  const analysisMeta = resolvedSourceAnalysis(source, cached);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const previewScopeRef = useRef<PreviewScope | null>(null);
+  const previewSessionRef = useRef(0);
+  const pendingSeekRef = useRef<number | null>(null);
   const progressRaf = useRef(0);
   const timelineRef = useRef<HTMLDivElement>(null);
   const rulerRef = useRef<HTMLDivElement>(null);
@@ -204,10 +207,11 @@ export function FragmentationWorkbench({
   useEffect(() => { onRangesChangeRef.current = onRangesChange; }, [onRangesChange]);
 
   const stopPreview = useCallback(() => {
+    previewSessionRef.current += 1;
+    pendingSeekRef.current = null;
     cancelAnimationFrame(progressRaf.current);
     if (audioRef.current) {
       audioRef.current.pause();
-      audioRef.current.currentTime = 0;
       audioRef.current = null;
     }
     previewScopeRef.current = null;
@@ -218,29 +222,43 @@ export function FragmentationWorkbench({
   const preview = useCallback((fragment: Fragment, startRatio = 0) => {
     const scope = buildFragmentPreviewScope(fragment, source);
     if (!scope) return;
-    if (previewingId === fragment.id) {
+    if (startRatio === 0 && previewingId === fragment.id && audioRef.current) {
       stopPreview();
       return;
     }
+    if (previewingId === fragment.id && audioRef.current && startRatio > 0) {
+      applyPreviewTime(audioRef.current, scope, startRatio);
+      setPreviewProgress(startRatio);
+      if (audioRef.current.paused) {
+        playMediaElement(audioRef.current, () => stopPreview());
+      }
+      return;
+    }
+
     stopPreview();
+    const sessionId = previewSessionRef.current;
     const audio = new Audio(resolveAudioUrl(scope.url));
     audio.loop = !scope.clip;
     audio.volume = 0.72;
     audioRef.current = audio;
     previewScopeRef.current = scope;
     setPreviewingId(fragment.id);
+    pendingSeekRef.current = startRatio > 0 ? startRatio : null;
 
     const syncPosition = () => {
-      if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
-        setPreviewProgress(startRatio);
-      } else {
-        audio.currentTime = timeForProgress(scope, startRatio, audio.duration);
-        setPreviewProgress(startRatio);
+      if (previewSessionRef.current !== sessionId || audioRef.current !== audio) return;
+      const ratio = pendingSeekRef.current ?? startRatio;
+      if (applyPreviewTime(audio, scope, ratio)) {
+        setPreviewProgress(ratio);
+        pendingSeekRef.current = null;
       }
     };
 
     if (audio.readyState >= 1) syncPosition();
-    else audio.addEventListener("loadedmetadata", syncPosition, { once: true });
+    else {
+      audio.addEventListener("loadedmetadata", syncPosition, { once: true });
+      audio.addEventListener("canplay", syncPosition, { once: true });
+    }
 
     playMediaElement(audio, () => stopPreview());
   }, [previewingId, source, stopPreview]);
@@ -248,9 +266,14 @@ export function FragmentationWorkbench({
   const seekPreview = useCallback((fragment: Fragment, ratio: number) => {
     const audio = audioRef.current;
     const scope = previewScopeRef.current;
-    if (!audio || !scope || previewingId !== fragment.id || !Number.isFinite(audio.duration)) return;
+    if (!audio || !scope || previewingId !== fragment.id) return;
     const clamped = Math.min(1, Math.max(0, ratio));
-    audio.currentTime = timeForProgress(scope, clamped, audio.duration);
+    if (applyPreviewTime(audio, scope, clamped)) {
+      setPreviewProgress(clamped);
+      pendingSeekRef.current = null;
+      return;
+    }
+    pendingSeekRef.current = clamped;
     setPreviewProgress(clamped);
   }, [previewingId]);
 
@@ -261,8 +284,10 @@ export function FragmentationWorkbench({
       const audio = audioRef.current;
       const scope = previewScopeRef.current;
       if (audio && scope && !audio.paused && Number.isFinite(audio.duration) && audio.duration > 0) {
-        if (scope.clip && audio.currentTime >= scope.clip.end) {
-          audio.currentTime = scope.clip.start;
+        if (scope.clip && audio.currentTime >= scope.clip.end - 0.02) {
+          audio.pause();
+          setPreviewProgress(1);
+          return;
         }
         setPreviewProgress(progressForAudio(scope, audio.currentTime, audio.duration));
       }
@@ -346,7 +371,13 @@ export function FragmentationWorkbench({
   );
 
   const displayFragments = useMemo(
-    () => ranges.map((range, index) => fragmentFor(range) ?? draftFragmentForRange(range, index, source, waveform, analysisMeta?.bpm)),
+    () => ranges.map((range, index) => {
+      const persisted = fragmentFor(range);
+      if (persisted) {
+        return { ...persisted, start: range.start, end: range.end };
+      }
+      return draftFragmentForRange(range, index, source, waveform, analysisMeta?.bpm);
+    }),
     [ranges, fragments, source, waveform, analysisMeta?.bpm],
   );
 

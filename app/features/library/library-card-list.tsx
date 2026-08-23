@@ -24,9 +24,7 @@ type LibraryCardListProps = {
   onPreviewSource: (source: SourceFile) => void;
   onSeekFragment: (fragment: Fragment, ratio: number) => void;
   onSeekSource: (source: SourceFile, ratio: number) => void;
-  savedFragmentIds: Set<string>;
   onRenameFragment: (fragment: Fragment, name: string) => void;
-  onSaveFragment: (fragment: Fragment) => void;
 };
 
 function previewKeyForItem(item: LibraryItem) {
@@ -51,9 +49,7 @@ export function LibraryCardList({
   onPreviewSource,
   onSeekFragment,
   onSeekSource,
-  savedFragmentIds,
   onRenameFragment,
-  onSaveFragment,
 }: LibraryCardListProps) {
   const highlightItem = (item: LibraryItem) => {
     if (item.kind === "fragment") onHighlightFragment(item.fragment.id);
@@ -115,8 +111,6 @@ export function LibraryCardList({
               onOpenInfo={() => openInfo(item)}
               onKeyDown={handleCardKeyDown(item)}
               onRename={item.kind === "fragment" ? (name) => onRenameFragment(item.fragment, name) : undefined}
-              onSave={item.kind === "fragment" ? () => onSaveFragment(item.fragment) : undefined}
-              isSaved={item.kind === "fragment" ? savedFragmentIds.has(item.fragment.id) : false}
             />
           );
         })}

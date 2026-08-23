@@ -6,6 +6,7 @@ export const LIBRARY_COLUMNS: LibraryColumnDef[] = [
   { id: "source", label: "Source" },
   { id: "signal", label: "Signal" },
   { id: "date", label: "Recorded" },
+  { id: "uploaded", label: "Uploaded" },
   { id: "start", label: "Start" },
   { id: "end", label: "End" },
   { id: "duration", label: "Length" },
@@ -29,7 +30,7 @@ export const LIBRARY_ROLES: ("All" | MusicalRole)[] = [
   "Texture",
 ];
 
-const DESCENDING_DEFAULT_COLUMNS: LibrarySortColumn[] = ["date", "signal", "tempo", "links", "takes"];
+const DESCENDING_DEFAULT_COLUMNS: LibrarySortColumn[] = ["date", "uploaded", "signal", "tempo", "links", "takes"];
 
 export function toggleLibrarySort(column: LibrarySortColumn, current: LibrarySort): LibrarySort {
   return {

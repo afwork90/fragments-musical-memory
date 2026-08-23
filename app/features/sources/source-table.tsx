@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { KeyboardEvent } from "react";
 import { SignalCell } from "@/lib/audio/signal-cell";
 import { resolveSourceAudioUrl } from "@/lib/audio/source-playback";
+import { resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
 import { Button } from "@/lib/ui/button";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import type { ProcessedAudio } from "@/lib/audio/types";
@@ -47,12 +48,7 @@ function SortIcon({ column, sort }: { column: SourceSortColumn; sort: SourceSort
 }
 
 function sourceAnalysis(source: SourceFile, cached?: ProcessedAudio) {
-  return {
-    bpm: cached?.analysis.bpm ?? source.bpm ?? null,
-    key: cached?.analysis.key ?? source.key ?? null,
-    scale: cached?.analysis.scale ?? source.scale ?? null,
-    keyStrength: cached?.analysis.keyStrength ?? null,
-  };
+  return resolvedSourceAnalysis(source, cached);
 }
 
 function formatTempoKey(source: SourceFile, cached?: ProcessedAudio) {

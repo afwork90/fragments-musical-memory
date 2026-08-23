@@ -72,6 +72,7 @@ export function ScrubbableWaveform({
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
+      onDragStart={(event) => event.preventDefault()}
       role={interactive ? "slider" : undefined}
       aria-label={interactive ? "Seek waveform" : undefined}
       aria-valuemin={interactive ? 0 : undefined}

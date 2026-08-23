@@ -5,6 +5,12 @@ import { Repeat, Volume2, VolumeX } from "lucide-react";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
 import { playMediaElement } from "@/lib/audio/browser-audio";
 import { resolveAudioUrl } from "@/lib/audio/resolve-audio-url";
+import {
+  PreviewScope,
+  applyPreviewTime,
+  buildFragmentPreviewScope,
+  progressForAudio,
+} from "@/lib/audio/source-playback";
 import { LibraryCard } from "@/app/features/library/library-card";
 import { LibraryLinkSummary } from "@/app/features/library/library-list";
 import { Button } from "@/lib/ui/button";
@@ -22,6 +28,7 @@ import {
   Fragment,
   Relationship,
   RelationshipStatus,
+  SourceFile,
 } from "./prototype-data";
 
 export type CombineCandidate = Relationship & { score: number; otherId: string };
@@ -38,6 +45,22 @@ type PlayMode = "A" | "B" | "A→B" | "B→A" | "Together";
 
 const noopLinkSummary = (): LibraryLinkSummary => ({ total: 0, manual: 0 });
 const CROSSFADE_GAIN = 0.85;
+
+function playbackScopeForFragment(fragment: Fragment, source: SourceFile | undefined): PreviewScope | null {
+  return buildFragmentPreviewScope(fragment, source);
+}
+
+function candidatePlaybackScope(
+  candidate: Fragment,
+  source: SourceFile | undefined,
+  transformed: boolean,
+  transformAsset?: string,
+): PreviewScope | null {
+  if (transformed && transformAsset) {
+    return { id: candidate.id, url: transformAsset };
+  }
+  return playbackScopeForFragment(candidate, source);
+}
 
 function volumesForCrossfade(crossfade: number) {
   const t = Math.min(1, Math.max(0, crossfade / 100));
@@ -204,6 +227,7 @@ export function CombineWorkspace({
   anchor,
   candidates,
   fragments,
+  sources,
   statuses,
   onClose,
   onEdit,
@@ -215,6 +239,7 @@ export function CombineWorkspace({
   anchor: Fragment;
   candidates: CombineCandidate[];
   fragments: Fragment[];
+  sources: SourceFile[];
   statuses: Record<string, RelationshipStatus | undefined>;
   onClose: () => void;
   onEdit: (relationship: CombineCandidate) => void;
@@ -239,12 +264,17 @@ export function CombineWorkspace({
   const [crossfade, setCrossfade] = useState(50);
   const [transformOpen, setTransformOpen] = useState(false);
   const audios = useRef<HTMLAudioElement[]>([]);
+  const scopesByAudio = useRef(new Map<HTMLAudioElement, PreviewScope>());
+  const trackCleanups = useRef<Array<() => void>>([]);
   const timers = useRef<number[]>([]);
   const progressRaf = useRef(0);
   const volumes = volumesForCrossfade(crossfade);
 
   const stop = useCallback(() => {
     cancelAnimationFrame(progressRaf.current);
+    trackCleanups.current.forEach((cleanup) => cleanup());
+    trackCleanups.current = [];
+    scopesByAudio.current.clear();
     audios.current.forEach((audio) => {
       audio.pause();
       audio.currentTime = 0;
@@ -267,7 +297,13 @@ export function CombineWorkspace({
         const next: { a: number | null; b: number | null } = { a: null, b: null };
         audios.current.forEach((audio) => {
           const track = audio.dataset.track as "a" | "b" | undefined;
-          if (!track || audio.paused || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
+          const scope = scopesByAudio.current.get(audio);
+          if (!track || audio.paused) return;
+          if (scope) {
+            next[track] = progressForAudio(scope, audio.currentTime, audio.duration);
+            return;
+          }
+          if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
           next[track] = audio.currentTime / audio.duration;
         });
         return next;
@@ -283,24 +319,51 @@ export function CombineWorkspace({
     const levels = volumesForCrossfade(crossfade);
     audios.current.forEach((audio) => {
       const track = audio.dataset.track as "a" | "b" | undefined;
+      const scope = scopesByAudio.current.get(audio);
       if (!track) return;
-      audio.loop = loop[track];
+      audio.loop = scope?.clip ? false : loop[track];
       audio.volume = mute[track] ? 0 : levels[track];
     });
   }, [crossfade, loop, mute]);
 
-  const makeAudio = (asset: string, track: "a" | "b") => {
-    const audio = new Audio(resolveAudioUrl(asset));
+  const sourceForId = useCallback(
+    (sourceId: string) => sources.find((source) => source.id === sourceId),
+    [sources],
+  );
+
+  const prepareTrackAudio = (scope: PreviewScope | null, track: "a" | "b") => {
+    if (!scope?.url) return null;
+    const audio = new Audio(resolveAudioUrl(scope.url));
     audio.dataset.track = track;
     audio.volume = mute[track] ? 0 : volumes[track];
-    audio.loop = loop[track];
+    audio.loop = scope.clip ? false : loop[track];
+    scopesByAudio.current.set(audio, scope);
     audios.current.push(audio);
+
+    const syncStart = () => {
+      if (scope.clip) applyPreviewTime(audio, scope, 0);
+    };
+    if (audio.readyState >= 1) syncStart();
+    else {
+      audio.addEventListener("loadedmetadata", syncStart, { once: true });
+      audio.addEventListener("canplay", syncStart, { once: true });
+    }
+
+    const onTimeUpdate = () => {
+      if (!scope.clip || audio.paused) return;
+      if (audio.currentTime >= scope.clip.end - 0.02) {
+        if (loop[track]) {
+          audio.currentTime = scope.clip.start;
+        } else {
+          audio.pause();
+        }
+      }
+    };
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    trackCleanups.current.push(() => audio.removeEventListener("timeupdate", onTimeUpdate));
+
     return audio;
   };
-
-  const candidateAsset = transform.transformed
-    ? relationship?.transform?.asset ?? candidate?.audio ?? ""
-    : candidate?.audio ?? "";
 
   const play = (mode: PlayMode) => {
     if (!relationship || !candidate) return;
@@ -308,8 +371,16 @@ export function CombineWorkspace({
     setPlaying(mode);
     onAuditioned(relationship);
 
-    const a = makeAudio(anchor.audio, "a");
-    const b = makeAudio(candidateAsset, "b");
+    const anchorScope = playbackScopeForFragment(anchor, sourceForId(anchor.sourceId));
+    const candidateScope = candidatePlaybackScope(
+      candidate,
+      sourceForId(candidate.sourceId),
+      transform.transformed,
+      relationship.transform?.asset,
+    );
+
+    const a = prepareTrackAudio(anchorScope, "a");
+    const b = prepareTrackAudio(candidateScope, "b");
 
     const safe = (audio: HTMLAudioElement, onFail?: () => void) => {
       playMediaElement(audio, () => {
@@ -320,19 +391,23 @@ export function CombineWorkspace({
     };
 
     if (mode === "A") {
+      if (!a) return;
       setPlayPhase("a");
       safe(a);
     }
     if (mode === "B") {
+      if (!b) return;
       setPlayPhase("b");
       safe(b);
     }
     if (mode === "Together") {
+      if (!a || !b) return;
       setPlayPhase("both");
       safe(a);
       safe(b);
     }
     if (mode === "A→B") {
+      if (!a || !b) return;
       setPlayPhase("a");
       safe(a);
       timers.current.push(
@@ -345,6 +420,7 @@ export function CombineWorkspace({
       );
     }
     if (mode === "B→A") {
+      if (!a || !b) return;
       setPlayPhase("b");
       safe(b);
       timers.current.push(
@@ -376,8 +452,8 @@ export function CombineWorkspace({
   const anchorPreviewing = playPhase === "a" || playPhase === "both";
   const candidatePreviewing = playPhase === "b" || playPhase === "both";
   const stubHandlers = {
-    sourceNameFor: () => "",
-    sourceForId: () => undefined,
+    sourceNameFor: (fragment: Fragment) => sourceForId(fragment.sourceId)?.name ?? fragment.source,
+    sourceForId,
     linkSummaryFor: noopLinkSummary,
     fragmentAudioFor: (fragmentId: string) => fragments.find((item) => item.id === fragmentId)?.audio,
     onSelect: () => {},

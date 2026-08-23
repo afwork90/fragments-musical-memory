@@ -32,15 +32,15 @@ import { FRAGMENTS_LOGO_SRC } from "./fragments-logo";
 import { defaultFragmentName, draftFragmentForRange, EditableRange, FragmentationWorkbench } from "./fragmentation-workbench";
 import { LibraryFilters, createLibraryFilters } from "./library-filter-popover";
 import { formatSeconds } from "@/lib/format";
-import { bindSourceAudio, getCachedAudio, retainCachedAudio } from "@/lib/audio/audio-service";
+import { bindSourceAudio, getCachedAudio, retainCachedAudio, updateCachedAnalysis } from "@/lib/audio/audio-service";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
 import {
   PreviewScope,
   buildFragmentPreviewScope,
   buildSourcePreviewScope,
+  applyPreviewTime,
   progressForAudio,
   resolveSourceAudioUrl,
-  timeForProgress,
 } from "@/lib/audio/source-playback";
 import { armBrowserAudioUnlock, playMediaElement } from "@/lib/audio/browser-audio";
 import { resolveAudioUrl } from "@/lib/audio/resolve-audio-url";
@@ -49,6 +49,8 @@ import {
   formatMusicalKey,
   inventAnalysis,
   parseMusicalKeyLabel,
+  resolvedMusicalKey,
+  resolvedSourceAnalysis,
 } from "@/lib/audio/source-metadata";
 import { SourceAnalysisValues } from "./features/sources/source-detail-panel";
 import { LibraryCard } from "./features/library/library-card";
@@ -99,13 +101,10 @@ function fragmentFromDocument(fragmentDoc: any, index: number, source: SourceFil
     date: source.date,
     dateLabel: source.date,
     duration: formatSeconds(fragmentDoc.end - fragmentDoc.start),
-    key:
-      formatMusicalKey(
-        fragmentDoc.analysis?.key ?? source.key,
-        fragmentDoc.analysis?.scale ?? source.scale,
-      ) ?? "—",
+    key: resolvedMusicalKey(fragmentDoc.analysis, source) ?? "—",
     alternateKeys: [],
     bpm: fragmentDoc.analysis?.bpm ?? source.bpm ?? 0,
+    uploadedAt: fragmentDoc.createdAt ?? source.uploadedAt,
     role: (fragmentDoc.primaryRole as MusicalRole) ?? "Texture",
     roles: fragmentDoc.roles?.length ? fragmentDoc.roles : ["Texture"],
     brightness: 0,
@@ -141,46 +140,14 @@ function fragmentToDocument(fragment: Fragment) {
   };
 }
 
-/**
- * Simple heuristic "affinity" between two real (imported) fragments, based
- * on the metadata we actually measure (BPM, key) rather than the hand-picked
- * scores the prototype demo data uses. Pairs below a similarity floor are
- * dropped rather than persisted, so the library doesn't fill up with noise.
- */
-function heuristicRelationshipBetween(a: Fragment, b: Fragment): Relationship | null {
-  if (!a.bpm || !b.bpm) return null;
-  const bpmDelta = Math.abs(a.bpm - b.bpm);
-  const tempoScore = Math.max(0, 1 - bpmDelta / Math.max(a.bpm, b.bpm, 1));
-  const keyMatch = a.key !== "—" && a.key !== "" && a.key === b.key;
-  const pitchScore = keyMatch ? .95 : .55;
-  const base = tempoScore * .6 + pitchScore * .4;
-  if (base < .6) return null;
-  return {
-    id: `auto-${a.id}-${b.id}`,
-    source: a.id,
-    target: b.id,
-    base,
-    metrics: { rhythm:tempoScore, harmony:pitchScore, melody:(tempoScore + pitchScore) / 2, timbre:.7, tempo:tempoScore, pitch:pitchScore, brightness:.7 },
-    transformationCost: Math.min(.3, bpmDelta / 100),
-    reason: keyMatch
-      ? `Both fragments are in ${a.key} at a similar tempo (${Math.round(a.bpm)}/${Math.round(b.bpm)} BPM).`
-      : `Tempos are close (${Math.round(a.bpm)} vs ${Math.round(b.bpm)} BPM).`,
-    origin: "algorithmic",
-  };
+const LIBRARY_FRAGMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(-\d+|-whole)$/i;
+
+function isLibraryFragmentId(id: string) {
+  return LIBRARY_FRAGMENT_ID.test(id);
 }
 
-/** Computes affinities between every pair of real fragments across the whole library (capped to keep it cheap). */
-function computeHeuristicRelationships(fragments: Fragment[]): Relationship[] {
-  const relationships: Relationship[] = [];
-  const pool = fragments.slice(0, 150);
-  for (let i = 0; i < pool.length; i++) {
-    for (let j = i + 1; j < pool.length; j++) {
-      if (pool[i].sourceId === pool[j].sourceId) continue;
-      const relationship = heuristicRelationshipBetween(pool[i], pool[j]);
-      if (relationship) relationships.push(relationship);
-    }
-  }
-  return relationships;
+function isLibraryRelationship(relationship: Relationship) {
+  return isLibraryFragmentId(relationship.source) && isLibraryFragmentId(relationship.target);
 }
 
 function sourceFileFromDocument(document: any, audioUrl?: string): SourceFile {
@@ -208,6 +175,7 @@ function sourceFileFromDocument(document: any, audioUrl?: string): SourceFile {
     bpm: analysis?.bpm ?? null,
     key: analysis?.key ?? null,
     scale: analysis?.scale ?? null,
+    uploadedAt: document.importedAt,
   };
 }
 
@@ -249,7 +217,7 @@ export default function FragmentsApp() {
   const [query, setQuery] = useState("");
   const [libraryFilters,setLibraryFilters] = useState<LibraryFilters>(createLibraryFilters);
   const [filterOpen,setFilterOpen] = useState(false);
-  const [sort, setSort] = useState<LibrarySort>({ column:"date", direction:"desc" });
+  const [sort, setSort] = useState<LibrarySort>({ column:"uploaded", direction:"desc" });
   const [context, setContext] = useState<SearchContext>("whole");
   const [rangeMode, setRangeMode] = useState<RangeMode>("reasonable");
   const [weights, setWeights] = useState<SearchWeights>({ ...DEFAULT_WEIGHTS });
@@ -296,6 +264,8 @@ export default function FragmentsApp() {
   const previewAudio = useRef<HTMLAudioElement | null>(null);
   const previewCleanupRef = useRef<(() => void) | null>(null);
   const previewScopeRef = useRef<PreviewScope | null>(null);
+  const previewSessionRef = useRef(0);
+  const pendingSeekRef = useRef<number | null>(null);
   const mapInspectorCloseRef = useRef<HTMLButtonElement>(null);
   const filterOpenRef = useRef(false);
 
@@ -334,6 +304,7 @@ export default function FragmentsApp() {
         bpm: analysis?.bpm ?? null,
         key: analysis?.key ?? null,
         scale: analysis?.scale ?? null,
+        uploadedAt: document.importedAt,
       }}) as SourceFile[];
       setSources((current) => [...current.filter((source) => !persisted.some((item) => item.id === source.id)),...persisted]);
       setSourceRanges((current) => ({
@@ -356,10 +327,7 @@ export default function FragmentsApp() {
         ...persistedFragments,
       ]);
       const persistedRelationships = documents.flatMap((document) => document.relationships ?? []);
-      setImportedRelationships((current) => [
-        ...current.filter((relationship) => !persistedFragments.some((fragment) => fragment.id === relationship.source)),
-        ...persistedRelationships,
-      ]);
+      setImportedRelationships(persistedRelationships);
       for (const item of backfill) {
         try {
           await bridge.updateSourceAnalysis(item.id, item.analysis);
@@ -375,24 +343,6 @@ export default function FragmentsApp() {
     ...importedFragments,
   ].map((fragment) => ({ ...fragment,...fragmentOverrides[fragment.id] })),[importComplete,fragmentOverrides,importedFragments]);
   const activeFragmentById = (id:string) => activeFragments.find((fragment) => fragment.id === id) ?? ({ ...fragmentById(id),...fragmentOverrides[id] });
-  // Real (imported) fragments have no hand-authored affinities, so recompute simple
-  // BPM/key-based ones whenever the set of real fragments changes, and persist each
-  // source's outgoing relationships to its source.json so they survive a reload.
-  useEffect(() => {
-    const bridge = (window as any).fragments;
-    if (!bridge?.updateRelationships || importedFragments.length < 2) return;
-    const computed = computeHeuristicRelationships(importedFragments);
-    setImportedRelationships(computed);
-    const bySource = new Map<string,Relationship[]>();
-    for (const relationship of computed) {
-      const ownerId = importedFragments.find((fragment) => fragment.id === relationship.source)?.sourceId;
-      if (!ownerId) continue;
-      bySource.set(ownerId,[...(bySource.get(ownerId) ?? []),relationship]);
-    }
-    for (const sourceId of new Set(importedFragments.map((fragment) => fragment.sourceId))) {
-      void bridge.updateRelationships(sourceId,bySource.get(sourceId) ?? []).catch((error:any) => console.warn("Could not persist relationships:",error));
-    }
-  },[importedFragments]);
   const allRelationships = useMemo(() => importedRelationships.length ? [...RELATIONSHIPS,...importedRelationships] : RELATIONSHIPS,[importedRelationships]);
   const selectedFragmentId = selectedId.startsWith("source:") ? null : selectedId;
   const selectedLibrarySourceId = selectedId.startsWith("source:") ? selectedId.slice("source:".length) : null;
@@ -406,6 +356,8 @@ export default function FragmentsApp() {
   };
 
   const stopAllAudio = () => {
+    previewSessionRef.current += 1;
+    pendingSeekRef.current = null;
     clearPreviewListeners();
     if (previewAudio.current) { previewAudio.current.pause(); previewAudio.current = null; }
     previewScopeRef.current = null;
@@ -415,40 +367,87 @@ export default function FragmentsApp() {
 
   const fragmentAudioFor = (fragmentId: string) => activeFragments.find((fragment) => fragment.id === fragmentId)?.audio;
 
-  const bindPreviewAudio = (audio: HTMLAudioElement, scope: PreviewScope) => {
+  const applyPreviewPosition = (audio: HTMLAudioElement, scope: PreviewScope, ratio: number) => {
+    const clamped = Math.min(1, Math.max(0, ratio));
+    if (applyPreviewTime(audio, scope, clamped)) {
+      setPreviewProgress(clamped);
+      pendingSeekRef.current = null;
+      return true;
+    }
+    pendingSeekRef.current = clamped;
+    setPreviewProgress(clamped);
+    return false;
+  };
+
+  const bindPreviewAudio = (audio: HTMLAudioElement, scope: PreviewScope, sessionId: number) => {
     clearPreviewListeners();
     previewScopeRef.current = scope;
-    const onTimeUpdate = () => {
-      if (!previewScopeRef.current) return;
-      if (scope.clip && audio.currentTime >= scope.clip.end) {
-        audio.currentTime = scope.clip.start;
+
+    let rafId = 0;
+    const updateProgress = () => {
+      if (previewSessionRef.current !== sessionId || previewAudio.current !== audio) return;
+      if (scope.clip && audio.currentTime >= scope.clip.end - 0.01) {
+        if (audio.loop) {
+          audio.currentTime = scope.clip.start;
+        } else {
+          audio.pause();
+          setPreviewProgress(1);
+          return;
+        }
       }
       setPreviewProgress(progressForAudio(scope, audio.currentTime, audio.duration));
     };
+
+    const tick = () => {
+      updateProgress();
+      if (previewSessionRef.current !== sessionId || previewAudio.current !== audio || audio.paused) return;
+      rafId = requestAnimationFrame(tick);
+    };
+
+    const onPlay = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(tick);
+    };
+    const onPause = () => cancelAnimationFrame(rafId);
+    const onTimeUpdate = () => updateProgress();
+
     audio.addEventListener("timeupdate", onTimeUpdate);
-    previewCleanupRef.current = () => audio.removeEventListener("timeupdate", onTimeUpdate);
+    audio.addEventListener("play", onPlay);
+    audio.addEventListener("pause", onPause);
+    audio.addEventListener("ended", onPause);
+    previewCleanupRef.current = () => {
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      audio.removeEventListener("play", onPlay);
+      audio.removeEventListener("pause", onPause);
+      audio.removeEventListener("ended", onPause);
+      cancelAnimationFrame(rafId);
+    };
+
+    if (!audio.paused) onPlay();
+    else updateProgress();
   };
 
   const startPreviewScope = (scope: PreviewScope, startRatio = 0) => {
     stopAllAudio();
+    const sessionId = previewSessionRef.current;
     const audio = new Audio(resolveAudioUrl(scope.url));
     previewAudio.current = audio;
     audio.loop = !scope.clip;
     audio.volume = 0.72;
     setPreviewingId(scope.id);
+    pendingSeekRef.current = startRatio > 0 ? startRatio : null;
 
     const syncPosition = () => {
-      if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
-        setPreviewProgress(startRatio);
-      } else {
-        audio.currentTime = timeForProgress(scope, startRatio, audio.duration);
-        setPreviewProgress(startRatio);
-      }
-      bindPreviewAudio(audio, scope);
+      if (previewSessionRef.current !== sessionId || previewAudio.current !== audio) return;
+      applyPreviewPosition(audio, scope, pendingSeekRef.current ?? startRatio);
+      bindPreviewAudio(audio, scope, sessionId);
     };
 
     if (audio.readyState >= 1) syncPosition();
-    else audio.addEventListener("loadedmetadata", syncPosition, { once: true });
+    else {
+      audio.addEventListener("loadedmetadata", syncPosition, { once: true });
+      audio.addEventListener("canplay", syncPosition, { once: true });
+    }
 
     // play() must stay in the user-gesture stack — do not wait for metadata first.
     playMediaElement(audio, () => notify("Playback needs one more click in this browser."));
@@ -457,10 +456,8 @@ export default function FragmentsApp() {
   const seekPreview = (ratio: number) => {
     const audio = previewAudio.current;
     const scope = previewScopeRef.current;
-    if (!audio || !scope || !Number.isFinite(audio.duration)) return;
-    const clamped = Math.min(1, Math.max(0, ratio));
-    audio.currentTime = timeForProgress(scope, clamped, audio.duration);
-    setPreviewProgress(clamped);
+    if (!audio || !scope) return;
+    applyPreviewPosition(audio, scope, ratio);
   };
 
   const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setFilterOpen(false);setInfoFragmentId(null);setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCombineCandidates(null);setExportRelationship(null);setDuplicateGroup(null);setImportOpen(false);if (next !== "map") setMapSelectedId(null);setView(next); };
@@ -507,7 +504,8 @@ export default function FragmentsApp() {
         if (!target || seen.has(target.id) || archived.has(target.id)) return false;
         if (sourceFragment.duplicateGroup && target.duplicateGroup === sourceFragment.duplicateGroup) return false;
         const isManual=manualRelationshipIds.has(relationship.id);
-        if (!isManual) {
+        const isLibraryAffinity=isLibraryRelationship(relationship);
+        if (!isManual && !isLibraryAffinity) {
           if (rangeMode === "reasonable" && (relationship.experimental || relationship.transformationCost > .12)) return false;
           const transformedBpm=target.bpm + (relationship.transform?.bpm ?? 0);
           if (Math.abs(transformedBpm - sourceFragment.bpm) / Math.max(1,sourceFragment.bpm) * 100 > tolerances.tempoWindow) return false;
@@ -740,7 +738,7 @@ export default function FragmentsApp() {
       setSelectedId(nextFragment?.id ?? "f02");
     }
 
-    notify(`Removed ${source.name} from your library. Import the same file again to restore your slices.`);
+    notify(`Removed ${source.name} from your library. Import a file with the same name to restore your slices.`);
   };
   const editSourceForLibrarySource = (sourceId: string) => {
     pushReturn("source-edit");
@@ -769,8 +767,6 @@ export default function FragmentsApp() {
   const editSourceForFragment = (id:string) => { const fragment=activeFragmentById(id);pushReturn("source-edit");stopAllAudio();setSelectedSourceId(fragment.sourceId);setSourcePanelMode("fragmentation");setSourceEditorOpen(true);setConnectionsOpen(false);setAdvancedOpen(false);setView("source"); };
   const handleImportSource = (imported: ImportedSource) => {
     const id = imported.persistedId ?? `source-import-${Date.now()}`;
-    retainCachedAudio(imported.cacheKey);
-    bindSourceAudio(id, imported.cacheKey);
 
     if (imported.restored && imported.persistedDocument) {
       const document: any = { ...imported.persistedDocument, audioUrl: imported.persistedAudioUrl };
@@ -778,6 +774,19 @@ export default function FragmentsApp() {
       const ranges = rangesFromDocument(document);
       const fragments = document.fragments.map((fragmentDoc: any, index: number) =>
         fragmentFromDocument(fragmentDoc, index, source));
+
+      retainCachedAudio(imported.cacheKey);
+      bindSourceAudio(source.id, imported.cacheKey);
+      const cached = getCachedAudio(`source:${source.id}`);
+      if (cached && document.analysis) {
+        updateCachedAnalysis(cached.cacheKey, {
+          ...cached.analysis,
+          bpm: document.analysis.bpm ?? cached.analysis.bpm,
+          key: document.analysis.key ?? cached.analysis.key,
+          scale: document.analysis.scale ?? cached.analysis.scale,
+          keyStrength: document.analysis.keyStrength ?? cached.analysis.keyStrength,
+        });
+      }
 
       setSources((current) => [...current.filter((item) => item.id !== source.id), source]);
       setSourceRanges((current) => ({ ...current, [source.id]: ranges }));
@@ -791,6 +800,11 @@ export default function FragmentsApp() {
         for (const fragment of fragments) next.delete(fragment.id);
         return next;
       });
+      setFragmentOverrides((current) => {
+        const next = { ...current };
+        for (const fragment of fragments) delete next[fragment.id];
+        return next;
+      });
       setSelectedSourceId(source.id);
       setSourcePanelMode("fragmentation");
       setSourceEditorModal(true);
@@ -801,6 +815,8 @@ export default function FragmentsApp() {
       return;
     }
 
+    retainCachedAudio(imported.cacheKey);
+    bindSourceAudio(id, imported.cacheKey);
     const newSource: SourceFile = {
       id,
       name: imported.name,
@@ -885,7 +901,7 @@ export default function FragmentsApp() {
   const promoteRangeToFragment = (range:EditableRange,index:number,source:SourceFile):{ range:EditableRange;fragment:Fragment } => {
     const cached = source.audioCacheKey ? getCachedAudio(`source:${source.id}`) : undefined;
     const peaks = cached?.peaks ?? source.waveform;
-    const bpm = cached?.analysis?.bpm ?? source.bpm ?? null;
+    const bpm = resolvedSourceAnalysis(source, cached).bpm ?? null;
     const fragmentId=`${source.id}-fragment-${Date.now()}-${index}`;
     const fragment=draftFragmentForRange({ ...range,id:fragmentId },index,source,peaks,bpm);
     return { range:{ ...range,fragmentId },fragment };
@@ -1092,6 +1108,7 @@ export default function FragmentsApp() {
         anchor={selected}
         candidates={combineCandidates}
         fragments={activeFragments}
+        sources={sources}
         statuses={relationshipStatuses}
         onClose={closeCombine}
         onEdit={beginCombineSourceEdit}
@@ -1135,9 +1152,7 @@ export default function FragmentsApp() {
         onPreviewSource={previewSource}
         onSeekFragment={(fragment, ratio) => previewSingle(fragment, ratio)}
         onSeekSource={(source, ratio) => previewSource(source, ratio)}
-        savedFragmentIds={savedFragmentIds}
         onRenameFragment={renameFragment}
-        onSaveFragment={saveFragment}
         infoPanelOpen={sourceEditorOpen && !sourceEditorModal && sourcePanelMode === "detail"}
         infoPanel={detailPanel}
         connectionsPanel={connectionsOpen && (connectionAnchorFragmentId || selectedLibrarySourceId) ? <aside className="connections">

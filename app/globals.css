@@ -344,7 +344,7 @@ h3.library-card-title[contenteditable="true"] { cursor:text; outline:1px solid v
 .waveform-frame { display:block; overflow:hidden; padding:0; line-height:0; border:1px solid #2a2830; border-radius:var(--waveform-frame-radius); background:#09080b; }
 .waveform-frame > svg,.waveform-frame .continuous-wave { display:block; width:100%; height:100%; min-height:0; }
 .waveform-frame-fill { display:flex; flex:1; min-width:0; min-height:0; height:100%; }
-.library-wave-track { height:100%; min-height:0; display:flex; align-items:stretch; }
+.library-wave-track { height:100%; min-height:0; display:flex; align-items:stretch; touch-action:none; -webkit-user-drag:none; user-select:none; }
 .library-wave-svg,.library-wave-track .continuous-wave { display:block; width:100%; height:100%; min-height:0; flex:1; }
 .library-wave-svg path,.library-wave-track .continuous-wave path,.library-card .continuous-wave path { stroke-width:1.1; }
 .library-wave-svg.active path,.library-wave-track .continuous-wave.active path,.library-card .continuous-wave.active path { opacity:1; }
@@ -756,7 +756,7 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .sources-toolbar .library-card-action { order:0; }
 .sources-toolbar .search { order:1; }
 
-.fragment-lanes-scroll { max-height:119px;margin-bottom:5px;overflow-y:auto;overflow-x:hidden;border-bottom:1px solid #2a2730;background:linear-gradient(90deg,#ffffff05 1px,transparent 1px);background-size:10% 100%;scrollbar-color:#4d4855 #131117;scrollbar-width:thin; }
+.fragment-lanes-scroll { max-height:165px;margin-bottom:5px;overflow-y:auto;overflow-x:hidden;border-bottom:1px solid #2a2730;background:linear-gradient(90deg,#ffffff05 1px,transparent 1px);background-size:10% 100%;scrollbar-color:#4d4855 #131117;scrollbar-width:thin; }
 .fragment-lanes-scroll .fragment-lanes { margin-bottom:0;border-bottom:0;background:none; }
 .sensitivity-dial:focus-visible { outline:2px solid var(--lime);outline-offset:2px; }
 .detected-actions { display:flex;gap:5px; }
@@ -872,7 +872,7 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .correction-lanes { height:120px;overflow-y:auto;scrollbar-color:#4d4855 #131117;scrollbar-width:thin; }
 @keyframes scanWave { from{left:0} to{left:100%} }
 
-@media(max-width:900px){.candidate-controls{grid-column:2}.candidate-edit-source{margin-top:8px}.fragment-lanes-scroll{max-height:119px}}
+@media(max-width:900px){.candidate-controls{grid-column:2}.candidate-edit-source{margin-top:8px}.fragment-lanes-scroll{max-height:165px}}
 @media(prefers-reduced-motion:reduce){.scan-playhead{animation:none;left:50%}}
 
 /* Link accounting and complete source/map interactions */

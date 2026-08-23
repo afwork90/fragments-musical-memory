@@ -23,8 +23,8 @@ export function resolveSourceAudioUrl(
 
 function sourceSupportsSlicing(source: SourceFile | undefined, sourceUrl: string | null): boolean {
   if (!source || !sourceUrl || source.duration <= 0) return false;
-  if (source.audioCacheKey) return true;
-  return Boolean(source.imported && !sourceUrl.startsWith("/audio/"));
+  if (source.audioCacheKey || source.imported) return true;
+  return !sourceUrl.startsWith("/audio/");
 }
 
 export function buildFragmentPreviewScope(
@@ -81,4 +81,18 @@ export function timeForProgress(scope: PreviewScope, ratio: number, totalDuratio
     return scope.clip.start + clamped * duration;
   }
   return clamped * totalDuration;
+}
+
+/** Seek the audio element for a preview scope; clip bounds do not require file duration. */
+export function applyPreviewTime(audio: HTMLAudioElement, scope: PreviewScope, ratio: number) {
+  const clamped = Math.min(1, Math.max(0, ratio));
+  if (scope.clip && clipDuration(scope)) {
+    audio.currentTime = timeForProgress(scope, clamped, audio.duration);
+    return true;
+  }
+  if (Number.isFinite(audio.duration) && audio.duration > 0) {
+    audio.currentTime = timeForProgress(scope, clamped, audio.duration);
+    return true;
+  }
+  return false;
 }

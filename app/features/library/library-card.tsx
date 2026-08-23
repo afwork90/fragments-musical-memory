@@ -6,8 +6,8 @@ import { ScrubbableWaveform } from "@/lib/audio/scrubbable-waveform";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
-import { formatMusicalKey } from "@/lib/audio/source-metadata";
-import { resolveSourceAudioUrl } from "@/lib/audio/source-playback";
+import { formatMusicalKey, resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
+import { resolveSourceAudioUrl, buildFragmentPreviewScope } from "@/lib/audio/source-playback";
 import { Button } from "@/lib/ui/button";
 import { cn } from "@/lib/utils";
 import { formatSeconds } from "@/lib/format";
@@ -344,8 +344,9 @@ function SourceLibraryCard({
   const cached = useCachedAudioBySourceId(source.id);
   const peaks = cached?.peaks ?? source.waveform;
   const matchCount = source.fragmentIds.reduce((sum, id) => sum + linkSummaryFor(id).total, 0);
-  const bpm = cached?.analysis.bpm ?? source.bpm;
-  const keyLabel = formatMusicalKey(cached?.analysis.key ?? source.key, cached?.analysis.scale ?? source.scale);
+  const analysis = resolvedSourceAnalysis(source, cached);
+  const bpm = analysis.bpm;
+  const keyLabel = formatMusicalKey(analysis.key, analysis.scale);
   const canPlay = Boolean(resolveSourceAudioUrl(source, fragmentAudioFor));
 
   return (
@@ -467,6 +468,8 @@ function FragmentLibraryCard({
     }
     return base;
   }, [cached?.peaks, fragment.waveform, slice, waveformValues]);
+  const canPlay = Boolean(source && buildFragmentPreviewScope(fragment, source, fragmentAudioFor));
+  const dragAudioUrl = source ? resolveSourceAudioUrl(source, fragmentAudioFor) ?? "" : "";
 
   return (
     <article
@@ -506,6 +509,7 @@ function FragmentLibraryCard({
           variant="ghost"
           size="icon"
           className={cn("library-card-play size-9 shrink-0", isPreviewing && "text-[var(--card-action)]")}
+          disabled={!canPlay}
           onClick={onPreview}
           aria-label={`${isPreviewing ? "Stop" : "Play"} ${fragment.name}`}
         >
@@ -513,16 +517,19 @@ function FragmentLibraryCard({
         </Button>
         {waveActions}
         <div
-          className="library-card-wave-slot cursor-grab active:cursor-grabbing"
-          draggable
-          onDragStart={(event) => startDesktopDrag(event, { sourceId: fragment.sourceId }, { audioUrl: fragment.audio, fileName: `${fragment.name}.wav` })}
-          title="Drag onto your desktop or into a DAW"
+          className={cn("library-card-wave-slot", canPlay && "cursor-grab active:cursor-grabbing")}
+          draggable={canPlay}
+          onDragStart={(event) => {
+            if (!canPlay || !dragAudioUrl) return;
+            startDesktopDrag(event, { sourceId: fragment.sourceId }, { audioUrl: dragAudioUrl, fileName: `${fragment.name}.wav` });
+          }}
+          title={canPlay ? "Drag onto your desktop or into a DAW" : undefined}
         >
           <ScrubbableWaveform
             values={peaks}
             active={isPreviewing}
             progress={isPreviewing ? previewProgress : null}
-            onSeek={onSeek}
+            onSeek={canPlay ? onSeek : undefined}
           />
         </div>
       </div>

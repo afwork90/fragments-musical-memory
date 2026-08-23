@@ -47,6 +47,8 @@ function compareItems(a: LibraryItem, b: LibraryItem, sort: LibrarySort, ctx: Li
   const sourceLabel = (item: LibraryItem) => (item.kind === "source" ? "" : ctx.sourceNameFor(item.fragment));
   const name = (item: LibraryItem) => (item.kind === "source" ? item.source.name : item.fragment.name);
   const date = (item: LibraryItem) => (item.kind === "source" ? item.source.date : item.fragment.date);
+  const uploaded = (item: LibraryItem) =>
+    (item.kind === "source" ? item.source.uploadedAt ?? item.source.date : item.fragment.uploadedAt ?? item.fragment.date);
   const start = (item: LibraryItem) => (item.kind === "source" ? 0 : item.fragment.start);
   const end = (item: LibraryItem) => (item.kind === "source" ? item.source.duration : item.fragment.end);
   const duration = (item: LibraryItem) =>
@@ -81,6 +83,9 @@ function compareItems(a: LibraryItem, b: LibraryItem, sort: LibrarySort, ctx: Li
       break;
     case "date":
       comparison = date(a).localeCompare(date(b));
+      break;
+    case "uploaded":
+      comparison = uploaded(a).localeCompare(uploaded(b));
       break;
     case "start":
       comparison = start(a) - start(b);

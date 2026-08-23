@@ -7,6 +7,7 @@ export type LibraryColumnId =
   | "source"
   | "signal"
   | "date"
+  | "uploaded"
   | "start"
   | "end"
   | "duration"
@@ -66,6 +67,8 @@ const rangeIsActive = (filter: RangeFilter) =>
   filter.min.trim().length > 0 || filter.max.trim().length > 0;
 
 export const libraryFilterIsActive = (filters: LibraryFilters, column: LibraryColumnId) => {
+  // "Uploaded" is sort-only for now - it has no dedicated filter UI.
+  if (column === "uploaded") return false;
   if (column === "duration" || column === "tempo" || column === "links") {
     return rangeIsActive(filters[column]);
   }
