@@ -7,9 +7,10 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev": "npm run dev:renderer",
     "dev:renderer": "vinext dev --port 3000",
     "dev:electron": "npm run build:electron && wait-on http://localhost:3000 && cross-env ELECTRON_RENDERER_URL=http://localhost:3000 node electron/launch.cjs",
+    "dev:all": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
     "start:electron": "npm run build && node electron/launch.cjs",
     "build:renderer": "vinext build",
     "build:pages": "vinext build",

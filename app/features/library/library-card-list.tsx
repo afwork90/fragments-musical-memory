@@ -19,11 +19,14 @@ type LibraryCardListProps = {
   onHighlightSource: (source: SourceFile) => void;
   onOpenMatchesFragment: (fragmentId: string) => void;
   onOpenMatchesSource: (source: SourceFile) => void;
-  onOpenInfo: (sourceId: string) => void;
+  onOpenInfo: (target: { sourceId: string; fragmentId?: string }) => void;
   onPreviewFragment: (fragment: Fragment) => void;
   onPreviewSource: (source: SourceFile) => void;
   onSeekFragment: (fragment: Fragment, ratio: number) => void;
   onSeekSource: (source: SourceFile, ratio: number) => void;
+  savedFragmentIds: Set<string>;
+  onRenameFragment: (fragment: Fragment, name: string) => void;
+  onSaveFragment: (fragment: Fragment) => void;
 };
 
 function previewKeyForItem(item: LibraryItem) {
@@ -48,6 +51,9 @@ export function LibraryCardList({
   onPreviewSource,
   onSeekFragment,
   onSeekSource,
+  savedFragmentIds,
+  onRenameFragment,
+  onSaveFragment,
 }: LibraryCardListProps) {
   const highlightItem = (item: LibraryItem) => {
     if (item.kind === "fragment") onHighlightFragment(item.fragment.id);
@@ -60,8 +66,11 @@ export function LibraryCardList({
   };
 
   const openInfo = (item: LibraryItem) => {
-    const sourceId = item.kind === "fragment" ? item.fragment.sourceId : item.source.id;
-    onOpenInfo(sourceId);
+    if (item.kind === "fragment") {
+      onOpenInfo({ sourceId: item.fragment.sourceId, fragmentId: item.fragment.id });
+      return;
+    }
+    onOpenInfo({ sourceId: item.source.id });
   };
 
   const handleCardKeyDown = (item: LibraryItem) => (event: KeyboardEvent<HTMLElement>) => {
@@ -105,6 +114,9 @@ export function LibraryCardList({
               onOpenMatches={() => openMatches(item)}
               onOpenInfo={() => openInfo(item)}
               onKeyDown={handleCardKeyDown(item)}
+              onRename={item.kind === "fragment" ? (name) => onRenameFragment(item.fragment, name) : undefined}
+              onSave={item.kind === "fragment" ? () => onSaveFragment(item.fragment) : undefined}
+              isSaved={item.kind === "fragment" ? savedFragmentIds.has(item.fragment.id) : false}
             />
           );
         })}

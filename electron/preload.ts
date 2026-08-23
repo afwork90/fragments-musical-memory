@@ -9,5 +9,7 @@ contextBridge.exposeInMainWorld("fragments", {
   listSources: () => ipcRenderer.invoke("fragments:list-sources"),
   updateSourceAnalysis: (id: string, analysis: unknown) =>
     ipcRenderer.invoke("fragments:update-source-analysis", id, analysis),
+  updateFragments: (id: string, fragments: unknown) =>
+    ipcRenderer.invoke("fragments:update-fragments", id, fragments),
   startDrag: (target: { sourceId?: string; assetPath?: string }) => ipcRenderer.send("fragments:start-drag", target),
 });

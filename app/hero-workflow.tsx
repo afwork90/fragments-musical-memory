@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Repeat, Volume2, VolumeX } from "lucide-react";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
+import { playMediaElement } from "@/lib/audio/browser-audio";
+import { resolveAudioUrl } from "@/lib/audio/resolve-audio-url";
 import { LibraryCard } from "@/app/features/library/library-card";
 import { LibraryLinkSummary } from "@/app/features/library/library-list";
 import { Button } from "@/lib/ui/button";
@@ -288,7 +290,7 @@ export function CombineWorkspace({
   }, [crossfade, loop, mute]);
 
   const makeAudio = (asset: string, track: "a" | "b") => {
-    const audio = new Audio(asset);
+    const audio = new Audio(resolveAudioUrl(asset));
     audio.dataset.track = track;
     audio.volume = mute[track] ? 0 : volumes[track];
     audio.loop = loop[track];
@@ -310,7 +312,7 @@ export function CombineWorkspace({
     const b = makeAudio(candidateAsset, "b");
 
     const safe = (audio: HTMLAudioElement, onFail?: () => void) => {
-      audio.play().catch(() => {
+      playMediaElement(audio, () => {
         setPlaying("");
         setPlayPhase("");
         onFail?.();

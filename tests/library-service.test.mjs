@@ -277,6 +277,26 @@ test("updateSourceAnalysis merges analysis into an existing source document", as
   });
 });
 
+test("updateFragments overwrites the fragment list on an existing source document", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const fixturePath = await makeFixtureFile(fixturesDir, "update-fragments.wav", Buffer.from("fragments fixture"));
+    const service = createLibraryService(libraryRoot);
+    const created = await service.beginImport(fixturePath);
+    await service.finalizeImport(created.id, validFinalizeMetadata());
+
+    const sliced = [
+      { id: "frag-1", name: "Intro", start: 0, end: 4, roles: ["Melody"], primaryRole: "Melody", userTags: [], analysis: { bpm: 90, key: "C", scale: "major", keyStrength: 0.8 }, analysisRevision: 1 },
+      { id: "frag-2", name: "Outro", start: 4, end: 8, roles: ["Texture"], primaryRole: "Texture", userTags: [], analysis: { bpm: null, key: null, scale: null, keyStrength: null }, analysisRevision: 1 },
+    ];
+    const updated = await service.updateFragments(created.id, sliced);
+
+    assert.equal(updated.fragments.length, 2);
+    assert.equal(updated.fragments[0].id, "frag-1");
+    const listed = await service.listSources();
+    assert.equal(listed.find((item) => item.id === created.id)?.fragments.length, 2);
+  });
+});
+
 test("resolveAudioPath returns the managed copy path for a known source", async () => {
   await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
     const fixturePath = await makeFixtureFile(fixturesDir, "resolve-me.wav", Buffer.from("fourth fixture"));

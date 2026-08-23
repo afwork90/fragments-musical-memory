@@ -9,12 +9,19 @@ import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
 import { formatSeconds } from "@/lib/format";
-import { SourceFile } from "../../prototype-data";
+import { Fragment, MusicalRole, SourceFile } from "../../prototype-data";
+import { LIBRARY_ROLES } from "../library/library-columns";
+import { cn } from "@/lib/utils";
 
 export type SourceAnalysisValues = {
   bpm: number | null;
   key: string | null;
   scale: string | null;
+};
+
+export type FragmentLibraryMeta = {
+  role: MusicalRole;
+  userTags: string[];
 };
 
 type SourceDetailPanelProps = {
@@ -23,9 +30,11 @@ type SourceDetailPanelProps = {
   isPreviewing: boolean;
   canPlay: boolean;
   editable?: boolean;
+  fragment?: Fragment | null;
   onPreview: () => void;
   onClose: () => void;
   onSaveAnalysis?: (analysis: SourceAnalysisValues) => void | Promise<void>;
+  onSaveFragmentMeta?: (fragmentId: string, meta: FragmentLibraryMeta) => void;
 };
 
 function MetadataRow({ label, value }: { label: string; value: string }) {
@@ -47,9 +56,11 @@ export function SourceDetailPanel({
   isPreviewing,
   canPlay,
   editable = false,
+  fragment = null,
   onPreview,
   onClose,
   onSaveAnalysis,
+  onSaveFragmentMeta,
 }: SourceDetailPanelProps) {
   const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
   const values = cached?.peaks ?? source.waveform;
@@ -58,17 +69,27 @@ export function SourceDetailPanel({
   const resolvedScale = cached?.analysis.scale ?? source.scale ?? null;
   const keyStrength = cached?.analysis.keyStrength ?? null;
   const keyLabel = formatMusicalKey(resolvedKey, resolvedScale);
+  const roleOptions = LIBRARY_ROLES.filter((role): role is MusicalRole => role !== "All");
 
   const [bpm, setBpm] = useState(resolvedBpm != null ? String(resolvedBpm) : "");
   const [key, setKey] = useState(resolvedKey ?? "");
   const [scale, setScale] = useState(resolvedScale ?? "major");
   const [saving, setSaving] = useState(false);
+  const [role, setRole] = useState<MusicalRole>(fragment?.role ?? "Texture");
+  const [tagDraft, setTagDraft] = useState("");
+  const [tags, setTags] = useState<string[]>(fragment?.userTags ?? []);
 
   useEffect(() => {
     setBpm(resolvedBpm != null ? String(resolvedBpm) : "");
     setKey(resolvedKey ?? "");
     setScale(resolvedScale ?? "major");
   }, [resolvedBpm, resolvedKey, resolvedScale, source.id]);
+
+  useEffect(() => {
+    setRole(fragment?.role ?? "Texture");
+    setTags(fragment?.userTags ?? []);
+    setTagDraft("");
+  }, [fragment?.id, fragment?.role, fragment?.userTags]);
 
   const saveAnalysis = async () => {
     if (!onSaveAnalysis) return;
@@ -85,18 +106,48 @@ export function SourceDetailPanel({
     }
   };
 
+  const persistFragmentMeta = (next: FragmentLibraryMeta) => {
+    if (!fragment || !onSaveFragmentMeta) return;
+    onSaveFragmentMeta(fragment.id, next);
+  };
+
+  const addTag = () => {
+    const next = tagDraft.trim().toLowerCase();
+    if (!next || tags.includes(next)) {
+      setTagDraft("");
+      return;
+    }
+    const updated = [...tags, next];
+    setTags(updated);
+    setTagDraft("");
+    persistFragmentMeta({ role, userTags: updated });
+  };
+
+  const removeTag = (tag: string) => {
+    const updated = tags.filter((item) => item !== tag);
+    setTags(updated);
+    persistFragmentMeta({ role, userTags: updated });
+  };
+
+  const changeRole = (next: MusicalRole) => {
+    setRole(next);
+    persistFragmentMeta({ role: next, userTags: tags });
+  };
+
   return (
     <aside className="source-editor source-detail-panel">
       <ModalTitlebar
         eyebrow="Info"
-        title={source.name}
+        title={fragment?.name ?? source.name}
         onClose={onClose}
         closeLabel="Close info panel"
       />
 
       <div className="space-y-5">
         <p className="text-[11px] text-muted-foreground">
-          {formatSeconds(source.duration)} · {source.format}
+          {fragment
+            ? `${formatSeconds(fragment.end - fragment.start)} · from ${source.name}`
+            : `${formatSeconds(source.duration)} · ${source.format}`}
         </p>
 
         <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
@@ -144,7 +195,59 @@ export function SourceDetailPanel({
           </div>
         </div>
 
-        {editable ? (
+        {fragment && editable && (
+          <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+            <div className="space-y-2">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Role</span>
+              <div className="library-filter-pills info-meta-pills" role="group" aria-label="Fragment role">
+                {roleOptions.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    className={cn("library-filter-pill", role === option && "library-filter-pill-active")}
+                    aria-pressed={role === option}
+                    onClick={() => changeRole(option)}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Tags</span>
+              <div className="library-filter-pills info-meta-pills" role="list" aria-label="Fragment tags">
+                {tags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    className="library-filter-pill library-filter-pill-active"
+                    onClick={() => removeTag(tag)}
+                    title={`Remove ${tag}`}
+                  >
+                    {tag} ×
+                  </button>
+                ))}
+              </div>
+              <div className="info-tag-add">
+                <input
+                  value={tagDraft}
+                  onChange={(event) => setTagDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addTag();
+                    }
+                  }}
+                  placeholder="Add tag"
+                  aria-label="Add tag"
+                />
+                <Button type="button" variant="outline" size="sm" onClick={addTag}>Add</Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {editable && !fragment ? (
           <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
             <label className="block space-y-1">
               <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">BPM</span>
@@ -189,12 +292,12 @@ export function SourceDetailPanel({
               </Button>
             </div>
           </div>
-        ) : (
+        ) : !fragment ? (
           <>
             {resolvedBpm != null && <MetadataRow label="BPM" value={String(resolvedBpm)} />}
             {keyLabel && <MetadataRow label="Key" value={keyLabel} />}
           </>
-        )}
+        ) : null}
 
         <div>
           <MetadataRow label="Recorded" value={source.date} />

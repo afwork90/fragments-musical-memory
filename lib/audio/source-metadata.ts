@@ -1,6 +1,6 @@
 export function parseMusicalKeyLabel(label: string | undefined | null): { key: string | null; scale: string | null } {
   if (!label || label === "—") return { key: null, scale: null };
-  const match = label.match(/^(.+?)\s+(major|minor)$/i);
+  const match = label.match(/^(.+?)\s+(major|minor|dorian|mixolydian|lydian|phrygian|locrian|aeolian|ionian)$/i);
   if (match) return { key: match[1].trim(), scale: match[2].toLowerCase() };
   return { key: label, scale: null };
 }
@@ -8,6 +8,51 @@ export function parseMusicalKeyLabel(label: string | undefined | null): { key: s
 export function formatMusicalKey(key: string | null | undefined, scale: string | null | undefined) {
   if (!key) return null;
   return scale ? `${key} ${scale}` : key;
+}
+
+/** Case/spacing-insensitive key label for filter matching. */
+export function normalizeKeyLabel(label: string | null | undefined) {
+  if (!label) return "";
+  return label.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** Display labels for a source.json-style analysis record. */
+export function sourceKeyLabels(source: { key?: string | null; scale?: string | null } | null | undefined) {
+  if (!source) return [] as string[];
+  const labels: string[] = [];
+  const formatted = formatMusicalKey(source.key, source.scale);
+  if (formatted) labels.push(formatted);
+  else if (source.key) labels.push(source.key);
+  return labels;
+}
+
+export function fragmentKeyLabels(
+  fragment: { key?: string | null; alternateKeys?: string[] },
+  source?: { key?: string | null; scale?: string | null } | null,
+) {
+  // Filter identity is the analysis key only — never relative/alternate keys.
+  const fromSource = sourceKeyLabels(source);
+  if (fromSource.length) return fromSource;
+  if (fragment.key && fragment.key !== "—") return [fragment.key];
+  return [];
+}
+
+export function matchesKeySelection(candidates: string[], selected: string[]) {
+  if (!selected.length) return true;
+  if (!candidates.length) return false;
+  const wanted = new Set(selected.map(normalizeKeyLabel).filter(Boolean));
+  return candidates.some((candidate) => wanted.has(normalizeKeyLabel(candidate)));
+}
+
+/** Prefer a stable display label when the same key appears with different casing. */
+export function uniqueKeyLabels(labels: string[]) {
+  const byNormalized = new Map<string, string>();
+  for (const label of labels) {
+    const normalized = normalizeKeyLabel(label);
+    if (!normalized || normalized === "—") continue;
+    if (!byNormalized.has(normalized)) byNormalized.set(normalized, label);
+  }
+  return [...byNormalized.values()].sort((a, b) => a.localeCompare(b));
 }
 
 const KEYS = ["C", "D", "E", "F", "G", "A", "B"];

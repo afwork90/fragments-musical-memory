@@ -16,6 +16,15 @@ import { LibraryLinkSummary } from "@/app/features/library/library-list";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
+import { playMediaElement } from "@/lib/audio/browser-audio";
+import { resolveAudioUrl } from "@/lib/audio/resolve-audio-url";
+import {
+  PreviewScope,
+  buildFragmentPreviewScope,
+  progressForAudio,
+  resolveSourceAudioUrl,
+  timeForProgress,
+} from "@/lib/audio/source-playback";
 import { Button } from "@/lib/ui/button";
 import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { cn } from "@/lib/utils";
@@ -94,7 +103,17 @@ function SensitivityKnob({
   );
 }
 
-function draftFragmentForRange(
+/** Strips a file extension (e.g. "Balcony idea.wav" -> "Balcony idea") for use in a fragment's default name. */
+function stripExtension(name: string) {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(0, dot) : name;
+}
+
+export function defaultFragmentName(source: SourceFile, index: number) {
+  return `${stripExtension(source.name)} fragment ${index + 1}`;
+}
+
+export function draftFragmentForRange(
   range: EditableRange,
   index: number,
   source: SourceFile,
@@ -103,7 +122,7 @@ function draftFragmentForRange(
 ): Fragment {
   return {
     id: range.id,
-    name: `Untitled fragment ${index + 1}`,
+    name: defaultFragmentName(source, index),
     sourceId: source.id,
     source: source.name,
     start: range.start,
@@ -140,6 +159,9 @@ export function FragmentationWorkbench({
   onSave,
   onClose,
   onOpenFragment,
+  onRenameFragment,
+  onSaveFragment,
+  savedFragmentIds,
   saveLabel = "Save boundaries",
   footerContent,
 }: {
@@ -154,6 +176,9 @@ export function FragmentationWorkbench({
   onSave: () => void;
   onClose: () => void;
   onOpenFragment?: (id: string) => void;
+  onRenameFragment?: (id: string, name: string) => void;
+  onSaveFragment?: (id: string) => void;
+  savedFragmentIds?: Set<string>;
   saveLabel?: string;
   footerContent?: ReactNode;
 }) {
@@ -165,11 +190,13 @@ export function FragmentationWorkbench({
   const waveform = cached?.peaks ?? source.waveform;
   const analysisMeta = cached?.analysis;
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const previewScopeRef = useRef<PreviewScope | null>(null);
   const progressRaf = useRef(0);
   const timelineRef = useRef<HTMLDivElement>(null);
   const rulerRef = useRef<HTMLDivElement>(null);
   const rangesRef = useRef(ranges);
   const onRangesChangeRef = useRef(onRangesChange);
+  const canPlaySource = Boolean(resolveSourceAudioUrl(source));
 
   useEffect(() => { rangesRef.current = ranges; }, [ranges]);
   useEffect(() => { onRangesChangeRef.current = onRangesChange; }, [onRangesChange]);
@@ -181,42 +208,47 @@ export function FragmentationWorkbench({
       audioRef.current.currentTime = 0;
       audioRef.current = null;
     }
+    previewScopeRef.current = null;
     setPreviewingId(null);
     setPreviewProgress(null);
   }, []);
 
   const preview = useCallback((fragment: Fragment, startRatio = 0) => {
-    if (!fragment.audio) return;
+    const scope = buildFragmentPreviewScope(fragment, source);
+    if (!scope) return;
     if (previewingId === fragment.id) {
       stopPreview();
       return;
     }
     stopPreview();
-    const audio = new Audio(fragment.audio);
-    audio.loop = true;
+    const audio = new Audio(resolveAudioUrl(scope.url));
+    audio.loop = !scope.clip;
     audio.volume = 0.72;
     audioRef.current = audio;
+    previewScopeRef.current = scope;
     setPreviewingId(fragment.id);
 
-    const begin = () => {
+    const syncPosition = () => {
       if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
-        setPreviewProgress(0);
+        setPreviewProgress(startRatio);
       } else {
-        audio.currentTime = Math.min(1, Math.max(0, startRatio)) * audio.duration;
+        audio.currentTime = timeForProgress(scope, startRatio, audio.duration);
         setPreviewProgress(startRatio);
       }
-      audio.play().catch(() => stopPreview());
     };
 
-    if (audio.readyState >= 1) begin();
-    else audio.addEventListener("loadedmetadata", begin, { once: true });
-  }, [previewingId, stopPreview]);
+    if (audio.readyState >= 1) syncPosition();
+    else audio.addEventListener("loadedmetadata", syncPosition, { once: true });
+
+    playMediaElement(audio, () => stopPreview());
+  }, [previewingId, source, stopPreview]);
 
   const seekPreview = useCallback((fragment: Fragment, ratio: number) => {
     const audio = audioRef.current;
-    if (!audio || previewingId !== fragment.id || !Number.isFinite(audio.duration)) return;
+    const scope = previewScopeRef.current;
+    if (!audio || !scope || previewingId !== fragment.id || !Number.isFinite(audio.duration)) return;
     const clamped = Math.min(1, Math.max(0, ratio));
-    audio.currentTime = clamped * audio.duration;
+    audio.currentTime = timeForProgress(scope, clamped, audio.duration);
     setPreviewProgress(clamped);
   }, [previewingId]);
 
@@ -225,8 +257,12 @@ export function FragmentationWorkbench({
 
     const tick = () => {
       const audio = audioRef.current;
-      if (audio && !audio.paused && Number.isFinite(audio.duration) && audio.duration > 0) {
-        setPreviewProgress(audio.currentTime / audio.duration);
+      const scope = previewScopeRef.current;
+      if (audio && scope && !audio.paused && Number.isFinite(audio.duration) && audio.duration > 0) {
+        if (scope.clip && audio.currentTime >= scope.clip.end) {
+          audio.currentTime = scope.clip.start;
+        }
+        setPreviewProgress(progressForAudio(scope, audio.currentTime, audio.duration));
       }
       progressRaf.current = requestAnimationFrame(tick);
     };
@@ -312,7 +348,7 @@ export function FragmentationWorkbench({
     [ranges, fragments, source, waveform, analysisMeta?.bpm],
   );
 
-  const headerFragment = displayFragments.find((fragment) => fragment.audio) ?? displayFragments[0];
+  const headerFragment = displayFragments[0];
   const previewingRange = ranges.find((range) => range.fragmentId === previewingId);
   const timelinePlayheadLeft = previewingRange && previewProgress != null
     ? ((previewingRange.start + previewProgress * (previewingRange.end - previewingRange.start)) / source.duration) * 100
@@ -348,7 +384,7 @@ export function FragmentationWorkbench({
               variant="lime"
               size="sm"
               className="fragment-workbench-play"
-              disabled={!headerFragment.audio}
+              disabled={!canPlaySource}
               onClick={() => preview(headerFragment)}
             >
               {previewingId === headerFragment.id ? (
@@ -468,7 +504,7 @@ export function FragmentationWorkbench({
             {ranges.map((range, index) => {
               const fragment = displayFragments[index];
               const saved = Boolean(fragmentFor(range));
-              const isPreviewing = previewingId === fragment.id && Boolean(fragment.audio);
+              const isPreviewing = previewingId === fragment.id;
               return (
                 <div
                   key={range.id}
@@ -485,7 +521,7 @@ export function FragmentationWorkbench({
                     sourceNameFor={() => source.name}
                     sourceForId={() => source}
                     linkSummaryFor={noopLinkSummary}
-                    fragmentAudioFor={() => fragment.audio}
+                    fragmentAudioFor={() => source.audioUrl}
                     onSelect={() => {
                       if (saved && onOpenFragment) onOpenFragment(fragment.id);
                     }}
@@ -493,6 +529,9 @@ export function FragmentationWorkbench({
                     onSeek={(ratio) => seekPreview(fragment, ratio)}
                     onOpenMatches={() => {}}
                     onOpenInfo={() => {}}
+                    onRename={onRenameFragment ? (name) => onRenameFragment(fragment.id, name) : undefined}
+                    onSave={onSaveFragment ? () => onSaveFragment(fragment.id) : undefined}
+                    isSaved={saved && savedFragmentIds ? savedFragmentIds.has(fragment.id) : false}
                   />
                 </div>
               );

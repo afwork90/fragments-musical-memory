@@ -11,6 +11,7 @@ import {
   SOURCE_FILES,
   Fragment,
   MatchTolerances,
+  MusicalRole,
   Relationship,
   RelationshipStatus,
   SearchContext,
@@ -21,17 +22,18 @@ import { Waveform } from "@/lib/audio/waveform";
 import { DuplicateTakesDialog } from "./features/library/duplicate-takes-dialog";
 import { ConnectionsTable } from "./features/library/connections-table";
 import { LibraryView } from "./features/library/library-view";
-import { LibraryFilterMenu, LibrarySort, LibrarySortColumn } from "./features/library/types";
+import { LibrarySort } from "./features/library/types";
 import { ImportDialog, ImportedSource } from "./features/sources/import-dialog";
-import { SourceDetailPanel } from "./features/sources/source-detail-panel";
+import { FragmentLibraryMeta, SourceDetailPanel } from "./features/sources/source-detail-panel";
 import { SourcesView } from "./features/sources/sources-view";
 import { SourceSort } from "./features/sources/types";
 import { CombineCandidate, CombineWorkspace, ExportSheet } from "./hero-workflow";
 import { FRAGMENTS_LOGO_SRC } from "./fragments-logo";
-import { EditableRange, FragmentationWorkbench } from "./fragmentation-workbench";
+import { defaultFragmentName, draftFragmentForRange, EditableRange, FragmentationWorkbench } from "./fragmentation-workbench";
 import { LibraryFilters, createLibraryFilters } from "./library-filter-popover";
 import { formatSeconds } from "@/lib/format";
-import { bindSourceAudio, retainCachedAudio } from "@/lib/audio/audio-service";
+import { bindSourceAudio, getCachedAudio, retainCachedAudio } from "@/lib/audio/audio-service";
+import { slicePeaks } from "@/lib/audio/slice-peaks";
 import {
   PreviewScope,
   buildFragmentPreviewScope,
@@ -40,7 +42,14 @@ import {
   resolveSourceAudioUrl,
   timeForProgress,
 } from "@/lib/audio/source-playback";
-import { analysisNeedsInvention, inventAnalysis } from "@/lib/audio/source-metadata";
+import { armBrowserAudioUnlock, playMediaElement } from "@/lib/audio/browser-audio";
+import { resolveAudioUrl } from "@/lib/audio/resolve-audio-url";
+import {
+  analysisNeedsInvention,
+  formatMusicalKey,
+  inventAnalysis,
+  parseMusicalKeyLabel,
+} from "@/lib/audio/source-metadata";
 import { SourceAnalysisValues } from "./features/sources/source-detail-panel";
 import { LibraryCard } from "./features/library/library-card";
 import { MAP_WORLD, musicalMapPoint } from "./map-layout.mjs";
@@ -78,6 +87,60 @@ function rangeForIndex(source:SourceFile,index:number):EditableRange {
 
 const initialSourceRanges = () => Object.fromEntries(SOURCE_FILES.map((source) => [source.id,Array.from({ length:fragmentCountForSensitivity(source.sensitivity) },(_,index) => rangeForIndex(source,index))]));
 
+/** Rebuilds an in-memory Fragment from a source.json fragment record, so persisted segmentation shows up in the Library after a reload. */
+function fragmentFromDocument(fragmentDoc: any, index: number, source: SourceFile): Fragment {
+  return {
+    id: fragmentDoc.id,
+    name: fragmentDoc.name || defaultFragmentName(source, index),
+    sourceId: source.id,
+    source: source.name,
+    start: fragmentDoc.start,
+    end: fragmentDoc.end,
+    date: source.date,
+    dateLabel: source.date,
+    duration: formatSeconds(fragmentDoc.end - fragmentDoc.start),
+    key:
+      formatMusicalKey(
+        fragmentDoc.analysis?.key ?? source.key,
+        fragmentDoc.analysis?.scale ?? source.scale,
+      ) ?? "—",
+    alternateKeys: [],
+    bpm: fragmentDoc.analysis?.bpm ?? source.bpm ?? 0,
+    role: (fragmentDoc.primaryRole as MusicalRole) ?? "Texture",
+    roles: fragmentDoc.roles?.length ? fragmentDoc.roles : ["Texture"],
+    brightness: 0,
+    waveform: slicePeaks(source.waveform, fragmentDoc.start, fragmentDoc.end, source.duration),
+    beats: 0,
+    bars: 0,
+    confidence: 0,
+    userTags: fragmentDoc.userTags ?? [],
+    analysisRevision: fragmentDoc.analysisRevision ?? 1,
+    audio: "",
+    sourceTypes: source.sourceTypes,
+  };
+}
+
+/** Inverse of `fragmentFromDocument`: the shape `library-service.mjs` persists on disk. */
+function fragmentToDocument(fragment: Fragment) {
+  const { key, scale } = parseMusicalKeyLabel(fragment.key);
+  return {
+    id: fragment.id,
+    name: fragment.name,
+    start: fragment.start,
+    end: fragment.end,
+    roles: fragment.roles,
+    primaryRole: fragment.role,
+    userTags: fragment.userTags,
+    analysis: {
+      bpm: fragment.bpm || null,
+      key,
+      scale,
+      keyStrength: null,
+    },
+    analysisRevision: fragment.analysisRevision,
+  };
+}
+
 function scoreRelationship(relationship: Relationship, weights: SearchWeights, context: SearchContext, mode: RangeMode) {
   const multipliers: Record<SearchContext, SearchWeights> = {
     whole:{ rhythm:1, harmony:1, melody:1, timbre:1 },
@@ -105,7 +168,7 @@ export default function FragmentsApp() {
   const [selectedId, setSelectedId] = useState("f02");
   const [query, setQuery] = useState("");
   const [libraryFilters,setLibraryFilters] = useState<LibraryFilters>(createLibraryFilters);
-  const [filterMenu,setFilterMenu] = useState<LibraryFilterMenu | null>(null);
+  const [filterOpen,setFilterOpen] = useState(false);
   const [sort, setSort] = useState<LibrarySort>({ column:"date", direction:"desc" });
   const [context, setContext] = useState<SearchContext>("whole");
   const [rangeMode, setRangeMode] = useState<RangeMode>("reasonable");
@@ -132,6 +195,8 @@ export default function FragmentsApp() {
   const [importOpen,setImportOpen] = useState(false);
   const [importComplete,setImportComplete] = useState(false);
   const [fragmentOverrides,setFragmentOverrides] = useState<Record<string,Partial<Fragment>>>({});
+  const [importedFragments,setImportedFragments] = useState<Fragment[]>([]);
+  const [savedFragmentIds,setSavedFragmentIds] = useState<Set<string>>(new Set());
   const [combineCandidates,setCombineCandidates] = useState<CombineCandidate[] | null>(null);
   const [correctionRelationship,setCorrectionRelationship] = useState<CombineCandidate | null>(null);
   const [correctionPhase,setCorrectionPhase] = useState<CorrectionPhase>("edit");
@@ -143,6 +208,7 @@ export default function FragmentsApp() {
   const [manualRelationshipIds,setManualRelationshipIds] = useState<Set<string>>(() => new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));
   const [mapSelectedId,setMapSelectedId] = useState<string | null>(null);
   const [hoveredMapId,setHoveredMapId] = useState<string | null>(null);
+  const [infoFragmentId, setInfoFragmentId] = useState<string | null>(null);
   const returnScroll = useRef(0);
   const returnStack = useRef<ReturnSnapshot[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -150,10 +216,11 @@ export default function FragmentsApp() {
   const previewCleanupRef = useRef<(() => void) | null>(null);
   const previewScopeRef = useRef<PreviewScope | null>(null);
   const mapInspectorCloseRef = useRef<HTMLButtonElement>(null);
-  const filterMenuOpenRef=useRef(false);
-  const closeFilterMenu=useCallback(() => setFilterMenu(null),[]);
+  const filterOpenRef = useRef(false);
 
-  useEffect(() => { filterMenuOpenRef.current=Boolean(filterMenu); },[filterMenu]);
+  useEffect(() => {
+    filterOpenRef.current = filterOpen;
+  }, [filterOpen]);
 
   useEffect(() => {
     const bridge = (window as any).fragments;
@@ -198,6 +265,15 @@ export default function FragmentsApp() {
           color: RANGE_COLORS[index % RANGE_COLORS.length],
         }))])),
       }));
+      const persistedFragments = documents.flatMap((document) => {
+        const source = persisted.find((item) => item.id === document.id);
+        if (!source) return [];
+        return document.fragments.map((fragmentDoc:any,index:number) => fragmentFromDocument(fragmentDoc,index,source));
+      });
+      setImportedFragments((current) => [
+        ...current.filter((fragment) => !documents.some((document) => document.id === fragment.sourceId)),
+        ...persistedFragments,
+      ]);
       for (const item of backfill) {
         try {
           await bridge.updateSourceAnalysis(item.id, item.analysis);
@@ -208,7 +284,10 @@ export default function FragmentsApp() {
     }).catch((error:any) => console.error("Could not load managed library:", error));
   }, []);
 
-  const activeFragments = useMemo(() => FRAGMENTS.filter((fragment) => importComplete || !IMPORTED_FRAGMENT_IDS.includes(fragment.id)).map((fragment) => ({ ...fragment,...fragmentOverrides[fragment.id] })),[importComplete,fragmentOverrides]);
+  const activeFragments = useMemo(() => [
+    ...FRAGMENTS.filter((fragment) => importComplete || !IMPORTED_FRAGMENT_IDS.includes(fragment.id)),
+    ...importedFragments,
+  ].map((fragment) => ({ ...fragment,...fragmentOverrides[fragment.id] })),[importComplete,fragmentOverrides,importedFragments]);
   const activeFragmentById = (id:string) => activeFragments.find((fragment) => fragment.id === id) ?? ({ ...fragmentById(id),...fragmentOverrides[id] });
   const selectedFragmentId = selectedId.startsWith("source:") ? null : selectedId;
   const selectedLibrarySourceId = selectedId.startsWith("source:") ? selectedId.slice("source:".length) : null;
@@ -247,21 +326,27 @@ export default function FragmentsApp() {
 
   const startPreviewScope = (scope: PreviewScope, startRatio = 0) => {
     stopAllAudio();
-    const audio = new Audio(scope.url);
+    const audio = new Audio(resolveAudioUrl(scope.url));
     previewAudio.current = audio;
     audio.loop = !scope.clip;
     audio.volume = 0.72;
     setPreviewingId(scope.id);
 
-    const begin = () => {
-      audio.currentTime = timeForProgress(scope, startRatio, audio.duration);
-      setPreviewProgress(startRatio);
+    const syncPosition = () => {
+      if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
+        setPreviewProgress(startRatio);
+      } else {
+        audio.currentTime = timeForProgress(scope, startRatio, audio.duration);
+        setPreviewProgress(startRatio);
+      }
       bindPreviewAudio(audio, scope);
-      audio.play().catch(() => notify("Playback needs one more click in this browser."));
     };
 
-    if (audio.readyState >= 1) begin();
-    else audio.addEventListener("loadedmetadata", begin, { once: true });
+    if (audio.readyState >= 1) syncPosition();
+    else audio.addEventListener("loadedmetadata", syncPosition, { once: true });
+
+    // play() must stay in the user-gesture stack — do not wait for metadata first.
+    playMediaElement(audio, () => notify("Playback needs one more click in this browser."));
   };
 
   const seekPreview = (ratio: number) => {
@@ -273,13 +358,17 @@ export default function FragmentsApp() {
     setPreviewProgress(clamped);
   };
 
-  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setFilterMenu(null);setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCombineCandidates(null);setExportRelationship(null);setDuplicateGroup(null);setImportOpen(false);if (next !== "map") setMapSelectedId(null);setView(next); };
+  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setFilterOpen(false);setInfoFragmentId(null);setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCombineCandidates(null);setExportRelationship(null);setDuplicateGroup(null);setImportOpen(false);if (next !== "map") setMapSelectedId(null);setView(next); };
   const notify = (message:string) => { setToast(message); window.setTimeout(() => setToast(null), 2400); };
+
+  useEffect(() => {
+    armBrowserAudioUnlock();
+  }, []);
 
   useEffect(() => {
     const handler = (event:KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); navigate("library"); window.setTimeout(() => searchRef.current?.focus(), 0); }
-      if (event.key === "Escape") { if (filterMenuOpenRef.current) return;setDuplicateGroup(null);setMapSelectedId(null);stopAllAudio(); }
+      if (event.key === "Escape") { if (filterOpenRef.current) { setFilterOpen(false); return; } setDuplicateGroup(null);setMapSelectedId(null);stopAllAudio(); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -338,12 +427,6 @@ export default function FragmentsApp() {
   const relatedTakeCountFor=(fragment:Fragment) => fragment.duplicateGroup && !duplicateExclusions.has(fragment.id) ? activeFragments.filter((item) => item.duplicateGroup === fragment.duplicateGroup && item.id !== fragment.id && !archived.has(item.id) && !duplicateExclusions.has(item.id)).length : 0;
   const filterableFragments=useMemo(() => activeFragments.filter((fragment) => !archived.has(fragment.id)),[activeFragments,archived]);
 
-  const openColumnFilter = (column:LibrarySortColumn,trigger:HTMLButtonElement) => {
-    if (filterMenu?.column === column) { setFilterMenu(null);return; }
-    const rect=trigger.getBoundingClientRect();
-    setFilterMenu({ column,left:rect.left,top:rect.bottom + 5,trigger });
-  };
-
   const resizeRangesForSensitivity = (ranges:EditableRange[],source:SourceFile,value:number) => {
     const count=fragmentCountForSensitivity(value);
     return count <= ranges.length ? ranges.slice(0,count) : [...ranges,...Array.from({ length:count - ranges.length },(_,offset) => rangeForIndex(source,ranges.length + offset))];
@@ -400,7 +483,9 @@ export default function FragmentsApp() {
     }
     if (previewingId === fragment.id && previewAudio.current && startRatio > 0) {
       seekPreview(startRatio);
-      if (previewAudio.current.paused) previewAudio.current.play().catch(() => notify("Playback needs one more click in this browser."));
+      if (previewAudio.current.paused) {
+        playMediaElement(previewAudio.current, () => notify("Playback needs one more click in this browser."));
+      }
       return;
     }
     startPreviewScope(scope, startRatio);
@@ -416,7 +501,9 @@ export default function FragmentsApp() {
     }
     if (previewingId === previewKey && previewAudio.current && startRatio > 0) {
       seekPreview(startRatio);
-      if (previewAudio.current.paused) previewAudio.current.play().catch(() => notify("Playback needs one more click in this browser."));
+      if (previewAudio.current.paused) {
+        playMediaElement(previewAudio.current, () => notify("Playback needs one more click in this browser."));
+      }
       return;
     }
     startPreviewScope(scope, startRatio);
@@ -439,12 +526,46 @@ export default function FragmentsApp() {
     notify("Source metadata saved.");
   };
 
-  const openSourceInfo = (sourceId: string, modal = false) => {
+  const openSourceInfo = (sourceId: string, modal = false, fragmentId?: string) => {
     stopAllAudio();
+    setFilterOpen(false);
+    setConnectionsOpen(false);
     setSelectedSourceId(sourceId);
+    setInfoFragmentId(fragmentId ?? null);
     setSourcePanelMode("detail");
     setSourceEditorModal(modal);
     setSourceEditorOpen(true);
+  };
+
+  const openLibraryInfo = (target: { sourceId: string; fragmentId?: string }) => {
+    openSourceInfo(target.sourceId, false, target.fragmentId);
+  };
+
+  const toggleLibraryFilter = () => {
+    setFilterOpen((open) => {
+      const next = !open;
+      if (next) {
+        setConnectionsOpen(false);
+        setSourceEditorOpen(false);
+        setSourceEditorModal(false);
+        setInfoFragmentId(null);
+      }
+      return next;
+    });
+  };
+
+  const closeLibraryFilter = () => setFilterOpen(false);
+
+  const saveFragmentLibraryMeta = (fragmentId: string, meta: FragmentLibraryMeta) => {
+    setFragmentOverrides((current) => ({
+      ...current,
+      [fragmentId]: {
+        ...current[fragmentId],
+        role: meta.role,
+        roles: [meta.role],
+        userTags: meta.userTags,
+      },
+    }));
   };
 
   const archiveFragment = (id:string) => {
@@ -460,7 +581,7 @@ export default function FragmentsApp() {
     setArchived((current) => new Set([...current, ...others])); setSelectedId(id); setDuplicateGroup(null); notify("Kept this take for matching and archived the rest.");
   };
   const resetDemo = () => {
-    stopAllAudio(); setView("library"); setSelectedId("f02"); setQuery("");setLibraryFilters(createLibraryFilters());setFilterMenu(null);setSort({ column:"date", direction:"desc" });
+    stopAllAudio(); setView("library"); setSelectedId("f02"); setQuery("");setLibraryFilters(createLibraryFilters());setFilterOpen(false);setInfoFragmentId(null);setSort({ column:"date", direction:"desc" });
     setContext("whole"); setRangeMode("reasonable"); setWeights({ ...DEFAULT_WEIGHTS }); setTolerances({ ...DEFAULT_TOLERANCES });setArchived(new Set()); setDuplicateExclusions(new Set());
     returnStack.current=[];setDuplicateGroup(null);setConnectionsOpen(false);setAdvancedOpen(false);setConnectionsWidth(520);setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(OPENING_SOURCE_ID);setSourceQuery("");setSourceSort({ column:"date",direction:"desc" });setSourceEditorOpen(false);setSourceEditorModal(false);setSourcePanelMode("fragmentation");setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null);notify("Demo restored to 24 fragments before import.");
   };
@@ -470,12 +591,13 @@ export default function FragmentsApp() {
     if (!snapshot || snapshot.kind !== kind) return false;
     returnStack.current.pop();stopAllAudio();setView(snapshot.view);setSelectedId(snapshot.selectedId);setSelectedSourceId(snapshot.selectedSourceId);setConnectionsOpen(snapshot.connectionsOpen);setAdvancedOpen(snapshot.advancedOpen);setSourceEditorOpen(false);window.setTimeout(() => window.scrollTo({ top:snapshot.scrollY }),0);return true;
   };
-  const openFragment = (id:string) => { stopAllAudio(); setSelectedId(id); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
+  const openFragment = (id:string) => { stopAllAudio(); setSelectedId(id); setFilterOpen(false); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
   const highlightLibraryFragment = (id: string) => { setSelectedId(id); };
   const highlightLibrarySource = (source: SourceFile) => { setSelectedId(`source:${source.id}`); };
   const selectLibrarySource = (source: SourceFile) => {
     stopAllAudio();
     setSelectedId(`source:${source.id}`);
+    setFilterOpen(false);
     setConnectionsOpen(true);
     setAdvancedOpen(false);
     setView("library");
@@ -532,7 +654,7 @@ export default function FragmentsApp() {
   const closeSourceEditor = () => {
     if (correctionRelationship) { setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);return; }
     if (restoreReturn("source-edit")) return;
-    stopAllAudio();setSourceEditorOpen(false);setSourceEditorModal(false);
+    stopAllAudio();setSourceEditorOpen(false);setSourceEditorModal(false);setInfoFragmentId(null);
   };
   const openSourceEditor = (sourceId: string, mode: SourcePanelMode, modal: boolean) => {
     stopAllAudio();
@@ -568,7 +690,14 @@ export default function FragmentsApp() {
       scale: imported.analysis.scale,
     };
     setSources((current) => [...current, newSource]);
-    setSourceRanges((current) => ({ ...current, [id]: [] }));
+    // Pre-slice the same way an existing source's ranges are seeded, so landing here
+    // right after import looks and behaves exactly like opening "Fragments" on any
+    // other source instead of showing an empty editor.
+    const initialRanges = Array.from(
+      { length: fragmentCountForSensitivity(newSource.sensitivity) },
+      (_, index) => rangeForIndex(newSource, index),
+    );
+    setSourceRanges((current) => ({ ...current, [id]: initialRanges }));
     setSelectedSourceId(id);
     setSourcePanelMode("fragmentation");
     setSourceEditorModal(true);
@@ -584,6 +713,7 @@ export default function FragmentsApp() {
     if (!top) return;
     stopAllAudio();
     setSelectedId(fragmentId);
+    setFilterOpen(false);
     setConnectionsOpen(false);
     setAdvancedOpen(false);
     setView("library");
@@ -612,10 +742,112 @@ export default function FragmentsApp() {
     const candidate=activeFragmentById(relationship.otherId);const source=sources.find((item) => item.id === candidate.sourceId) ?? SOURCE_FILES.find((item) => item.id === candidate.sourceId)!;
     stopAllAudio();setSelectedSourceId(source.id);setCombineDraftRanges((sourceRanges[source.id] ?? []).map((range) => ({ ...range })));setCombineDraftSensitivity(source.sensitivity);setCorrectionOriginal({ duration:candidate.duration,key:candidate.key,bpm:candidate.bpm,bars:candidate.bars,beats:candidate.beats,confidence:candidate.confidence,analysisRevision:candidate.analysisRevision });setCorrectionPhase("edit");setCorrectionRelationship(relationship);setSourcePanelMode("fragmentation");setSourceEditorOpen(true);
   };
+  const persistFragmentsForSource = (sourceId:string,fragments:Fragment[]) => {
+    const bridge=(window as any).fragments;
+    if (!bridge?.updateFragments) return;
+    void bridge.updateFragments(sourceId,fragments.map(fragmentToDocument)).catch((error:any) => console.warn("Could not persist fragments:",error));
+  };
+
+  /** Turns a not-yet-real "Add fragment" range into a permanent Fragment with a stable id. */
+  const promoteRangeToFragment = (range:EditableRange,index:number,source:SourceFile):{ range:EditableRange;fragment:Fragment } => {
+    const cached = source.audioCacheKey ? getCachedAudio(`source:${source.id}`) : undefined;
+    const peaks = cached?.peaks ?? source.waveform;
+    const bpm = cached?.analysis?.bpm ?? source.bpm ?? null;
+    const fragmentId=`${source.id}-fragment-${Date.now()}-${index}`;
+    const fragment=draftFragmentForRange({ ...range,id:fragmentId },index,source,peaks,bpm);
+    return { range:{ ...range,fragmentId },fragment };
+  };
+
   const saveSourceBoundaries = () => {
+    // Ranges carry a `fragmentId` once they reference a real Fragment. Ranges added
+    // via "Add fragment" don't have one yet - promote those into real fragments here
+    // so slicing a source actually produces Library entries instead of being dropped.
     const patches:Record<string,Partial<Fragment>>={};
-    selectedRanges.forEach((range) => { const id=range.fragmentId;if (!id) return;const fragment=activeFragmentById(id);patches[id]={ start:range.start,end:range.end,duration:formatSeconds(range.end-range.start),analysisRevision:fragment.analysisRevision + 1 }; });
-    setFragmentOverrides((current) => ({ ...current,...patches }));notify("Boundaries saved; library references updated.");
+    const created:Fragment[]=[];
+    const nextRanges = selectedRanges.map((range,index) => {
+      if (range.fragmentId) {
+        const fragment=activeFragmentById(range.fragmentId);
+        patches[range.fragmentId]={ start:range.start,end:range.end,duration:formatSeconds(range.end-range.start),analysisRevision:fragment.analysisRevision + 1 };
+        return range;
+      }
+      const { range:nextRange,fragment } = promoteRangeToFragment(range,index,selectedSource);
+      created.push(fragment);
+      return nextRange;
+    });
+
+    if (created.length) setImportedFragments((current) => [...current,...created]);
+    if (Object.keys(patches).length) setFragmentOverrides((current) => ({ ...current,...patches }));
+    setSourceRanges((current) => ({ ...current,[selectedSource.id]:nextRanges }));
+    if (created.length) {
+      setSources((current) => current.map((source) => source.id === selectedSource.id
+        ? { ...source,fragmentIds:Array.from(new Set([...source.fragmentIds,...created.map((fragment) => fragment.id)])) }
+        : source));
+    }
+    if (created.length) setSavedFragmentIds((current) => new Set([...current,...created.map((fragment) => fragment.id)]));
+
+    const survivingFragments = activeFragments
+      .filter((fragment) => fragment.sourceId === selectedSource.id)
+      .map((fragment) => ({ ...fragment,...patches[fragment.id] }));
+    persistFragmentsForSource(selectedSource.id,[...survivingFragments,...created]);
+
+    notify(created.length ? `Boundaries saved; ${created.length} new fragment${created.length > 1 ? "s" : ""} added to the library.` : "Boundaries saved; library references updated.");
+  };
+
+  /** Commits a range's promotion into a real fragment: updates state, source.fragmentIds, and disk. */
+  const commitPromotedRange = (nextRange:EditableRange,fragment:Fragment,source:SourceFile) => {
+    setImportedFragments((current) => [...current,fragment]);
+    setSourceRanges((current) => ({ ...current,[source.id]:(current[source.id] ?? []).map((item) => item.id === nextRange.id ? nextRange : item) }));
+    setSources((current) => current.map((item) => item.id === source.id
+      ? { ...item,fragmentIds:Array.from(new Set([...item.fragmentIds,fragment.id])) }
+      : item));
+    setSavedFragmentIds((current) => new Set([...current,fragment.id]));
+    const siblings=[...activeFragments.filter((item) => item.sourceId === source.id),fragment];
+    persistFragmentsForSource(source.id,siblings);
+    notify(`${fragment.name} saved.`);
+  };
+
+  /** Finds the range backing a Library card's fragment id, whether it's already real (`fragmentId`) or still a draft (`range.id`). */
+  const rangeForFragmentCardId = (id:string) => selectedRanges.find((range) => range.fragmentId === id) ?? selectedRanges.find((range) => range.id === id);
+
+  /** Renames a fragment in place (via the Library card's editable title). Promotes drafts into real fragments first. */
+  const renameFragmentOrRange = (id:string,name:string) => {
+    const range=rangeForFragmentCardId(id);
+    if (!range) return;
+    if (range.fragmentId) {
+      renameFragment(activeFragmentById(range.fragmentId),name);
+      return;
+    }
+    const index=selectedRanges.indexOf(range);
+    const { range:nextRange,fragment } = promoteRangeToFragment(range,index,selectedSource);
+    fragment.name=name;
+    commitPromotedRange(nextRange,fragment,selectedSource);
+  };
+
+  /** Renames a fragment in place (via the Library card's editable title). Marks it unsaved until "Save" is clicked again. */
+  const renameFragment = (fragment:Fragment,name:string) => {
+    setFragmentOverrides((current) => ({ ...current,[fragment.id]:{ ...current[fragment.id],name } }));
+    setSavedFragmentIds((current) => { if (!current.has(fragment.id)) return current; const next=new Set(current); next.delete(fragment.id); return next; });
+  };
+
+  /** Persists a single fragment's current state (name, bounds, etc.) to its source.json and flips its card to "Saved". */
+  const saveFragment = (fragment:Fragment) => {
+    setSavedFragmentIds((current) => new Set([...current,fragment.id]));
+    const siblings = activeFragments.filter((item) => item.sourceId === fragment.sourceId);
+    persistFragmentsForSource(fragment.sourceId,siblings);
+    notify(`${fragment.name} saved.`);
+  };
+
+  /** Save button for a fragment card: promotes a draft range on first use, otherwise just re-persists it. */
+  const saveFragmentOrRange = (id:string) => {
+    const range=rangeForFragmentCardId(id);
+    if (!range) return;
+    if (range.fragmentId) {
+      saveFragment(activeFragmentById(range.fragmentId));
+      return;
+    }
+    const index=selectedRanges.indexOf(range);
+    const { range:nextRange,fragment } = promoteRangeToFragment(range,index,selectedSource);
+    commitPromotedRange(nextRange,fragment,selectedSource);
   };
   const saveCombineSourceBoundaries = () => {
     if (!correctionRelationship || !combineDraftRanges) return;
@@ -645,16 +877,24 @@ export default function FragmentsApp() {
   const editorSensitivity=correctionRelationship ? (combineDraftSensitivity ?? selectedSource.sensitivity) : selectedSource.sensitivity;
   const correctedRange=correctionRelationship ? editorRanges.find((range) => range.fragmentId === correctionRelationship.otherId) : null;
   const correctionFooter=correctionRelationship && correctionPhase === "recompute" ? <div className="recompute workbench-result"><i/><strong>Recomputing metadata and active match…</strong><span>Revision {(correctionOriginal?.analysisRevision ?? 1) + 1}</span></div> : correctionRelationship && correctionPhase === "prompt" && correctionOriginal ? <div className="correction-result workbench-result"><div className="metadata-diff"><span>Field</span><span>Before</span><span>After</span>{[["Duration",correctionOriginal.duration,formatSeconds((correctedRange?.end ?? 0) - (correctedRange?.start ?? 0))],["Key",correctionOriginal.key,"C minor"],["BPM",correctionOriginal.bpm,"90"],["Bars",correctionOriginal.bars,"3"],["Beats",correctionOriginal.beats,"17"],["Confidence",`${Math.round(correctionOriginal.confidence * 100)}%`,`93%`],["Match",`${correctionRelationship.score}%`,`76%`]].map((row) => row.map((cell,index) => <span className={index === 2 ? "changed" : ""} key={`${row[0]}-${index}`}>{cell}</span>))}</div><div className="link-prompt"><span className="relationship-badge manual">criteria changed</span><h3>This fragment no longer matches the original search. Keep it linked to this comparison?</h3><p>The boundary correction is saved either way. A manual link preserves your musical judgment.</p><div><button onClick={rejectCorrectionLink}>Reject and show next</button><button className="primary-button" onClick={keepCorrectionLink}>Yes, keep linked</button></div></div></div> : null;
-  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => correctionRelationship ? setCombineDraftRanges(ranges) : setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges }))} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} saveLabel={correctionRelationship ? "Save & recompute" : "Save boundaries"} footerContent={correctionFooter}/> : null;
+  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => correctionRelationship ? setCombineDraftRanges(ranges) : setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges }))} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} onRenameFragment={correctionRelationship ? undefined : renameFragmentOrRange} onSaveFragment={correctionRelationship ? undefined : saveFragmentOrRange} savedFragmentIds={savedFragmentIds} saveLabel={correctionRelationship ? "Save & recompute" : "Save boundaries"} footerContent={correctionFooter}/> : null;
+  const detailFragment = infoFragmentId ? activeFragments.find((fragment) => fragment.id === infoFragmentId) ?? null : null;
   const detailPanel=sourceEditorOpen && sourcePanelMode === "detail" ? <SourceDetailPanel
     source={selectedSource}
+    fragment={detailFragment}
     fragmentCount={selectedRanges.length}
-    isPreviewing={previewingId === `source:${selectedSource.id}`}
-    canPlay={Boolean(resolveSourceAudioUrl(selectedSource, fragmentAudioFor))}
+    isPreviewing={previewingId === (detailFragment?.id ?? `source:${selectedSource.id}`)}
+    canPlay={Boolean(detailFragment
+      ? buildFragmentPreviewScope(detailFragment, selectedSource, fragmentAudioFor)
+      : resolveSourceAudioUrl(selectedSource, fragmentAudioFor))}
     editable={!sourceEditorModal}
-    onPreview={() => previewSource(selectedSource)}
+    onPreview={() => {
+      if (detailFragment) previewSingle(detailFragment);
+      else previewSource(selectedSource);
+    }}
     onClose={closeSourceEditor}
     onSaveAnalysis={(analysis) => saveSourceAnalysis(selectedSource.id, analysis)}
+    onSaveFragmentMeta={saveFragmentLibraryMeta}
   /> : null;
 
   return (
@@ -701,7 +941,7 @@ export default function FragmentsApp() {
         query={query}
         sort={sort}
         filters={libraryFilters}
-        filterMenu={filterMenu}
+        filterOpen={filterOpen}
         searchRef={searchRef}
         sourceNameFor={sourceNameFor}
         sourceForId={sourceForId}
@@ -709,18 +949,21 @@ export default function FragmentsApp() {
         onQueryChange={setQuery}
         onSortChange={setSort}
         onFiltersChange={setLibraryFilters}
-        onOpenColumnFilter={openColumnFilter}
-        onCloseFilterMenu={closeFilterMenu}
+        onToggleFilter={toggleLibraryFilter}
+        onCloseFilter={closeLibraryFilter}
         onHighlightFragment={highlightLibraryFragment}
         onHighlightSource={highlightLibrarySource}
         onOpenMatchesFragment={openMatchesForFragment}
         onOpenMatchesSource={openMatchesForSource}
-        onOpenInfo={(sourceId) => openSourceInfo(sourceId, false)}
+        onOpenInfo={openLibraryInfo}
         fragmentAudioFor={fragmentAudioFor}
         onPreviewFragment={previewSingle}
         onPreviewSource={previewSource}
         onSeekFragment={(fragment, ratio) => previewSingle(fragment, ratio)}
         onSeekSource={(source, ratio) => previewSource(source, ratio)}
+        savedFragmentIds={savedFragmentIds}
+        onRenameFragment={renameFragment}
+        onSaveFragment={saveFragment}
         infoPanelOpen={sourceEditorOpen && !sourceEditorModal && sourcePanelMode === "detail"}
         infoPanel={detailPanel}
         connectionsPanel={connectionsOpen && (connectionAnchorFragmentId || selectedLibrarySourceId) ? <aside className="connections">
@@ -818,6 +1061,9 @@ export default function FragmentsApp() {
               onSeek={(ratio) => previewSingle(mapFragment, ratio)}
               onOpenMatches={() => openMatchesForFragment(mapFragment.id)}
               onOpenInfo={() => openSourceInfo(mapFragment.sourceId, true)}
+              onRename={(name) => renameFragment(mapFragment, name)}
+              onSave={() => saveFragment(mapFragment)}
+              isSaved={savedFragmentIds.has(mapFragment.id)}
             />
           </section>}
         </div>

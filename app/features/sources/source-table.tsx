@@ -136,7 +136,7 @@ function SourceTableCell({
     case "name":
       return (
         <TableCell className={sourceTableCellClass("max-w-[180px]")}>
-          <span className="source-table-name block truncate" title={source.name}>
+          <span className="source-table-name block truncate" title={source.id}>
             {source.name}
           </span>
         </TableCell>

@@ -1,18 +1,16 @@
 "use client";
 
 import { CSSProperties, ReactNode, RefObject, useMemo } from "react";
-import {
-  ColumnFilterPopover,
-  LibraryFilters,
-} from "../../library-filter-popover";
-import { Fragment, SourceFile } from "../../prototype-data";
+import { sourceKeyLabels, uniqueKeyLabels } from "@/lib/audio/source-metadata";
+import { Fragment, MusicalRole, SourceFile } from "../../prototype-data";
 import { LIBRARY_ROLES } from "./library-columns";
 import { visibleLibraryItems } from "./library-items";
 import { LibraryLinkSummary } from "./library-list";
 import { LibraryCardList } from "./library-card-list";
-import { LibraryListControls } from "./library-list-controls";
+import { LibraryFilterPanel } from "./library-filter-panel";
 import { LibraryToolbar } from "./library-toolbar";
-import { LibraryFilterMenu, LibrarySort, LibrarySortColumn } from "./types";
+import { LibrarySort } from "./types";
+import { LibraryFilters, createLibraryFilters } from "../../library-filter-popover";
 
 type LibraryViewProps = {
   sources: SourceFile[];
@@ -26,7 +24,7 @@ type LibraryViewProps = {
   query: string;
   sort: LibrarySort;
   filters: LibraryFilters;
-  filterMenu: LibraryFilterMenu | null;
+  filterOpen: boolean;
   searchRef: RefObject<HTMLInputElement | null>;
   sourceNameFor: (fragment: Fragment) => string;
   sourceForId: (sourceId: string) => SourceFile | undefined;
@@ -35,13 +33,13 @@ type LibraryViewProps = {
   onQueryChange: (query: string) => void;
   onSortChange: (sort: LibrarySort) => void;
   onFiltersChange: (filters: LibraryFilters) => void;
-  onOpenColumnFilter: (column: LibrarySortColumn, trigger: HTMLButtonElement) => void;
-  onCloseFilterMenu: () => void;
+  onToggleFilter: () => void;
+  onCloseFilter: () => void;
   onHighlightFragment: (fragmentId: string) => void;
   onHighlightSource: (source: SourceFile) => void;
   onOpenMatchesFragment: (fragmentId: string) => void;
   onOpenMatchesSource: (source: SourceFile) => void;
-  onOpenInfo: (sourceId: string) => void;
+  onOpenInfo: (target: { sourceId: string; fragmentId?: string }) => void;
   onPreviewFragment: (fragment: Fragment) => void;
   onPreviewSource: (source: SourceFile) => void;
   onSeekFragment: (fragment: Fragment, ratio: number) => void;
@@ -49,6 +47,9 @@ type LibraryViewProps = {
   connectionsPanel: ReactNode;
   infoPanelOpen: boolean;
   infoPanel: ReactNode;
+  savedFragmentIds?: Set<string>;
+  onRenameFragment?: (fragment: Fragment, name: string) => void;
+  onSaveFragment?: (fragment: Fragment) => void;
 };
 
 export function LibraryView({
@@ -63,7 +64,7 @@ export function LibraryView({
   query,
   sort,
   filters,
-  filterMenu,
+  filterOpen,
   searchRef,
   sourceNameFor,
   sourceForId,
@@ -72,8 +73,8 @@ export function LibraryView({
   onQueryChange,
   onSortChange,
   onFiltersChange,
-  onOpenColumnFilter,
-  onCloseFilterMenu,
+  onToggleFilter,
+  onCloseFilter,
   onHighlightFragment,
   onHighlightSource,
   onOpenMatchesFragment,
@@ -86,10 +87,13 @@ export function LibraryView({
   connectionsPanel,
   infoPanelOpen,
   infoPanel,
+  savedFragmentIds,
+  onRenameFragment,
+  onSaveFragment,
 }: LibraryViewProps) {
   const listContext = useMemo(
-    () => ({ sourceNameFor, linkSummaryFor, relatedTakeCountFor: () => 0 }),
-    [sourceNameFor, linkSummaryFor],
+    () => ({ sourceNameFor, sourceForId, linkSummaryFor, relatedTakeCountFor: () => 0 }),
+    [sourceNameFor, sourceForId, linkSummaryFor],
   );
   const visibleItems = useMemo(
     () => visibleLibraryItems(sources, fragments, query, filters, sort, listContext),
@@ -97,33 +101,40 @@ export function LibraryView({
   );
   const totalItemCount = sources.length + fragments.length;
   const keyFilterOptions = useMemo(
-    () => Array.from(new Set(fragments.flatMap((fragment) => [fragment.key, ...fragment.alternateKeys]))).sort((a, b) => a.localeCompare(b)),
-    [fragments],
+    () =>
+      uniqueKeyLabels([
+        ...sources.flatMap((source) => sourceKeyLabels(source)),
+        ...fragments.flatMap((fragment) => {
+          const fromSource = sourceKeyLabels(sourceForId(fragment.sourceId));
+          if (fromSource.length) return fromSource;
+          return fragment.key && fragment.key !== "—" ? [fragment.key] : [];
+        }),
+      ]),
+    [sources, fragments, sourceForId],
   );
   const tagFilterOptions = useMemo(
     () => Array.from(new Set(fragments.flatMap((fragment) => fragment.userTags))).sort((a, b) => a.localeCompare(b)),
     [fragments],
   );
-  const roleOptions = LIBRARY_ROLES.filter((role) => role !== "All");
+  const roleOptions = LIBRARY_ROLES.filter((role): role is MusicalRole => role !== "All");
 
   return (
     <section
-      className={`workspace ${infoPanelOpen ? "info-open" : connectionsOpen ? "connections-open" : ""} ${resizingConnections && !infoPanelOpen ? "resizing" : ""}`}
-      style={!infoPanelOpen && connectionsOpen ? { "--connections-width": `${connectionsWidth}px` } as CSSProperties : undefined}
+      className={`workspace ${filterOpen || infoPanelOpen ? "info-open" : connectionsOpen ? "connections-open" : ""} ${resizingConnections && !filterOpen && !infoPanelOpen ? "resizing" : ""}`}
+      style={!filterOpen && !infoPanelOpen && connectionsOpen ? { "--connections-width": `${connectionsWidth}px` } as CSSProperties : undefined}
     >
       <div className="library">
         <div className="library-header">
           <LibraryToolbar
             query={query}
             searchRef={searchRef}
-            onQueryChange={onQueryChange}
-          />
-          <LibraryListControls
             sort={sort}
             filters={filters}
-            filterMenu={filterMenu}
+            filterOpen={filterOpen}
+            onQueryChange={onQueryChange}
             onSortChange={onSortChange}
-            onOpenColumnFilter={onOpenColumnFilter}
+            onToggleFilter={onToggleFilter}
+            onClearFilters={() => onFiltersChange(createLibraryFilters())}
           />
         </div>
         <div className="library-scroll">
@@ -145,25 +156,24 @@ export function LibraryView({
             onPreviewSource={onPreviewSource}
             onSeekFragment={onSeekFragment}
             onSeekSource={onSeekSource}
+            savedFragmentIds={savedFragmentIds ?? new Set()}
+            onRenameFragment={onRenameFragment ?? (() => {})}
+            onSaveFragment={onSaveFragment ?? (() => {})}
           />
         </div>
-        {filterMenu && (
-          <ColumnFilterPopover
-            column={filterMenu.column}
-            filters={filters}
-            position={{ left: filterMenu.left, top: filterMenu.top }}
-            triggerElement={filterMenu.trigger}
-            keyOptions={keyFilterOptions}
-            tagOptions={tagFilterOptions}
-            roleOptions={roleOptions}
-            resultCount={visibleItems.length}
-            totalCount={totalItemCount}
-            onChange={onFiltersChange}
-            onClose={onCloseFilterMenu}
-          />
-        )}
       </div>
-      {infoPanelOpen ? infoPanel : connectionsOpen ? connectionsPanel : null}
+      {filterOpen ? (
+        <LibraryFilterPanel
+          filters={filters}
+          keyOptions={keyFilterOptions}
+          tagOptions={tagFilterOptions}
+          roleOptions={roleOptions}
+          resultCount={visibleItems.length}
+          totalCount={totalItemCount}
+          onChange={onFiltersChange}
+          onClose={onCloseFilter}
+        />
+      ) : infoPanelOpen ? infoPanel : connectionsOpen ? connectionsPanel : null}
     </section>
   );
 }

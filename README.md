@@ -10,13 +10,14 @@ Desktop app (Electron) for browsing source recordings, fragmenting them, and com
 
 ```bash
 npm install
-npm run dev            # renderer (Vite) + Electron together, with hot reload
+npm run dev             # browser-only dev server (no persistence), http://localhost:3000
 ```
 
 Other useful scripts:
 
 ```bash
-npm run dev:renderer    # browser-only dev server (no persistence), http://localhost:3000
+npm run dev:electron    # launch Electron against an already-running dev server (needs `npm run dev` in another terminal)
+npm run dev:all         # renderer (Vite) + Electron together in one command, with hot reload
 npm run start:electron  # full build, then launch Electron once (no hot reload)
 npm run build           # build renderer + electron main process
 npm run test            # build + smoke tests

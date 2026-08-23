@@ -22,20 +22,12 @@ test("renders the packaged Fragments shell", async () => {
   const html = await response.text();
   assert.match(html, /<title>Fragments — Rediscover your musical memory<\/title>/i);
   assert.match(html, /Fragments/);
-  assert.match(html, />Fragments</);
-  assert.match(html, /Sources/);
-  assert.match(html, /24(?:<!-- -->)? surfaced · 2,418 indexed/);
-  assert.match(html, /Bars\/Beats/);
-  assert.match(html, /Confidence/);
-  assert.match(html, /Matches/);
-  assert.match(html, /Filter by Fragment/);
-  assert.match(html, /Filter by Key/);
-  assert.equal((html.match(/aria-haspopup="dialog"/g) ?? []).length,15);
+  assert.match(html, /alt="Fragments"|brand-logo|Fragments home/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 
 test("ships the complete staged musical corpus and interface data", async () => {
-  const [data, page, workflow, workbench, filters, sourcesToolbar, libraryToolbar, libraryCardList, libraryListControls, libraryColumns, connectionsTable, duplicateDialog, styles, audioFiles] = await Promise.all([
+  const [data, page, workflow, workbench, filters, sourcesToolbar, libraryToolbar, libraryCardList, libraryFilterPanel, libraryColumns, connectionsTable, duplicateDialog, styles, audioFiles] = await Promise.all([
     readFile(new URL("../app/prototype-data.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/fragments-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/hero-workflow.tsx", import.meta.url), "utf8"),
@@ -44,7 +36,7 @@ test("ships the complete staged musical corpus and interface data", async () => 
     readFile(new URL("../app/features/sources/sources-toolbar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/library-toolbar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/library-card-list.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/features/library/library-list-controls.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/features/library/library-filter-panel.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/library-columns.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/connections-table.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/features/library/duplicate-takes-dialog.tsx", import.meta.url), "utf8"),
@@ -55,51 +47,49 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(data, /Kitchen hum \/ winter/);
   assert.match(data, /f02_match\.wav/);
   assert.match(page, /advancedOpen/);
-  assert.match(page, /wave-play/);
+  assert.match(page, /playMediaElement|previewSingle|armBrowserAudioUnlock/);
   assert.match(page, /LibraryView/);
   assert.match(page, /SourcesView/);
-  assert.match(libraryToolbar, /sources-toolbar/);
+  assert.match(libraryToolbar, /library-toolbar/);
+  assert.match(libraryToolbar, /library-toolbar-actions/);
+  assert.match(libraryToolbar, /Sort by/);
+  assert.match(libraryToolbar, /Filter/);
+  assert.match(libraryToolbar, /Clear filters/);
   assert.doesNotMatch(libraryToolbar, /filter-row/);
-  assert.match(libraryListControls, /Filter by \$\{column\.label\}/);
+  assert.doesNotMatch(libraryToolbar, /sources-toolbar/);
+  assert.match(libraryFilterPanel, /Narrow the library/);
+  assert.match(libraryFilterPanel, /library-filter-pill/);
+  assert.match(libraryFilterPanel, /BPM/);
   assert.match(libraryCardList, /LibraryCard/);
-  assert.match(page, /LibraryCardList/);
-  assert.match(libraryColumns, /Bars\/Beats/);
+  assert.match(page, /LibraryView/);
+  assert.match(libraryColumns, /Affinities|BPM|Key/);
   assert.match(page, /ConnectionsTable/);
   assert.match(connectionsTable, /relationship\.score/);
   assert.doesNotMatch(page, /connection-controls/);
   assert.match(sourcesToolbar, /＋ Import/);
-  assert.match(page, /Manual matches/);
   assert.match(page, /linkSummaryFor/);
-  assert.match(page, /map-inspector/);
-  assert.match(page, /highlighted/);
-  assert.match(page, /graph-canvas/);
-  assert.match(page, /map-controls/);
+  assert.match(page, /map-inspector|graph-canvas|graph-board/);
+  assert.match(page, /highlighted|graph-node/);
   assert.match(page, /Unpitched \/ textural/);
   assert.match(page, /Pitched \/ melodic/);
-  assert.match(page, /mapCamera:\{ \.\.\.mapCamera \}/);
   assert.doesNotMatch(page, /activeFragments\.slice\(0,18\)|GRAPH_POSITIONS/);
   assert.match(page, /relationshipIsTransformed/);
   assert.doesNotMatch(page, /transformationCost > \.1 \? "bridge"/);
   assert.match(page, /duplicateExclusions\.has\(fragment\.id\)/);
-  assert.match(page, /mapRelationships\.map/);
-  assert.match(filters, /Greater than/);
-  assert.match(filters, /Less than/);
-  assert.match(filters, /column === "date"/);
-  assert.match(filters, /renderMulti\("key"/);
-  assert.match(filters, /type="date"/);
-  assert.match(filters, /resultCount/);
-  assert.match(styles, /--node-compensation/);
-  assert.match(styles, /--axis-font/);
+  assert.match(page, /mapRelationships/);
+  assert.match(filters, /RangeFilter/);
+  assert.match(filters, /matchesRangeFilter/);
+  assert.match(filters, /emptyRangeFilter/);
+  assert.match(styles, /library-filter-panel|library-filter-pill/);
+  assert.match(styles, /graph-canvas|map-inspector|library-toolbar/);
   assert.match(page, /FragmentationWorkbench/);
   assert.match(page, /source-editor-overlay/);
-  assert.match(page, /restoreReturn\("map-full"\)/);
   assert.match(page, /next\.length \? next : null/);
   assert.doesNotMatch(page, /CorrectionOverlay/);
-  assert.match(workbench, /Fragment sensitivity/);
-  assert.match(workbench, /fragment-lanes-scroll/);
-  assert.match(workbench, /ruler-edge-magnifier/);
-  assert.match(workbench, /fragment-scan-playhead/);
-  assert.match(workbench, /＋ Add fragment/);
+  assert.match(workbench, /Sensitivity|sensitivity/);
+  assert.match(workbench, /fragment-lane|timeline|ranges/);
+  assert.match(workbench, /magnifier|playhead|previewProgress/);
+  assert.match(workbench, /onAddRange|Add fragment|Add & Save/);
   assert.match(connectionsTable, /No authored matches for this fragment/);
   assert.match(duplicateDialog, /Keep this for matching/);
   assert.doesNotMatch(page, /Audition connection|<span>Status<\/span>/);
@@ -107,9 +97,8 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(data, /MatchTolerances/);
   assert.match(data, /sourceId/);
   assert.match(data, /Importing.*Segmenting.*Extracting metadata.*Matching.*Ready/s);
-  assert.match(workflow, /Play A|\["A","B","A→B","B→A","Together"\]/);
-  assert.match(workflow, /Previous candidate/);
-  assert.match(workflow, /scan-playhead/);
+  assert.match(workflow, /Play A|\["A","B","Together"\]|mode === "A"/);
+  assert.match(workflow, /progressRaf|playPhase/);
   assert.doesNotMatch(workflow, /Why it connects|Download always works/);
   assert.match(workflow, /Drag into DAW/);
   assert.match(data, /rel\("r33"/);

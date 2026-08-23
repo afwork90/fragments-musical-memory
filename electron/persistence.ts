@@ -89,6 +89,10 @@ export async function initializePersistence() {
     const source = await library.updateSourceAnalysis(id, analysis);
     return { ...source, audioUrl: audioUrl(source.id) };
   });
+  logged("fragments:update-fragments", async (_event, id, fragments) => {
+    const source = await library.updateFragments(id, fragments);
+    return { ...source, audioUrl: audioUrl(source.id) };
+  });
 
   const icon = dragIcon();
   const publicAssetsRoot = process.env.ELECTRON_RENDERER_URL

@@ -1,6 +1,12 @@
+import { formatMusicalKey } from "@/lib/audio/source-metadata";
 import { LibraryFilters } from "../../library-filter-popover";
 import { Fragment, SourceFile } from "../../prototype-data";
-import { LibraryLinkSummary, LibraryListContext, matchesLibraryFilters } from "./library-list";
+import {
+  LibraryLinkSummary,
+  LibraryListContext,
+  matchesLibraryFilters,
+  matchesSourceFilters,
+} from "./library-list";
 import { LibrarySort } from "./types";
 
 export type LibrarySourceItem = { kind: "source"; id: string; source: SourceFile };
@@ -23,11 +29,14 @@ function matchesQuery(item: LibraryItem, query: string, ctx: LibraryListContext)
   if (!normalized) return true;
 
   if (item.kind === "source") {
-    return item.source.name.toLowerCase().includes(normalized);
+    const keyLabel = formatMusicalKey(item.source.key, item.source.scale) ?? "";
+    return `${item.source.name} ${keyLabel}`.toLowerCase().includes(normalized);
   }
 
   const fragment = item.fragment;
-  return `${fragment.name} ${ctx.sourceNameFor(fragment)} ${fragment.key} ${fragment.roles.join(" ")} ${fragment.userTags.join(" ")}`
+  const source = ctx.sourceForId(fragment.sourceId);
+  const keyLabel = formatMusicalKey(source?.key, source?.scale) ?? fragment.key;
+  return `${fragment.name} ${ctx.sourceNameFor(fragment)} ${keyLabel} ${fragment.roles.join(" ")} ${fragment.userTags.join(" ")}`
     .toLowerCase()
     .includes(normalized);
 }
@@ -42,14 +51,22 @@ function compareItems(a: LibraryItem, b: LibraryItem, sort: LibrarySort, ctx: Li
   const end = (item: LibraryItem) => (item.kind === "source" ? item.source.duration : item.fragment.end);
   const duration = (item: LibraryItem) =>
     item.kind === "source" ? item.source.duration : item.fragment.end - item.fragment.start;
-  const key = (item: LibraryItem) =>
-    item.kind === "source" ? item.source.key ?? "" : item.fragment.key;
-  const tempo = (item: LibraryItem) =>
-    item.kind === "source" ? item.source.bpm ?? 0 : item.fragment.bpm;
+  const key = (item: LibraryItem) => {
+    if (item.kind === "source") return formatMusicalKey(item.source.key, item.source.scale) ?? "";
+    const source = ctx.sourceForId(item.fragment.sourceId);
+    return formatMusicalKey(source?.key, source?.scale) ?? item.fragment.key;
+  };
+  const tempo = (item: LibraryItem) => {
+    if (item.kind === "source") return item.source.bpm ?? 0;
+    const source = ctx.sourceForId(item.fragment.sourceId);
+    return item.fragment.bpm > 0 ? item.fragment.bpm : source?.bpm ?? 0;
+  };
   const signal = (item: LibraryItem) =>
     item.kind === "source" ? item.source.waveform[0] ?? 0 : item.fragment.brightness;
   const links = (item: LibraryItem) =>
-    item.kind === "source" ? 0 : ctx.linkSummaryFor(item.fragment.id).total;
+    item.kind === "source"
+      ? item.source.fragmentIds.reduce((sum, id) => sum + ctx.linkSummaryFor(id).total, 0)
+      : ctx.linkSummaryFor(item.fragment.id).total;
 
   let comparison = 0;
   switch (sort.column) {
@@ -104,7 +121,7 @@ export function visibleLibraryItems(
 ) {
   const items = buildLibraryItems(sources, fragments).filter((item) => {
     if (!matchesQuery(item, query, ctx)) return false;
-    if (item.kind === "source") return true;
+    if (item.kind === "source") return matchesSourceFilters(item.source, filters, ctx);
     return matchesLibraryFilters(item.fragment, filters, ctx);
   });
 

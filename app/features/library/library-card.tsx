@@ -1,7 +1,7 @@
 "use client";
 
-import { KeyboardEvent, ReactNode, useMemo } from "react";
-import { Play, Square } from "lucide-react";
+import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Check, Pencil, Play, Square } from "lucide-react";
 import { ScrubbableWaveform } from "@/lib/audio/scrubbable-waveform";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
@@ -34,6 +34,9 @@ type LibraryCardProps = {
   embedded?: boolean;
   waveformValues?: number[];
   waveActions?: ReactNode;
+  onRename?: (name: string) => void;
+  onSave?: () => void;
+  isSaved?: boolean;
 };
 
 function MetaItem({ label, value }: { label: string; value: string }) {
@@ -49,38 +52,135 @@ function CardActions({
   matchCount,
   onOpenMatches,
   onOpenInfo,
+  onSave,
+  isSaved,
+  showMatchActions = true,
 }: {
   matchCount: number;
   onOpenMatches: () => void;
   onOpenInfo: () => void;
+  onSave?: () => void;
+  isSaved?: boolean;
+  showMatchActions?: boolean;
 }) {
   return (
     <div className="library-card-actions">
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="library-card-action"
-        disabled={matchCount === 0}
+      {onSave && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className={cn("library-card-action", isSaved && "library-card-action-saved")}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSave();
+          }}
+        >
+          {isSaved ? (<><Check className="size-3" />Saved</>) : "Save"}
+        </Button>
+      )}
+      {showMatchActions && (
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="library-card-action"
+            disabled={matchCount === 0}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenMatches();
+            }}
+          >
+            Affinities ({matchCount})
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="library-card-action"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenInfo();
+            }}
+          >
+            Info
+          </Button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function EditableTitle({
+  title,
+  muted,
+  onRename,
+}: {
+  title: string;
+  muted?: boolean;
+  onRename?: (name: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const ref = useRef<HTMLHeadingElement | null>(null);
+  const titleRef = useRef(title);
+  titleRef.current = title;
+
+  useEffect(() => {
+    if (!editing) return;
+    const node = ref.current;
+    if (!node) return;
+    node.textContent = titleRef.current;
+    node.focus();
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+  }, [editing]);
+
+  if (!onRename) {
+    return (
+      <h3 className={cn("library-card-title", muted && "library-card-title-muted")} title={title}>
+        {title}
+      </h3>
+    );
+  }
+
+  const commit = () => {
+    const next = ref.current?.textContent?.trim() ?? "";
+    setEditing(false);
+    if (next && next !== titleRef.current) onRename(next);
+  };
+
+  return (
+    <div className="library-card-title-row">
+      <h3
+        ref={ref}
+        className={cn("library-card-title", muted && "library-card-title-muted")}
+        title={editing ? undefined : title}
+        contentEditable={editing}
+        suppressContentEditableWarning
         onClick={(event) => {
           event.stopPropagation();
-          onOpenMatches();
+          if (!editing) setEditing(true);
+        }}
+        onBlur={() => { if (editing) commit(); }}
+        onKeyDown={(event) => {
+          if (!editing) return;
+          if (event.key === "Enter") { event.preventDefault(); ref.current?.blur(); }
+          else if (event.key === "Escape") { event.preventDefault(); setEditing(false); }
         }}
       >
-        Affinities ({matchCount})
-      </Button>
-      <Button
+        {editing ? null : title}
+      </h3>
+      <button
         type="button"
-        variant="outline"
-        size="sm"
-        className="library-card-action"
-        onClick={(event) => {
-          event.stopPropagation();
-          onOpenInfo();
-        }}
+        className="library-card-title-pencil"
+        onClick={(event) => { event.stopPropagation(); setEditing(true); }}
+        aria-label={`Rename ${title}`}
       >
-        Info
-      </Button>
+        <Pencil className="size-3" />
+      </button>
     </div>
   );
 }
@@ -93,6 +193,9 @@ function CardHeading({
   onOpenMatches,
   onOpenInfo,
   showActions = true,
+  onRename,
+  onSave,
+  isSaved,
 }: {
   title: string;
   muted?: boolean;
@@ -101,16 +204,17 @@ function CardHeading({
   onOpenMatches: () => void;
   onOpenInfo: () => void;
   showActions?: boolean;
+  onRename?: (name: string) => void;
+  onSave?: () => void;
+  isSaved?: boolean;
 }) {
   return (
     <div className="library-card-heading">
-      <h3 className={cn("library-card-title", muted && "library-card-title-muted")} title={title}>
-        {title}
-      </h3>
+      <EditableTitle title={title} muted={muted} onRename={onRename} />
       <div className="library-card-heading-right">
         <div className="library-card-meta">{meta}</div>
-        {showActions && (
-          <CardActions matchCount={matchCount} onOpenMatches={onOpenMatches} onOpenInfo={onOpenInfo} />
+        {(showActions || onSave) && (
+          <CardActions matchCount={matchCount} onOpenMatches={onOpenMatches} onOpenInfo={onOpenInfo} onSave={onSave} isSaved={isSaved} showMatchActions={showActions} />
         )}
       </div>
     </div>
@@ -136,6 +240,9 @@ export function LibraryCard({
   embedded = false,
   waveformValues,
   waveActions,
+  onRename,
+  onSave,
+  isSaved,
 }: LibraryCardProps) {
   if (item.kind === "source") {
     return (
@@ -176,6 +283,9 @@ export function LibraryCard({
       embedded={embedded}
       waveformValues={waveformValues}
       waveActions={waveActions}
+      onRename={onRename}
+      onSave={onSave}
+      isSaved={isSaved}
     />
   );
 }
@@ -291,6 +401,9 @@ function FragmentLibraryCard({
   embedded = false,
   waveformValues,
   waveActions,
+  onRename,
+  onSave,
+  isSaved,
 }: {
   fragment: Fragment;
   isSelected: boolean;
@@ -309,9 +422,15 @@ function FragmentLibraryCard({
   embedded?: boolean;
   waveformValues?: number[];
   waveActions?: ReactNode;
+  onRename?: (name: string) => void;
+  onSave?: () => void;
+  isSaved?: boolean;
 }) {
   const source = sourceForId(fragment.sourceId);
   const links = linkSummaryFor(fragment.id);
+  const keyLabel =
+    formatMusicalKey(source?.key, source?.scale) ??
+    (fragment.key && fragment.key !== "—" ? fragment.key : null);
   const slice = source
     ? { start: fragment.start, end: fragment.end, duration: source.duration }
     : undefined;
@@ -343,11 +462,14 @@ function FragmentLibraryCard({
         onOpenMatches={onOpenMatches}
         onOpenInfo={onOpenInfo}
         showActions={showActions}
+        onRename={onRename}
+        onSave={onSave}
+        isSaved={isSaved}
         meta={(
           <>
             <MetaItem label="Recorded" value={fragment.dateLabel} />
             <MetaItem label="Length" value={formatSeconds(fragment.end - fragment.start)} />
-            <MetaItem label="Key" value={fragment.key} />
+            <MetaItem label="Key" value={keyLabel ?? "—"} />
             <MetaItem label="BPM" value={String(fragment.bpm)} />
           </>
         )}
