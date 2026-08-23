@@ -41,3 +41,9 @@ yarn-error.log*
 *.tsbuildinfo
 /electron-dist/
 /release/
+
+# Override a common global ignore of `app/assets` so UI assets can be committed.
+# Keep large local-only WAV demos out of the repo.
+!app/assets/
+!app/assets/**
+app/assets/*.wav
