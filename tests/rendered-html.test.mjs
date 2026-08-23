@@ -27,7 +27,7 @@ test("renders the packaged Fragments shell", async () => {
   assert.match(html, /24(?:<!-- -->)? surfaced · 2,418 indexed/);
   assert.match(html, /Bars\/Beats/);
   assert.match(html, /Confidence/);
-  assert.match(html, /Links/);
+  assert.match(html, /Matches/);
   assert.match(html, /Filter by Fragment/);
   assert.match(html, /Filter by Key/);
   assert.equal((html.match(/aria-haspopup="dialog"/g) ?? []).length,15);
@@ -65,7 +65,7 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(connectionsTable, /relationship\.score/);
   assert.doesNotMatch(page, /connection-controls/);
   assert.match(sourcesToolbar, /＋ Import/);
-  assert.match(page, /Manual links/);
+  assert.match(page, /Manual matches/);
   assert.match(page, /linkSummaryFor/);
   assert.match(page, /map-inspector/);
   assert.match(page, /highlighted/);
@@ -97,7 +97,7 @@ test("ships the complete staged musical corpus and interface data", async () => 
   assert.match(workbench, /ruler-edge-magnifier/);
   assert.match(workbench, /fragment-scan-playhead/);
   assert.match(workbench, /＋ Add fragment/);
-  assert.match(connectionsTable, /No authored connections for this fragment/);
+  assert.match(connectionsTable, /No authored matches for this fragment/);
   assert.match(duplicateDialog, /Keep this for matching/);
   assert.doesNotMatch(page, /Audition connection|<span>Status<\/span>/);
   assert.match(data, /FragmentRef/);

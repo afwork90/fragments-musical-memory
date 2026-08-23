@@ -196,7 +196,7 @@ function LibraryTableCell({
         <TableCell className="px-2 py-2">
           <span className="text-foreground">{links.total}</span>
           {links.manual > 0 && (
-            <span className="ml-1 text-[var(--amber)]">manual {links.manual}</span>
+            <span className="ml-1 text-[var(--amber)]">manual matches {links.manual}</span>
           )}
         </TableCell>
       );

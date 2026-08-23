@@ -15,7 +15,7 @@ export const LIBRARY_COLUMNS: LibraryColumnDef[] = [
   // { id: "confidence", label: "Confidence" },
   // { id: "tags", label: "Tags" },
   // { id: "role", label: "Role" },
-  { id: "links", label: "Links" },
+  { id: "links", label: "Matches" },
   // { id: "takes", label: "Takes" },
 ];
 

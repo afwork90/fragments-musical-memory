@@ -14,9 +14,12 @@
     "build:renderer": "vinext build",
     "build:electron": "tsc -p electron/tsconfig.json && node electron/postbuild.cjs",
     "build": "npm run build:renderer && npm run build:electron",
+    "compute-waveforms": "node scripts/compute-prototype-waveforms.mjs",
     "test": "npm run build && node --test tests/*.test.mjs",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win --x64",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "build": {
@@ -46,6 +49,9 @@
     "mac": {
       "category": "public.app-category.music",
       "target": ["dmg", "zip"]
+    },
+    "win": {
+      "target": ["nsis", "zip"]
     }
   },
   "dependencies": {

@@ -1,3 +1,5 @@
+import prototypeWaveforms from "./prototype-waveforms.json";
+
 export type MusicalRole = "Melody" | "Rhythm" | "Harmony" | "Bass" | "Voice" | "Texture";
 export type SearchContext = "whole" | "melody" | "rhythm" | "harmony" | "bass";
 export type SourceType = "Voice memo" | "Jam" | "Practice" | "Studio" | "Field recording" | "Archive";
@@ -108,7 +110,30 @@ export interface SourceFile {
 export interface ImportSession { sourceId:string; tags:SourceType[]; stage:"classify" | "Importing" | "Segmenting" | "Extracting metadata" | "Matching" | "Ready"; }
 export interface CombineSession { anchorId:string; candidateIds:string[]; activeCandidateId:string; returnScroll:number; }
 
-const wave = (seed: number, count = 28) => Array.from({ length: count }, (_, index) => 22 + ((seed * 17 + index * 31 + index * index * 7) % 74));
+const FRAGMENT_WAVEFORMS = prototypeWaveforms.fragments as Record<string, number[]>;
+const SOURCE_PEAK_COUNT = prototypeWaveforms.peakCount;
+
+function fragmentWaveform(id: string) {
+  return FRAGMENT_WAVEFORMS[id] ?? Array.from({ length: SOURCE_PEAK_COUNT }, () => 4);
+}
+
+function composeSourceWaveform(fragments: Pick<Fragment, "start" | "end" | "waveform">[], sourceDuration: number) {
+  const peaks = Array.from({ length: SOURCE_PEAK_COUNT }, () => 4);
+
+  for (const fragment of fragments) {
+    const startBin = Math.floor((fragment.start / sourceDuration) * SOURCE_PEAK_COUNT);
+    const endBin = Math.max(startBin + 1, Math.ceil((fragment.end / sourceDuration) * SOURCE_PEAK_COUNT));
+    const span = endBin - startBin;
+    const fragmentPeaks = fragment.waveform;
+
+    for (let index = 0; index < span; index++) {
+      const sourceIndex = Math.min(fragmentPeaks.length - 1, Math.floor((index / span) * fragmentPeaks.length));
+      peaks[startBin + index] = Math.max(peaks[startBin + index], fragmentPeaks[sourceIndex] ?? 4);
+    }
+  }
+
+  return peaks;
+}
 
 const heroObjects = (id: "f01" | "f02") => ({
   whole: `/audio/${id}.wav`,
@@ -167,7 +192,7 @@ export const FRAGMENTS: Fragment[] = rawFragments.map((fragment, index) => {
     ...fragment, sourceId:sourceIdByName.get(fragment.source)!, start, end, duration:formatDuration(end - start),
     beats, bars:["f01","f02","f04","f06"].includes(fragment.id) ? 4 : Math.max(1,Math.round(beats / 4)), confidence:fragment.id === "f01" ? .91 : .72 + ((index * 7) % 24) / 100,
     userTags:fragment.id === "f01" ? ["late night","guitar"] : [fragment.role.toLowerCase()], analysisRevision:1,
-    sourceTypes:sourceTypesFor(fragment.source), waveform:wave(index + 3), audio:`/audio/f${String(index + 1).padStart(2,"0")}.wav`,
+    sourceTypes:sourceTypesFor(fragment.source), waveform:fragmentWaveform(fragment.id), audio:`/audio/f${String(index + 1).padStart(2,"0")}.wav`,
   };
 });
 
@@ -221,7 +246,7 @@ export const SOURCE_FILES: SourceFile[] = uniqueSourceNames.map((name,index) => 
     id:sourceIdByName.get(name)!, name, date:imported ? "Aug 20, 2026" : fragments[0].dateLabel, duration,
     format:name.toLowerCase().endsWith(".m4a") ? "M4A · 11.4 MB" : name.toLowerCase().endsWith(".aif") ? "AIFF · 38.7 MB" : "WAV · 24.1 MB",
     device:imported || name.includes("Voice") ? "iPhone microphone" : name.includes("Tascam") ? "Tascam DR-05" : "Room recorder",
-    fragmentIds:fragments.map((fragment) => fragment.id),waveform:wave(31 + index * 7,144),sensitivity:imported ? 68 : 38 + (index * 9) % 34,
+    fragmentIds:fragments.map((fragment) => fragment.id),waveform:composeSourceWaveform(fragments,duration),sensitivity:imported ? 68 : 38 + (index * 9) % 34,
     start:Math.min(...fragments.map((fragment) => fragment.start)),end:Math.max(...fragments.map((fragment) => fragment.end)),
     sourceTypes:sourceTypesFor(name),analysisProfile:imported ? MESSY_PHONE_PROFILE : { ...DEFAULT_PROFILE },imported,
   };

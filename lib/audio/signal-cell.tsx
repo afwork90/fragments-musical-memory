@@ -5,6 +5,7 @@ import { Play, Square } from "lucide-react";
 import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
+import { startDesktopDrag } from "@/lib/audio/desktop-drag";
 import { Button } from "@/lib/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +26,7 @@ type SignalCellProps = {
   ariaLabel: string;
   className?: string;
   waveClassName?: string;
+  desktopDrag?: { audioUrl?: string; fileName: string } | null;
 };
 
 export function SignalCell({
@@ -38,6 +40,7 @@ export function SignalCell({
   ariaLabel,
   className,
   waveClassName = "source-signal-wave h-11 min-w-[180px] flex-1",
+  desktopDrag,
 }: SignalCellProps) {
   const cached = useCachedAudioBySourceId(cacheSourceAudio && sourceId ? sourceId : null);
   const peaks = useMemo(() => {
@@ -64,7 +67,17 @@ export function SignalCell({
       >
         {isPreviewing ? <Square className="size-3.5 fill-current" /> : <Play className="size-3.5 fill-current" />}
       </Button>
-      <ContinuousWaveform values={peaks} active={isPreviewing} className={waveClassName} />
+      <div
+        className={cn(sourceId && desktopDrag && "cursor-grab active:cursor-grabbing")}
+        draggable={Boolean(sourceId && desktopDrag)}
+        onDragStart={(event) => {
+          if (!sourceId || !desktopDrag) return;
+          startDesktopDrag(event, { sourceId }, desktopDrag.audioUrl ? { audioUrl: desktopDrag.audioUrl, fileName: desktopDrag.fileName } : undefined);
+        }}
+        title={sourceId && desktopDrag ? "Drag onto your desktop or into a DAW" : undefined}
+      >
+        <ContinuousWaveform values={peaks} active={isPreviewing} className={waveClassName} />
+      </div>
     </div>
   );
 }

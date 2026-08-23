@@ -1,10 +1,31 @@
 // @ts-nocheck
-import { app, dialog, ipcMain, net, protocol } from "electron";
+import { app, dialog, ipcMain, nativeImage, net, protocol } from "electron";
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveRendererPath } from "./protocols/resolve-renderer-path.js";
 
 const AUDIO_SCHEME = "fragments-audio";
 const nativeImport = new Function("specifier", "return import(specifier)");
+
+// `startDrag` requires a non-empty icon on macOS. Electron's own native-drag
+// tutorial writes the icon to a real file on disk and passes a path (rather
+// than an in-memory NativeImage) - mirroring that exactly here in case some
+// drop targets are pickier about how the icon is supplied.
+function dragIcon() {
+  const size = 32;
+  const buffer = Buffer.alloc(size * size * 4);
+  for (let i = 0; i < buffer.length; i += 4) {
+    buffer[i] = 0xff; // B
+    buffer[i + 1] = 0xd8; // G
+    buffer[i + 2] = 0x74; // R (#74d8ff accent)
+    buffer[i + 3] = 0xff; // A
+  }
+  const image = nativeImage.createFromBitmap(buffer, { width: size, height: size });
+  const iconPath = path.join(app.getPath("temp"), "fragments-drag-icon.png");
+  fs.writeFileSync(iconPath, image.toPNG());
+  return iconPath;
+}
 
 export function registerAudioScheme() {
   protocol.registerSchemesAsPrivileged([{
@@ -64,5 +85,52 @@ export async function initializePersistence() {
       .filter((source) => source.duration)
       .map((source) => ({ ...source, audioUrl: audioUrl(source.id) }))
   ));
+
+  const icon = dragIcon();
+  const publicAssetsRoot = process.env.ELECTRON_RENDERER_URL
+    ? path.join(process.cwd(), "public")
+    : path.join(app.getAppPath(), "dist", "client");
+
+  // The library (and, in dev, the bundled public assets) live under
+  // ~/Documents, a TCC-protected folder on macOS. Drags initiated by Finder
+  // get an OS-level access exception, but drags initiated by a non-Finder
+  // app into that same folder can silently fail to deliver file bytes to the
+  // receiving app even though drag metadata (name/extension) comes through -
+  // some DAWs show a placeholder and then drop nothing. Staging a throwaway
+  // copy in the (unprotected) temp folder before dragging works around this.
+  async function stageForDrag(filePath, label) {
+    const stagingDir = path.join(app.getPath("temp"), "fragments-drag-staging");
+    await fs.promises.mkdir(stagingDir, { recursive: true });
+    const extension = path.extname(filePath) || ".wav";
+    const safeLabel = String(label || "audio").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60) || "audio";
+    const staged = path.join(stagingDir, `${safeLabel}${extension}`);
+    await fs.promises.copyFile(filePath, staged);
+    return staged;
+  }
+
+  ipcMain.on("fragments:start-drag", async (event, target) => {
+    try {
+      const sourceId = typeof target === "string" ? target : target?.sourceId;
+      const assetPath = typeof target === "object" ? target?.assetPath : null;
+      let filePath = null;
+      if (sourceId) {
+        const source = (await library.listSources()).find((item) => item.id === sourceId);
+        if (source) filePath = library.resolveAudioPath(sourceId, source.audioFile);
+      }
+      if (!filePath && assetPath) {
+        filePath = resolveRendererPath(publicAssetsRoot, assetPath);
+      }
+      if (!filePath) return;
+      const label = sourceId || path.basename(assetPath || filePath, path.extname(filePath));
+      const staged = await stageForDrag(filePath, label).catch((error) => {
+        console.error("[fragments] drag staging failed, dragging original path:", error);
+        return filePath;
+      });
+      event.sender.startDrag({ file: staged, icon });
+    } catch (error) {
+      console.error("[fragments] start-drag failed:", error);
+    }
+  });
+
   console.log("[fragments] library root:", libraryRoot);
 }

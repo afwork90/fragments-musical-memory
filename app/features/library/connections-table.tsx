@@ -41,7 +41,7 @@ export function ConnectionsTable({
 }: ConnectionsTableProps) {
   return (
     <div className="library-table connections-table-scroll mt-2 flex-1 overflow-auto rounded-md border border-border bg-card/40">
-      <Table className="min-w-[900px]" aria-label="Fragment connections">
+      <Table className="min-w-[900px]" aria-label="Fragment matches">
         <TableHeader>
           <TableRow className="border-border/80 hover:bg-transparent">
             {CONNECTIONS_COLUMNS.map((column) => (
@@ -143,7 +143,7 @@ export function ConnectionsTable({
         </TableBody>
       </Table>
       {connections.length === 0 && (
-        <div className="empty-inline border-t border-border/60">No authored connections for this fragment.</div>
+        <div className="empty-inline border-t border-border/60">No authored matches for this fragment.</div>
       )}
     </div>
   );

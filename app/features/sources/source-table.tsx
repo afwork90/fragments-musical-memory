@@ -83,6 +83,7 @@ function SourceSignalCell({
       canPlay={canPlay}
       onPreview={onPreview}
       ariaLabel={`${isPreviewing ? "Stop" : "Play"} ${source.name}`}
+      desktopDrag={{ audioUrl: source.audioUrl, fileName: `${source.name}.wav` }}
     />
   );
 }

@@ -41,11 +41,11 @@ export const libraryFilterIsActive = (filters:LibraryFilters,column:LibraryColum
 export const activeLibraryFilterCount = (filters:LibraryFilters) => (Object.keys(filters) as LibraryColumnId[]).filter((column) => libraryFilterIsActive(filters,column)).length;
 
 const LABELS:Record<LibraryColumnId,string> = {
-  name:"Fragment",source:"Source",signal:"Signal brightness",date:"Recorded",start:"Start",end:"End",duration:"Length",bars:"Bars / beats",key:"Key",tempo:"BPM",confidence:"Confidence",tags:"Tags",role:"Role",links:"Links",takes:"Takes",
+  name:"Fragment",source:"Source",signal:"Signal brightness",date:"Recorded",start:"Start",end:"End",duration:"Length",bars:"Bars / beats",key:"Key",tempo:"BPM",confidence:"Confidence",tags:"Tags",role:"Role",links:"Matches",takes:"Takes",
 };
 
 const NUMBER_META:Partial<Record<LibraryColumnId,{ min:number;max?:number;step:number;unit:string }>> = {
-  signal:{ min:0,max:100,step:1,unit:"brightness" },start:{ min:0,step:1,unit:"seconds" },end:{ min:0,step:1,unit:"seconds" },duration:{ min:0,step:1,unit:"seconds" },bars:{ min:0,step:1,unit:"" },tempo:{ min:1,max:300,step:1,unit:"BPM" },confidence:{ min:0,max:100,step:1,unit:"%" },links:{ min:0,step:1,unit:"links" },takes:{ min:0,step:1,unit:"takes" },
+  signal:{ min:0,max:100,step:1,unit:"brightness" },start:{ min:0,step:1,unit:"seconds" },end:{ min:0,step:1,unit:"seconds" },duration:{ min:0,step:1,unit:"seconds" },bars:{ min:0,step:1,unit:"" },tempo:{ min:1,max:300,step:1,unit:"BPM" },confidence:{ min:0,max:100,step:1,unit:"%" },links:{ min:0,step:1,unit:"matches" },takes:{ min:0,step:1,unit:"takes" },
 };
 
 interface ColumnFilterPopoverProps {

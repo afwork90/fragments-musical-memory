@@ -4,6 +4,7 @@ import { Play, Square } from "lucide-react";
 import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
 import { Button } from "@/lib/ui/button";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
+import { startDesktopDrag } from "@/lib/audio/desktop-drag";
 import { formatSeconds } from "@/lib/format";
 import { SourceFile } from "../../prototype-data";
 
@@ -65,7 +66,12 @@ export function SourceDetailPanel({
         </div>
 
         <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
-          <div className="h-32 overflow-hidden rounded border border-border/60 bg-[#09080b]">
+          <div
+            className="h-32 cursor-grab overflow-hidden rounded border border-border/60 bg-[#09080b] active:cursor-grabbing"
+            draggable
+            onDragStart={(event) => startDesktopDrag(event, { sourceId: source.id }, { audioUrl: source.audioUrl ?? "", fileName: `${source.name}.wav` })}
+            title="Drag onto your desktop or into a DAW"
+          >
             <ContinuousWaveform values={values} active={isPreviewing} />
           </div>
           <div className="flex items-center gap-3">
