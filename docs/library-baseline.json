@@ -1,0 +1,339 @@
+{
+  "capturedAt": "2026-08-24T19:02:41.584Z",
+  "sources": 33,
+  "totalRelationships": 791,
+  "curatedRelationships": 0,
+  "totalFragments": 54,
+  "perSource": [
+    {
+      "id": "e0b6cfcc-5b2a-44d1-bfb1-a3cd89f946de",
+      "name": "09_30_2025_gtrjam.wav",
+      "bpm": 100,
+      "key": "C",
+      "scale": "minor",
+      "fragments": 6,
+      "relationships": 6,
+      "curated": 0
+    },
+    {
+      "id": "38cb7d0e-4747-460b-87d4-bac33874942b",
+      "name": "Andrew Huang - Cloud Collapse",
+      "bpm": 148,
+      "key": "C",
+      "scale": "minor",
+      "fragments": 17,
+      "relationships": 17,
+      "curated": 0
+    },
+    {
+      "id": "c0b0627a-a4d0-4240-af0e-daca513721cd",
+      "name": "f01.wav",
+      "bpm": 109,
+      "key": "E",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 46,
+      "curated": 0
+    },
+    {
+      "id": "6c4fac72-7033-4901-8900-9eb588d33405",
+      "name": "f02.wav",
+      "bpm": 84,
+      "key": "A",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 26,
+      "curated": 0
+    },
+    {
+      "id": "4e2dbe86-42e4-4dca-88d6-fca1aeb7edb4",
+      "name": "f03.wav",
+      "bpm": 74,
+      "key": "E",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 17,
+      "curated": 0
+    },
+    {
+      "id": "4e6eed25-e911-4d84-a495-fabdad344e27",
+      "name": "f04.wav",
+      "bpm": 106,
+      "key": "B",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 43,
+      "curated": 0
+    },
+    {
+      "id": "a09e61d2-61ef-4e09-9eee-ba625a92cd12",
+      "name": "f05.wav",
+      "bpm": 96,
+      "key": "F",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 42,
+      "curated": 0
+    },
+    {
+      "id": "f565ab42-0b76-43f6-aa1e-b6c40b8ab7e0",
+      "name": "f06.wav",
+      "bpm": 95,
+      "key": "E",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 41,
+      "curated": 0
+    },
+    {
+      "id": "d9ac48ff-974a-4ce4-a380-34b4869f8a12",
+      "name": "f07.wav",
+      "bpm": 76,
+      "key": "G",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 17,
+      "curated": 0
+    },
+    {
+      "id": "7d628a83-be66-4230-b4c7-a412e3c83355",
+      "name": "f08.wav",
+      "bpm": 86,
+      "key": "C",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 21,
+      "curated": 0
+    },
+    {
+      "id": "f8cc4e95-4e49-4709-8475-825445e3327b",
+      "name": "f09.wav",
+      "bpm": 101,
+      "key": "D",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 38,
+      "curated": 0
+    },
+    {
+      "id": "4e24011f-5ced-4061-b31f-337d56184264",
+      "name": "f10.wav",
+      "bpm": 78,
+      "key": "B",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 15,
+      "curated": 0
+    },
+    {
+      "id": "68bf0c3d-3e4f-4b1a-ae4b-11dfe8a0a670",
+      "name": "f11.wav",
+      "bpm": 76,
+      "key": "G",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 13,
+      "curated": 0
+    },
+    {
+      "id": "6764b674-9bfa-44bd-b120-ec9fea9f789d",
+      "name": "f12.wav",
+      "bpm": 121,
+      "key": "C",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 34,
+      "curated": 0
+    },
+    {
+      "id": "ddf06125-c59b-42c8-9f7f-993cde6687ff",
+      "name": "f13.wav",
+      "bpm": 108,
+      "key": "D",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 34,
+      "curated": 0
+    },
+    {
+      "id": "ea480786-6ff4-4a14-aafb-3ce3c9695d05",
+      "name": "f14.wav",
+      "bpm": 118,
+      "key": "G",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 32,
+      "curated": 0
+    },
+    {
+      "id": "748c2e6e-0565-4d94-8cbe-d6cfddea6f42",
+      "name": "f15.wav",
+      "bpm": 106,
+      "key": "B",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 32,
+      "curated": 0
+    },
+    {
+      "id": "f3c92c22-9db5-4c19-94e5-66e0348fbe12",
+      "name": "f16.wav",
+      "bpm": 120,
+      "key": "B",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 30,
+      "curated": 0
+    },
+    {
+      "id": "3b3e833a-8043-401e-907f-bbb3411ae080",
+      "name": "f17.wav",
+      "bpm": 126,
+      "key": "A",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 28,
+      "curated": 0
+    },
+    {
+      "id": "9f3c84c4-f261-40d2-bd66-f0b5bb4a31bf",
+      "name": "f18.wav",
+      "bpm": 95,
+      "key": "E",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 29,
+      "curated": 0
+    },
+    {
+      "id": "c5824fc7-9fb2-4337-8019-154c95c57db9",
+      "name": "f19.wav",
+      "bpm": 109,
+      "key": "E",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 28,
+      "curated": 0
+    },
+    {
+      "id": "5fe67579-49a1-4c13-87b3-c6e20716b6ff",
+      "name": "f20.wav",
+      "bpm": 126,
+      "key": "A",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 25,
+      "curated": 0
+    },
+    {
+      "id": "70dd65d9-3e88-4617-b5a5-65f913628bd3",
+      "name": "f21.wav",
+      "bpm": 117,
+      "key": "F",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 25,
+      "curated": 0
+    },
+    {
+      "id": "30323441-c0c2-4a6e-b3ce-bad1bc3321f1",
+      "name": "f22.wav",
+      "bpm": 118,
+      "key": "G",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 24,
+      "curated": 0
+    },
+    {
+      "id": "c8b6137d-9850-4b0c-8b64-556f220194d7",
+      "name": "f23.wav",
+      "bpm": 78,
+      "key": "B",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 4,
+      "curated": 0
+    },
+    {
+      "id": "5ecca361-11c2-4f91-9173-016ff4168c71",
+      "name": "f24.wav",
+      "bpm": 125,
+      "key": "G",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 22,
+      "curated": 0
+    },
+    {
+      "id": "14bae92d-f049-42a8-bd61-de4145aef681",
+      "name": "f25.wav",
+      "bpm": 101,
+      "key": "D",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 22,
+      "curated": 0
+    },
+    {
+      "id": "07bfe9c4-cb91-4672-a3cf-d1c0aae9f4c2",
+      "name": "f26.wav",
+      "bpm": 84,
+      "key": "A",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 2,
+      "curated": 0
+    },
+    {
+      "id": "da9ad243-c492-406b-ab38-b3281278827b",
+      "name": "f27.wav",
+      "bpm": 104,
+      "key": "G",
+      "scale": "major",
+      "fragments": 1,
+      "relationships": 20,
+      "curated": 0
+    },
+    {
+      "id": "ea2fa4e1-9f7f-4bcd-b342-50072fdc6568",
+      "name": "f28.wav",
+      "bpm": 73,
+      "key": "D",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 1,
+      "curated": 0
+    },
+    {
+      "id": "4731d7d4-2053-4735-9098-0899bda9062b",
+      "name": "song1.wav",
+      "bpm": 141,
+      "key": "D",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 39,
+      "curated": 0
+    },
+    {
+      "id": "a5c6a389-6202-40ef-ae0c-2a36144236b4",
+      "name": "song1.wav",
+      "bpm": 141,
+      "key": "D",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 18,
+      "curated": 0
+    },
+    {
+      "id": "fe54edcf-6a3c-491a-956a-14253b215535",
+      "name": "synth-rec_OBX.wav",
+      "bpm": 134,
+      "key": "A",
+      "scale": "minor",
+      "fragments": 1,
+      "relationships": 0,
+      "curated": 0
+    }
+  ]
+}

@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Repeat, Volume2, VolumeX } from "lucide-react";
-import { startDesktopDrag } from "@/lib/audio/desktop-drag";
 import { playMediaElement } from "@/lib/audio/browser-audio";
 import { resolveAudioUrl } from "@/lib/audio/resolve-audio-url";
 import {
@@ -228,12 +227,7 @@ export function CombineWorkspace({
   candidates,
   fragments,
   sources,
-  statuses,
   onClose,
-  onEdit,
-  onExport,
-  onSave,
-  onReject,
   onAuditioned,
 }: {
   anchor: Fragment;

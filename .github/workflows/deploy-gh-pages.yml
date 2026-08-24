@@ -35,7 +35,7 @@ jobs:
         run: npm ci
 
       - name: Build static site
-        run: npm run build:pages
+        run: npm run build:renderer
 
       - name: Prepare GitHub Pages output
         run: touch dist/client/.nojekyll

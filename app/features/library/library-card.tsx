@@ -246,7 +246,6 @@ export function LibraryCard({
   isSelected,
   isPreviewing,
   previewProgress,
-  sourceNameFor,
   sourceForId,
   linkSummaryFor,
   fragmentAudioFor,

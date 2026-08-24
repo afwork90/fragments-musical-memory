@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
-import { resolveRendererPath } from "../electron-dist/electron/protocols/resolve-renderer-path.js";
+import { resolveRendererPath } from "../../electron-dist/electron/protocols/resolve-renderer-path.js";
 
 const root = path.resolve("/fake/dist/client");
 

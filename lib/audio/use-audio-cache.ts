@@ -11,12 +11,15 @@ export function useCachedAudio(cacheKey: string | undefined | null): ProcessedAu
     setAudio(getCachedAudio(cacheKey));
     if (!cacheKey) return;
 
-    return subscribeAudioCache((updatedKey) => {
+    const unsubscribe = subscribeAudioCache((updatedKey) => {
       const resolved = getCachedAudio(cacheKey);
       if (resolved?.cacheKey === updatedKey || updatedKey === cacheKey) {
         setAudio(resolved);
       }
     });
+    return () => {
+      unsubscribe();
+    };
   }, [cacheKey]);
 
   return audio;

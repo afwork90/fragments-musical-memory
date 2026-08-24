@@ -4,7 +4,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createLibraryService } from "../lib/domain/library-service.mjs";
+import { createLibraryService } from "../../lib/domain/library-service.mjs";
 
 function validFinalizeMetadata(overrides = {}) {
   return {

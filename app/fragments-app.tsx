@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_WEIGHTS,
   DEFAULT_TOLERANCES,
@@ -46,7 +46,6 @@ import { armBrowserAudioUnlock, playMediaElement } from "@/lib/audio/browser-aud
 import { resolveAudioUrl } from "@/lib/audio/resolve-audio-url";
 import {
   analysisNeedsInvention,
-  formatMusicalKey,
   inventAnalysis,
   parseMusicalKeyLabel,
   resolvedMusicalKey,
@@ -63,10 +62,6 @@ type ReturnSnapshot = { kind:"source-edit";view:View;selectedId:string;selectedS
 type CorrectionPhase = "edit" | "recompute" | "prompt";
 type SourcePanelMode = "detail" | "fragmentation";
 
-const CONTEXTS: { id: SearchContext; label: string }[] = [
-  { id: "whole", label: "Whole" }, { id: "melody", label: "Melody" }, { id: "rhythm", label: "Rhythm" },
-  { id: "harmony", label: "Harmony" }, { id: "bass", label: "Bass" },
-];
 const RANGE_COLORS = ["#a99cff","#74d8ff","#ffbc65","#c8fa78","#ff849b","#75e2c2"];
 const OPENING_SOURCE_ID = SOURCE_FILES.find((source) => !source.imported)!.id;
 const INITIAL_RELATIONSHIP_STATUSES = Object.fromEntries(RELATIONSHIPS.filter((relationship) => relationship.status).map((relationship) => [relationship.id,relationship.status!])) as Record<string,RelationshipStatus>;
@@ -218,10 +213,12 @@ export default function FragmentsApp() {
   const [libraryFilters,setLibraryFilters] = useState<LibraryFilters>(createLibraryFilters);
   const [filterOpen,setFilterOpen] = useState(false);
   const [sort, setSort] = useState<LibrarySort>({ column:"uploaded", direction:"desc" });
-  const [context, setContext] = useState<SearchContext>("whole");
-  const [rangeMode, setRangeMode] = useState<RangeMode>("reasonable");
-  const [weights, setWeights] = useState<SearchWeights>({ ...DEFAULT_WEIGHTS });
-  const [tolerances,setTolerances] = useState<MatchTolerances>({ ...DEFAULT_TOLERANCES });
+  // Read-only: no control mutates these any more, so affinity scoring runs on
+  // fixed inputs. Task 6 moves them into lib/affinity/ where they belong.
+  const context: SearchContext = "whole";
+  const rangeMode: RangeMode = "reasonable";
+  const weights: SearchWeights = DEFAULT_WEIGHTS;
+  const tolerances: MatchTolerances = DEFAULT_TOLERANCES;
   const [archived, setArchived] = useState<Set<string>>(new Set());
   const [duplicateExclusions, setDuplicateExclusions] = useState<Set<string>>(new Set());
   const [duplicateGroup, setDuplicateGroup] = useState<string | null>(null);
@@ -527,7 +524,6 @@ export default function FragmentsApp() {
     return { total:eligible.length,manual:eligible.filter((relationship) => manualRelationshipIds.has(relationship.id)).length };
   };
 
-  const relatedTakeCountFor=(fragment:Fragment) => fragment.duplicateGroup && !duplicateExclusions.has(fragment.id) ? activeFragments.filter((item) => item.duplicateGroup === fragment.duplicateGroup && item.id !== fragment.id && !archived.has(item.id) && !duplicateExclusions.has(item.id)).length : 0;
   const filterableFragments=useMemo(() => activeFragments.filter((fragment) => !archived.has(fragment.id)),[activeFragments,archived]);
 
   const updateSourceSensitivity = (value:number) => {
@@ -676,11 +672,6 @@ export default function FragmentsApp() {
     const others = activeFragments.filter((fragment) => fragment.duplicateGroup === group && fragment.id !== id && !duplicateExclusions.has(fragment.id)).map((fragment) => fragment.id);
     setArchived((current) => new Set([...current, ...others])); setSelectedId(id); setDuplicateGroup(null); notify("Kept this take for matching and archived the rest.");
   };
-  const resetDemo = () => {
-    stopAllAudio(); setView("library"); setSelectedId("f02"); setQuery("");setLibraryFilters(createLibraryFilters());setFilterOpen(false);setInfoFragmentId(null);setSort({ column:"date", direction:"desc" });
-    setContext("whole"); setRangeMode("reasonable"); setWeights({ ...DEFAULT_WEIGHTS }); setTolerances({ ...DEFAULT_TOLERANCES });setArchived(new Set()); setDuplicateExclusions(new Set());
-    returnStack.current=[];setDuplicateGroup(null);setConnectionsOpen(false);setAdvancedOpen(false);setConnectionsWidth(520);setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(OPENING_SOURCE_ID);setSourceQuery("");setSourceSort({ column:"date",direction:"desc" });setSourceEditorOpen(false);setSourceEditorModal(false);setSourcePanelMode("fragmentation");setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null);notify("Demo restored to 24 fragments before import.");
-  };
   const pushReturn = (kind:ReturnSnapshot["kind"]) => returnStack.current.push({ kind,view,selectedId,selectedSourceId,connectionsOpen,advancedOpen,scrollY:window.scrollY });
   const restoreReturn = (kind:ReturnSnapshot["kind"]) => {
     const snapshot=returnStack.current.at(-1);
@@ -690,14 +681,6 @@ export default function FragmentsApp() {
   const openFragment = (id:string) => { stopAllAudio(); setSelectedId(id); setFilterOpen(false); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
   const highlightLibraryFragment = (id: string) => { setSelectedId(id); };
   const highlightLibrarySource = (source: SourceFile) => { setSelectedId(`source:${source.id}`); };
-  const selectLibrarySource = (source: SourceFile) => {
-    stopAllAudio();
-    setSelectedId(`source:${source.id}`);
-    setFilterOpen(false);
-    setConnectionsOpen(true);
-    setAdvancedOpen(false);
-    setView("library");
-  };
   const removeSource = (sourceId: string) => {
     const source = sources.find((item) => item.id === sourceId);
     if (!source) return;
@@ -1059,10 +1042,6 @@ export default function FragmentsApp() {
   const mapFragment=mapSelectedId && !archived.has(mapSelectedId) ? activeFragments.find((fragment) => fragment.id === mapSelectedId) ?? null : null;
   const focusMapInspector=() => window.setTimeout(() => mapInspectorCloseRef.current?.focus({ preventScroll:true }),0);
   const closeMapInspector=() => { const id=mapSelectedId;stopAllAudio();setMapSelectedId(null);if (id) window.setTimeout(() => document.querySelector<HTMLButtonElement>(`[data-map-node="${id}"]`)?.focus({ preventScroll:true }),0); };
-  const selectAndRevealMapNode=(id:string,moveFocus=false) => {
-    stopAllAudio();setSelectedId(id);setMapSelectedId(id);
-    if (moveFocus) focusMapInspector();
-  };
   const editorRanges=correctionRelationship ? (combineDraftRanges ?? []) : selectedRanges;
   const editorSensitivity=correctionRelationship ? (combineDraftSensitivity ?? selectedSource.sensitivity) : selectedSource.sensitivity;
   const correctedRange=correctionRelationship ? editorRanges.find((range) => range.fragmentId === correctionRelationship.otherId) : null;

@@ -107,7 +107,6 @@ export function LibraryFilterPanel({
   filters,
   keyOptions,
   tagOptions,
-  roleOptions,
   resultCount,
   totalCount,
   onChange,
