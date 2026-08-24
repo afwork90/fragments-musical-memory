@@ -23,12 +23,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/lib/ui/dialog";
-import {
-  Fragment,
-  Relationship,
-  RelationshipStatus,
-  SourceFile,
-} from "./prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { Relationship } from "@/lib/view/relationship";
+import type { SourceFile } from "@/lib/view/source-file";
+import type { RelationshipStatus } from "@/lib/view/vocabulary";
 
 export type CombineCandidate = Relationship & { score: number; otherId: string };
 type TransformDraft = {

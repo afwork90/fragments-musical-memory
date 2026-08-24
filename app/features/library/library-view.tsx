@@ -2,7 +2,9 @@
 
 import { CSSProperties, ReactNode, RefObject, useMemo } from "react";
 import { sourceKeyLabels, uniqueKeyLabels } from "@/lib/audio/source-metadata";
-import { Fragment, MusicalRole, SourceFile } from "../../prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
+import type { MusicalRole } from "@/lib/view/vocabulary";
 import { LIBRARY_ROLES } from "./library-columns";
 import { visibleLibraryItems } from "./library-items";
 import { LibraryLinkSummary } from "./library-list";

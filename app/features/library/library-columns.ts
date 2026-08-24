@@ -1,4 +1,4 @@
-import { MusicalRole } from "../../prototype-data";
+import type { MusicalRole } from "@/lib/view/vocabulary";
 import { LibraryColumnDef, LibrarySort, LibrarySortColumn } from "./types";
 
 export const LIBRARY_COLUMNS: LibraryColumnDef[] = [

@@ -1,6 +1,7 @@
 import { formatMusicalKey } from "@/lib/audio/source-metadata";
 import { LibraryFilters } from "../../library-filter-popover";
-import { Fragment, SourceFile } from "../../prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
 import {
   LibraryLinkSummary,
   LibraryListContext,

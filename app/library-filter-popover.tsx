@@ -1,6 +1,6 @@
 "use client";
 
-import { MusicalRole } from "./prototype-data";
+import type { MusicalRole } from "@/lib/view/vocabulary";
 
 export type LibraryColumnId =
   | "name"

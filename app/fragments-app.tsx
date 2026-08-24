@@ -2,22 +2,18 @@
 
 import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
-  DEFAULT_WEIGHTS,
-  DEFAULT_TOLERANCES,
   FRAGMENTS,
   IMPORTED_FRAGMENT_IDS,
   MESSY_PHONE_PROFILE,
   RELATIONSHIPS,
   SOURCE_FILES,
-  Fragment,
-  MatchTolerances,
-  MusicalRole,
-  Relationship,
-  RelationshipStatus,
-  SearchContext,
-  SearchWeights,
-  SourceFile,
 } from "./prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { Relationship } from "@/lib/view/relationship";
+import type { SourceFile } from "@/lib/view/source-file";
+import { DEFAULT_TOLERANCES, DEFAULT_WEIGHTS } from "@/lib/view/search";
+import type { MatchTolerances, SearchWeights } from "@/lib/view/search";
+import type { MusicalRole, RelationshipStatus, SearchContext } from "@/lib/view/vocabulary";
 import { Waveform } from "@/lib/audio/waveform";
 import { DuplicateTakesDialog } from "./features/library/duplicate-takes-dialog";
 import { ConnectionsTable } from "./features/library/connections-table";

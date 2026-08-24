@@ -1,7 +1,8 @@
 "use client";
 
 import { ReactNode, useMemo } from "react";
-import { Fragment, SourceFile } from "../../prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
 import { EditableRange } from "../../fragmentation-workbench";
 import { visibleSources } from "./source-list";
 import { SourceTable } from "./source-table";

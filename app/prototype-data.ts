@@ -1,15 +1,12 @@
-// This file is two things at once, and only one of them is real.
+// The hackathon's fake dataset. Nothing here describes anything on disk.
 //
-// The **types** below (`Fragment`, `SourceFile`, `Relationship`, ...) are what
-// the whole UI is written against — 18 files import them. Task 4b moves them to
-// `lib/view/`, derived from the domain documents.
+// It is kept deliberately, for now, as an explicit placeholder: it supplies the
+// app's opening state and the staged "balcony" source that demonstrates the import
+// walkthrough, and several non-null assertions in `fragments-app.tsx` still assume
+// it exists. Retiring it is the second half of Task 4b, together with a real empty
+// state.
 //
-// The **data** below (`FRAGMENTS`, `SOURCE_FILES`, `RELATIONSHIPS`, and the
-// profiles) is the hackathon's fake dataset. It is kept deliberately, for now, as
-// an explicit placeholder: it supplies the app's opening state and the staged
-// "balcony" source that demonstrates the import walkthrough, and several
-// non-null assertions in `fragments-app.tsx` still assume it exists. Nothing here
-// describes anything on disk.
+// The types it is built from now live in `lib/view/` — this file is data only.
 //
 // Rules while it survives:
 //   - Never write any of it to `source.json`. Task 4a removed the last path that
@@ -19,118 +16,10 @@
 
 import prototypeWaveforms from "./prototype-waveforms.json";
 import { parseMusicalKeyLabel } from "@/lib/audio/source-metadata";
-
-export type MusicalRole = "Melody" | "Rhythm" | "Harmony" | "Bass" | "Voice" | "Texture";
-export type SearchContext = "whole" | "melody" | "rhythm" | "harmony" | "bass";
-export type SourceType = "Voice memo" | "Jam" | "Practice" | "Studio" | "Field recording" | "Archive";
-export type RelationshipOrigin = "algorithmic" | "manual" | "auditioned" | "rejected" | "preferred";
-export type RelationshipStatus = "suggested" | "auditioned" | "rejected" | "manual" | "preferred";
-
-export interface AnalysisProfile {
-  name: string;
-  sensitivity: number;
-  expectedLength: string;
-  detectors: string[];
-  tempoStrategy: string;
-  keyStrategy: string;
-  confidenceThreshold: number;
-}
-
-export interface FragmentRef { sourceId:string; start:number; end:number; }
-export interface AnalysisMetadata { beats:number; bars:number; confidence:number; userTags:string[]; analysisRevision:number; }
-
-export interface Fragment extends FragmentRef, AnalysisMetadata {
-  id: string;
-  name: string;
-  source: string;
-  date: string;
-  dateLabel: string;
-  uploadedAt?: string;
-  duration: string;
-  key: string;
-  alternateKeys: string[];
-  bpm: number;
-  role: MusicalRole;
-  roles: MusicalRole[];
-  brightness: number;
-  waveform: number[];
-  duplicateGroup?: string;
-  audio: string;
-  objects?: Partial<Record<SearchContext, string>>;
-  sourceTypes: SourceType[];
-}
-
-export interface Transform {
-  pitch?: number;
-  bpm?: number;
-  timing?: "half-time" | "double-time";
-  beatOffset?: number;
-  repeat?: number;
-  labels: string[];
-  asset: string;
-}
-
-export interface Relationship {
-  id: string;
-  source: string;
-  target: string;
-  base: number;
-  metrics: {
-    rhythm: number;
-    harmony: number;
-    melody: number;
-    timbre: number;
-    tempo: number;
-    pitch: number;
-    brightness: number;
-  };
-  transformationCost: number;
-  reason: string;
-  transform?: Transform;
-  experimental?: boolean;
-  origin?: RelationshipOrigin;
-  status?: RelationshipStatus;
-}
-
-export interface SearchWeights {
-  rhythm: number;
-  harmony: number;
-  melody: number;
-  timbre: number;
-}
-
-export interface MatchTolerances {
-  tempoWindow: number;
-  keyFlexibility: "exact" | "related" | "nearby";
-  lengthTolerance: "same" | "one" | "any";
-  allowRepetition: boolean;
-}
-
-export interface SourceFile {
-  id: string;
-  name: string;
-  date: string;
-  duration: number;
-  format: string;
-  device: string;
-  fragmentIds: string[];
-  waveform: number[];
-  sensitivity: number;
-  start: number;
-  end: number;
-  sourceTypes: SourceType[];
-  analysisProfile: AnalysisProfile;
-  imported?: boolean;
-  audioUrl?: string;
-  audioCacheKey?: string;
-  bpm?: number | null;
-  key?: string | null;
-  scale?: string | null;
-  uploadedAt?: string;
-}
-
-export interface ImportSession { sourceId:string; tags:SourceType[]; stage:"classify" | "Importing" | "Segmenting" | "Extracting metadata" | "Matching" | "Ready"; }
-export interface CombineSession { anchorId:string; candidateIds:string[]; activeCandidateId:string; returnScroll:number; }
+import type { Fragment } from "@/lib/view/fragment";
+import type { Relationship, Transform } from "@/lib/view/relationship";
+import type { AnalysisProfile, SourceFile } from "@/lib/view/source-file";
+import type { SourceType } from "@/lib/view/vocabulary";
 
 const FRAGMENT_WAVEFORMS = prototypeWaveforms.fragments as Record<string, number[]>;
 const SOURCE_PEAK_COUNT = prototypeWaveforms.peakCount;
@@ -282,5 +171,3 @@ export const SOURCE_FILES: SourceFile[] = uniqueSourceNames.map((name,index) => 
   };
 });
 
-export const DEFAULT_WEIGHTS: SearchWeights = { rhythm:54, harmony:72, melody:68, timbre:36 };
-export const DEFAULT_TOLERANCES:MatchTolerances = { tempoWindow:10,keyFlexibility:"related",lengthTolerance:"one",allowRepetition:true };

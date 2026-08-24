@@ -18,7 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/lib/ui/dropdown-menu";
 import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
-import { SourceFile } from "../../prototype-data";
+import type { SourceFile } from "@/lib/view/source-file";
 
 type SourceRowActionsProps = {
   source: SourceFile;

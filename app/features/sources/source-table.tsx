@@ -18,7 +18,8 @@ import {
 } from "@/lib/ui/table";
 import { cn } from "@/lib/utils";
 import { formatSeconds } from "@/lib/format";
-import { Fragment, SourceFile } from "../../prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
 import { EditableRange } from "../../fragmentation-workbench";
 import { SOURCE_COLUMNS, toggleSourceSort } from "./source-columns";
 import { SourceRowActions } from "./source-row-actions";

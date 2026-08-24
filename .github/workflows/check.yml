@@ -1,0 +1,37 @@
+# Replaces the GitHub Pages deploy workflow. The web build is a development
+# convenience, not a product, so there is nothing to publish — but that workflow
+# was also the repository's only automation, so this keeps the verification gate.
+
+name: Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # typecheck + lint + unit tests. Also builds electron-dist, which is what
+      # catches the import mistakes that only fail at runtime.
+      - name: Check
+        run: npm run check
+
+      # Adds the packaged-HTML smoke test on top of the above.
+      - name: Test
+        run: npm test

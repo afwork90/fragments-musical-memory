@@ -505,6 +505,34 @@ provenance so a re-run cannot clobber a hand-corrected value).
 correct for the fabricated data on disk but wrong for honest generation, where `melody` will not
 exist. Axes must become individually optional, and "absent" must render differently from "scored 0".
 
+### 9.6 What the 791 relationships on disk actually are
+
+Measured, not guessed, because two plausible assumptions about them were both wrong.
+
+**They were rule-based, not random.** The correlation between real BPM distance and the stored
+`tempo` metric is **−0.968**, and the `reason` strings are literal ("Tempos are close (126 vs 148
+BPM)").
+
+**They do not point at prototype fragments.** All 791 rows have both endpoints resolving to real
+fragments in the library — zero dangling, 791 distinct undirected pairs, no duplicates, all
+`algorithmic`. They survive display because `rankedConnectionsFor` has an `isLibraryRelationship`
+bypass that skips the tolerance filters for library-to-library pairs.
+
+**Only a few appear because of a hard cap**, not a bug: `rankedConnectionsFor(sourceId, limit = 6)`
+sorts by score and takes six. The median fragment has 25 candidates and 48 of 51 fragments exceed the
+cap, so roughly 19 matches per fragment are hidden.
+
+**But only about three axes carry information.** `rhythm` is identical to `tempo`, `pitch` is
+identical to `harmony`, and `timbre` and `brightness` are the **constant 0.70 for all 791 rows**.
+That is the concrete gap Essentia's `MFCC` and `SpectralCentroidTime` close, and the evidence for
+§9.4's ordering.
+
+**The generator no longer exists.** It is only in git history (`057cb40`). Nothing in `app/` calls
+`updateRelationships` — that channel is fully plumbed through contract, preload, persistence, and
+service, and entirely unused — and import creates no relationships. **Consequence: clearing the
+sources folder and re-importing yields zero affinities, irrecoverably.** Do the clear-and-reslice
+only after a generator exists, and back the folder up first.
+
 ### 9.5 The soft-delete replay hack: keep
 
 A demo affordance whose cost disappears once 9.3 and 9.4 are real. Removing it early only costs a

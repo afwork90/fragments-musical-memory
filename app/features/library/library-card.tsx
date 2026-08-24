@@ -11,7 +11,8 @@ import { resolveSourceAudioUrl, buildFragmentPreviewScope } from "@/lib/audio/so
 import { Button } from "@/lib/ui/button";
 import { cn } from "@/lib/utils";
 import { formatSeconds } from "@/lib/format";
-import { Fragment, SourceFile } from "../../prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
 import { LibraryLinkSummary } from "./library-list";
 import { LibraryItem } from "./library-items";
 

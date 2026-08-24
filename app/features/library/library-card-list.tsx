@@ -1,7 +1,8 @@
 "use client";
 
 import { KeyboardEvent } from "react";
-import { Fragment, SourceFile } from "../../prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
 import { LibraryCard } from "./library-card";
 import { LibraryItem } from "./library-items";
 import { LibraryLinkSummary } from "./library-list";

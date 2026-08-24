@@ -1,4 +1,5 @@
-import { Fragment, SourceFile } from "@/app/prototype-data";
+import type { Fragment } from "../view/fragment";
+import type { SourceFile } from "../view/source-file";
 
 export type PreviewClip = {
   start: number;

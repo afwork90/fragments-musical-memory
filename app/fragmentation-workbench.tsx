@@ -30,7 +30,9 @@ import { Button } from "@/lib/ui/button";
 import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { cn } from "@/lib/utils";
 import { formatSeconds } from "@/lib/format";
-import { Fragment, MusicalRole, SourceFile } from "./prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
+import type { MusicalRole } from "@/lib/view/vocabulary";
 
 export type EditableRange = { id: string; fragmentId?: string; start: number; end: number; color: string };
 type Edge = "start" | "end";

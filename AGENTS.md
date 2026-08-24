@@ -35,6 +35,14 @@ affinities, key/BPM display, or playback.
 - **One definition site.** A type describing something on disk lives in
   `lib/domain/`. A type describing something a component renders lives in
   `lib/view/`. Do not redeclare either.
+
+  `lib/view/` is `vocabulary.ts` (the shared closed unions), `fragment.ts`,
+  `source-file.ts`, `relationship.ts`, and `search.ts` (weights and tolerances
+  plus their defaults). They are pure types with no imports beyond each other.
+  The two forms are deliberately separate rather than duplicated: the disk allows
+  a `MusicalRole` of `"Unclassified"`, which the UI translates before display, and
+  view types are display-shaped (`duration` is a formatted string, `key` is a
+  human label like "Likely C minor").
 - **Types are plain.** Prefer `type X = { ... }` and explicit unions. No
   generics, conditional types, branded types, or `satisfies` acrobatics. If a
   type takes more than a few seconds to read, simplify it.

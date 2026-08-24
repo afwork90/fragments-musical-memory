@@ -26,7 +26,7 @@ import type { ProcessedAudio } from "@/lib/audio/types";
 import type { BeginImportResult, FragmentsBridge, SourceRecord } from "@/lib/ipc/contract";
 import { getFragmentsBridge } from "@/lib/web/bridge";
 import { formatSeconds } from "@/lib/format";
-import { SourceType } from "@/app/prototype-data";
+import type { SourceType } from "@/lib/view/vocabulary";
 
 /**
  * The bridge only if this host can actually copy a file into the library. The web

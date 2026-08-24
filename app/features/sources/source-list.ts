@@ -1,4 +1,4 @@
-import { SourceFile } from "../../prototype-data";
+import type { SourceFile } from "@/lib/view/source-file";
 import { SourceSort } from "./types";
 
 export function filterSources(sources: SourceFile[], query: string) {

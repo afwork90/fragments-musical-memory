@@ -9,7 +9,9 @@ import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
 import { formatSeconds } from "@/lib/format";
-import { Fragment, MusicalRole, SourceFile } from "../../prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
+import type { MusicalRole } from "@/lib/view/vocabulary";
 import { LIBRARY_ROLES } from "../library/library-columns";
 import { cn } from "@/lib/utils";
 

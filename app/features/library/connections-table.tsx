@@ -11,7 +11,9 @@ import {
   TableRow,
 } from "@/lib/ui/table";
 import { cn } from "@/lib/utils";
-import { Fragment, Relationship, SourceFile } from "../../prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { Relationship } from "@/lib/view/relationship";
+import type { SourceFile } from "@/lib/view/source-file";
 import { CONNECTIONS_COLUMNS } from "./connections-columns";
 
 export type ScoredConnection = Relationship & { score: number; otherId: string };
