@@ -96,9 +96,25 @@ imports; inside `electron/`, keep the `.js` suffix.
 
 Renderer/main traffic goes through `lib/ipc/contract.ts`. Adding a call means
 adding it to `FragmentsBridge`, wiring it in `electron/preload.ts` (typed as
-`FragmentsBridge`, so a mismatch is a compile error), and handling the channel in
-`electron/persistence.ts`. Access the bridge as `window.fragments`, which is
-optional — check it, never cast it.
+`FragmentsBridge`, so a mismatch is a compile error), handling the channel in
+`electron/persistence.ts`, **and** implementing it in
+`lib/web/library-bridge.ts` — the compiler will tell you if you forget.
+
+There are two hosts behind that one contract:
+
+- **Electron**, over IPC, with everything enabled.
+- **The browser**, over HTTP, served by the Vite plugin in
+  `lib/dev/library-dev-server.ts`, which reads the *same* library folder using the
+  *same* `createLibraryService`. Read-only.
+
+Get the bridge from `getFragmentsBridge()` in `lib/web/bridge.ts`, never from
+`window.fragments` directly, and **branch on `bridge.capabilities`, not on whether
+a bridge exists**. `import`, `persist`, and `drag` are separate capabilities.
+Treating presence as "we are in Electron" is what forced the prototype dataset to
+double as the web build's data source.
+
+`lib/web/` and `lib/dev/` are outside the Electron build on purpose: one uses DOM
+globals, the other `node:*`. Do not import either from `lib/ipc/` or `lib/domain/`.
 
 There is currently **no `any` and no `@ts-nocheck`** in `app/`, `lib/`,
 `electron/`, or `types/`. Keep it that way: at an untrusted boundary take

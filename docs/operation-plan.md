@@ -427,3 +427,85 @@ write it to `source.json`, never use it as a fallback for a real source's missin
 Deliberately **not** in 4a: `Fragment.bpm` stays `number` with `?? 0` as its unknown sentinel.
 Making it `number | null` touches eight files and the arithmetic in the affinity scorer, and the type
 lives in `prototype-data.ts` — so it belongs with 4b's view models.
+
+---
+
+## 9. The five fake paths, and what each is actually waiting on
+
+Context from you, which changes the plan: the fake paths exist for demo reasons, not by accident.
+Each needs a different treatment, and only one of them is a "keep faking it" situation.
+
+### 9.1 Web build reads the real library (done)
+
+**Was:** the browser had no bridge, so `window.fragments` was undefined and the app fell back to the
+prototype dataset plus `public/audio/f01.wav`. That was the fake dataset's main justification.
+
+**Now:** the `FragmentsBridge` contract from Task 3 has two implementations. Electron speaks IPC;
+the browser speaks HTTP to a Vite dev-server plugin (`lib/dev/library-dev-server.ts`) that calls the
+**same `createLibraryService`**. One implementation of persistence, two transports, one library
+folder.
+
+The load-bearing change is `BridgeCapabilities` (`import`, `persist`, `drag`). Callers used to treat
+"a bridge exists" as "we are in Electron"; with a web bridge present that assumption would have sent
+the import dialog down the managed path and silently done nothing. All eight call sites now ask
+what the host can *do*.
+
+Not copied into `public/`: the sources are **97 MB across 33 files**, so a static export would bloat
+the repo. The dev plugin is `apply: "serve"`, so a deployed static build has no library behind it —
+its `listSources` rejects and the app reports a load failure, which is the honest outcome. A public
+demo would need a curated, downsampled subset; that is a separate decision.
+
+Verified against the running dev server: `/__library/sources` returns 33 sources / 54 fragments /
+791 relationships with normalization applied; audio returns `200` with `Accept-Ranges` and a correct
+MIME type; a `Range` request returns `206` with the right `Content-Range` (**without this, seeking in
+`<audio>` silently breaks**); an unknown id and a `../../etc/passwd` traversal both return `404`.
+
+### 9.2 The Map is a placeholder — keep, but feed it real data
+
+Its projection (`app/map-layout.mjs`) is arbitrary but real code; only its *input* was fake. Once the
+prototype fragments go, it renders the library's own fragments and stays useful as a placeholder
+until it is replaced. No work needed beyond 4b.
+
+### 9.3 Slicing: Essentia can do this, and we already ship it
+
+The answer to "can Essentia help" is yes, and the current code is barely using it. It imports only
+the **extractor** wrapper — three calls. The **core** API in the same installed package exposes 211
+algorithms, including:
+
+- `SuperFluxExtractor(signal, combine, frameSize, hopSize, ratioThreshold, sampleRate, threshold)` —
+  onset detection built for spectral/energy change boundaries. `threshold` and `combine` (a minimum
+  gap in ms) map onto the existing sensitivity slider, which is what stops it emitting 200 slices.
+- `RhythmExtractor2013`, `BeatTrackerMultiFeature` — real beats and tempo, so `beats`/`bars` stop
+  being zeros.
+- `MFCC`, `HPCP`, `SpectralContrast`, `SpectralCentroidTime`, `Loudness` — the features §9.4 needs.
+
+No `SBic`, so no BIC segmentation; onsets plus a minimum-length grouping rule suits musical fragments
+better anyway. **No new dependency.** So this is not "fake it until a library exists" — it is a real
+implementation behind a `SliceStrategy` seam, which is worth introducing either way.
+
+### 9.4 Affinities: deterministic rules, but features come first
+
+Proposal — a weighted score filling the seven axes already on disk, computing only what is derivable:
+
+| Axis | Rule |
+| --- | --- |
+| `tempo` | BPM distance **allowing harmonic ratios** (1, 2, ½, 1.5, ⅔), so 70 matches 140 instead of scoring zero |
+| `harmony`, `pitch` | Circle-of-fifths distance plus relative major/minor; better, cosine distance between HPCP chroma vectors |
+| `timbre` | Cosine distance between mean MFCC vectors — the axis that finds "belongs with" |
+| `brightness` | Spectral centroid ratio |
+| `rhythm` | Inter-onset-interval histogram similarity, free once §9.3 computes onsets |
+| `melody` | Genuinely hard. **Omit rather than fake.** |
+
+**Prerequisite:** none of this works from what is stored today. `analysis` holds BPM, key, scale, and
+key strength — there is no chroma or MFCC to compare. So the order is *batch feature extraction
+first, rules second*. `MeasuredAnalysis` was designed for that (additive optional fields plus
+provenance so a re-run cannot clobber a hand-corrected value).
+
+**This invalidates a Task 3 decision:** `RelationshipMetrics` requires all seven axes, which was
+correct for the fabricated data on disk but wrong for honest generation, where `melody` will not
+exist. Axes must become individually optional, and "absent" must render differently from "scored 0".
+
+### 9.5 The soft-delete replay hack: keep
+
+A demo affordance whose cost disappears once 9.3 and 9.4 are real. Removing it early only costs a
+demo. Revisit after those land.

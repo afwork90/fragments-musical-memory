@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveRendererPath } from "./protocols/resolve-renderer-path.js";
 import { createLibraryService } from "../lib/domain/library-service.js";
+import { resolveLibraryRoot } from "../lib/domain/paths.js";
 import { FRAGMENTS_CHANNELS } from "../lib/ipc/contract.js";
 import type { DragTarget, SourceRecord } from "../lib/ipc/contract.js";
 import type { SourceDocument } from "../lib/domain/source-document.js";
@@ -38,8 +39,7 @@ export function registerAudioScheme() {
 }
 
 export async function initializePersistence() {
-  const libraryRoot = process.env.FRAGMENTS_LIBRARY_ROOT
-    || path.join(app.getPath("documents"), "Fragments Library");
+  const libraryRoot = resolveLibraryRoot(app.getPath("documents"));
   const library = createLibraryService(libraryRoot);
   const audioUrl = (id: string) => `${AUDIO_SCHEME}://source/${encodeURIComponent(id)}`;
 

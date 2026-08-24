@@ -1,6 +1,7 @@
 import path from "node:path";
 import vinext from "vinext";
 import { defineConfig } from "vite";
+import { libraryDevServer } from "./lib/dev/library-dev-server";
 
 export default defineConfig({
   base: "./",
@@ -13,5 +14,5 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ["essentia.js"],
   },
-  plugins: [vinext()],
+  plugins: [libraryDevServer(), vinext()],
 });

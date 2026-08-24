@@ -55,6 +55,7 @@ import { MAP_WORLD, musicalMapPoint } from "./map-layout.mjs";
 import type { FragmentDocument, SourceDocument } from "@/lib/domain/source-document";
 import type { MusicalRole as DomainMusicalRole } from "@/lib/domain/source-document";
 import type { SourceRecord } from "@/lib/ipc/contract";
+import { getFragmentsBridge } from "@/lib/web/bridge";
 
 type View = "library" | "source" | "map" | "archive";
 type RangeMode = "reasonable" | "experimental";
@@ -292,7 +293,7 @@ export default function FragmentsApp() {
   }, [filterOpen]);
 
   useEffect(() => {
-    const bridge = window.fragments;
+    const bridge = getFragmentsBridge();
     if (!bridge) return;
     void bridge.listSources().then((documents) => {
       const persisted = documents.map((document) => sourceFileFromDocument(document));
@@ -582,8 +583,8 @@ export default function FragmentsApp() {
   };
 
   const saveSourceAnalysis = async (sourceId: string, analysis: SourceAnalysisValues) => {
-    const bridge = window.fragments;
-    if (bridge) {
+    const bridge = getFragmentsBridge();
+    if (bridge?.capabilities.persist) {
       try {
         await bridge.updateSourceAnalysis(sourceId, { ...analysis, keyStrength: null });
       } catch (error) {
@@ -670,8 +671,8 @@ export default function FragmentsApp() {
       .filter((fragment) => fragment.sourceId === sourceId)
       .map((fragment) => fragment.id);
     const remainingSources = sources.filter((item) => item.id !== sourceId);
-    const bridge = window.fragments;
-    if (bridge && source.imported) {
+    const bridge = getFragmentsBridge();
+    if (bridge?.capabilities.persist && source.imported) {
       void bridge.archiveSource(sourceId).catch((error: unknown) => console.warn("Could not archive source:", error));
     }
 
@@ -858,8 +859,8 @@ export default function FragmentsApp() {
     stopAllAudio();setSelectedSourceId(source.id);setCombineDraftRanges((sourceRanges[source.id] ?? []).map((range) => ({ ...range })));setCombineDraftSensitivity(source.sensitivity);setCorrectionOriginal({ duration:candidate.duration,key:candidate.key,bpm:candidate.bpm,bars:candidate.bars,beats:candidate.beats,confidence:candidate.confidence,analysisRevision:candidate.analysisRevision });setCorrectionPhase("edit");setCorrectionRelationship(relationship);setSourcePanelMode("fragmentation");setSourceEditorOpen(true);
   };
   const persistFragmentsForSource = (sourceId:string,fragments:Fragment[]) => {
-    const bridge=window.fragments;
-    if (!bridge) return;
+    const bridge=getFragmentsBridge();
+    if (!bridge?.capabilities.persist) return;
     void bridge.updateFragments(sourceId,fragments.map(fragmentToDocument)).catch((error:unknown) => console.warn("Could not persist fragments:",error));
   };
 

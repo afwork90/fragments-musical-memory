@@ -23,9 +23,19 @@ import {
   updateCachedAnalysis,
 } from "@/lib/audio/audio-service";
 import type { ProcessedAudio } from "@/lib/audio/types";
-import type { BeginImportResult, SourceRecord } from "@/lib/ipc/contract";
+import type { BeginImportResult, FragmentsBridge, SourceRecord } from "@/lib/ipc/contract";
+import { getFragmentsBridge } from "@/lib/web/bridge";
 import { formatSeconds } from "@/lib/format";
 import { SourceType } from "@/app/prototype-data";
+
+/**
+ * The bridge only if this host can actually copy a file into the library. The web
+ * preview has a bridge for reading, so presence alone is not permission to import.
+ */
+function importBridge(): FragmentsBridge | null {
+  const bridge = getFragmentsBridge();
+  return bridge?.capabilities.import ? bridge : null;
+}
 
 export type ImportedSource = ProcessedAudio & {
   sourceTypes: SourceType[];
@@ -128,7 +138,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   };
 
   const reset = () => {
-    const bridge = window.fragments;
+    const bridge = importBridge();
     if (pendingImportRef.current && bridge) {
       const pending = pendingImportRef.current;
       if (!pending.restored && !pending.duration) {
@@ -194,8 +204,10 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   };
 
   const chooseManagedFile = async () => {
-    const bridge = window.fragments;
+    const bridge = importBridge();
     if (!bridge) {
+      // No managed import here (browser preview): decode a file in-memory so the
+      // dialog still demonstrates the flow without pretending it was persisted.
       inputRef.current?.click();
       return;
     }
@@ -274,7 +286,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
     let persistedAudioUrl: string | undefined;
     let restored = false;
     let persistedDocument: SourceRecord | undefined;
-    const bridge = window.fragments;
+    const bridge = importBridge();
     const pending = pendingImportRef.current;
     if (bridge && pending) {
       if (pending.restored || pending.duration) {

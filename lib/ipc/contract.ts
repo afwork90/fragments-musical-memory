@@ -47,7 +47,32 @@ export type DragTarget = {
   assetPath?: string;
 };
 
+/**
+ * What the host can actually do.
+ *
+ * The renderer must branch on these rather than on whether a bridge exists. The
+ * web build has a bridge too — backed by HTTP against the same library folder —
+ * and it can read everything but cannot write to disk, open a native file picker,
+ * or start an OS drag. Treating "a bridge is present" as "we are in Electron" is
+ * what forced the prototype dataset to double as the web build's data source.
+ */
+export type BridgeCapabilities = {
+  /** Can copy a file into the managed library: native picker plus a filesystem write. */
+  import: boolean;
+  /** Can persist edits back to `source.json`. */
+  persist: boolean;
+  /** Can hand a real file to another application via an OS drag. */
+  drag: boolean;
+};
+
+/** Where the web bridge reads the library. Mirrors the Electron IPC channels. */
+export const WEB_LIBRARY_ROUTES = {
+  sources: "/__library/sources",
+  audio: "/__library/audio",
+} as const;
+
 export type FragmentsBridge = {
+  readonly capabilities: BridgeCapabilities;
   /** Opens the OS file picker. Resolves `null` when the user cancels. */
   pickAudioFile(): Promise<string | null>;
   beginImport(filePath: string): Promise<BeginImportResult>;

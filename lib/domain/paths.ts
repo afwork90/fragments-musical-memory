@@ -4,6 +4,17 @@ import path from "node:path";
 
 const SAFE_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
+export const LIBRARY_DIR_NAME = "Fragments Library";
+
+/**
+ * One rule for where the library lives, so Electron, the dev server that backs the
+ * web build, and the seed script cannot disagree about it. Callers supply their
+ * own documents directory because only Electron can ask the OS for it.
+ */
+export function resolveLibraryRoot(documentsDir: string): string {
+  return process.env.FRAGMENTS_LIBRARY_ROOT || path.join(documentsDir, LIBRARY_DIR_NAME);
+}
+
 export function assertSafeSourceId(id: unknown): string {
   if (typeof id !== "string" || id.length === 0 || !SAFE_ID_PATTERN.test(id) || id === "." || id === "..") {
     throw new Error("source id must be a non-empty identifier without path traversal segments");

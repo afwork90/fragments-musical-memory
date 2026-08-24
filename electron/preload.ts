@@ -6,6 +6,7 @@ import type { FragmentsBridge } from "../lib/ipc/contract.js";
 // a method to the interface without wiring it here is a compile error, and so is
 // wiring one with the wrong argument types.
 const bridge: FragmentsBridge = {
+  capabilities: { import: true, persist: true, drag: true },
   pickAudioFile: () => ipcRenderer.invoke(FRAGMENTS_CHANNELS.pickAudio),
   beginImport: (filePath) => ipcRenderer.invoke(FRAGMENTS_CHANNELS.beginImport, filePath),
   finalizeImport: (id, metadata) =>

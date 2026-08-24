@@ -6,9 +6,12 @@
 // trick, which some apps accept but is far less reliable.
 
 import type { DragTarget } from "../ipc/contract";
+import { getFragmentsBridge } from "../web/bridge";
 
+/** Only a host that can hand a real file to another application counts here. */
 function bridge() {
-  return typeof window !== "undefined" ? window.fragments ?? null : null;
+  const resolved = getFragmentsBridge();
+  return resolved?.capabilities.drag ? resolved : null;
 }
 
 export function canDragToDesktop(): boolean {
