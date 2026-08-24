@@ -1,12 +1,34 @@
 # Handoff context (historical)
 
-This note preserves decisions and failure modes discovered while growing the flat-file library on top of the original prototype UI. It is **not** a refactor plan. Newer agents should treat it as institutional memory when changing persistence, affinities, key/BPM display, or playback.
+> **Not a source of truth.** This is institutional memory: what broke and what was decided while
+> growing the flat-file library on top of the original prototype UI. It records intent at a point in
+> time and parts of it are already out of date. **The code on disk and `source.json` are
+> authoritative.** Verify before relying on anything here.
 
-Related design docs (intent / earlier plans):
+Useful as a warning system when changing persistence, affinities, key/BPM display, or playback — it
+tells you which changes have bitten before. It is not a plan and it does not describe the current
+architecture.
 
-- [Electron flat-file audio library design](./superpowers/specs/2026-08-22-electron-flat-file-audio-library-design.md)
-- [Electron flat-file audio library plan](./superpowers/plans/2026-08-22-electron-flat-file-audio-library.md)
-- [Conservative repository cleanup](./superpowers/specs/2026-08-22-conservative-repository-cleanup-design.md)
+For what is actually true and what happens next:
+
+- [Operation plan](./operation-plan.md) — verified baseline, decisions taken, wave order. **Start here.**
+- [Modular refactor plan](./superpowers/plans/2026-08-24-modular-refactor-and-agent-readiness.md) — task-by-task detail.
+- `AGENTS.md` — conventions and the verification loop.
+
+Earlier design and plan documents from 2026-08-22 described a repository state that was never reached.
+They were deleted as stale and misleading. Do not resurrect them; git history has them if you ever
+need the archaeology.
+
+## Known-stale claims in this document
+
+Corrected against the real library on 2026-08-24. Treat the rest with the same suspicion:
+
+- **"Affinities are curated."** They are not, any more. All 791 relationships on disk carry
+  `origin: "algorithmic"`; zero are curated. The auto-generator overwrote the hand-authored demo links
+  described below, including the ones in `09_30_2025_gtrjam.wav`.
+- **"Duplicate live filename is rejected."** Untested by the two live `song1.wav` sources — those
+  folders were placed by hand as manual-testing assets and never went through `beginImport`, so the
+  rule was never exercised.
 
 ---
 
@@ -157,29 +179,27 @@ Stop at clip end (loop only when the loop control is on). Don’t restart from f
 
 ---
 
-## Example curated affinities (local library)
+## Demo affinities (superseded)
 
-For demos, affinities were hand-written into:
-
+Affinities were once hand-written for demos into
 `~/Documents/Fragments Library/sources/e0b6cfcc-5b2a-44d1-bfb1-a3cd89f946de/source.json`
+(`09_30_2025_gtrjam.wav`), linking selected fragments to `fe54edcf-…-whole` (`synth-rec_OBX.wav`) and
+`38cb7d0e-…-11` (Cloud Collapse fragment 11).
 
-(`09_30_2025_gtrjam.wav`) linking selected fragments to:
-
-- `fe54edcf-…-whole` (`synth-rec_OBX.wav`)
-- `38cb7d0e-…-11` (Cloud Collapse fragment 11)
-
-Those edits live in the user’s library folder, not in git. New environments won’t have them unless re-seeded or copied.
+**Those hand edits are gone.** The auto-generator rewrote them as `origin: "algorithmic"`. The two
+targets still match, so the intent survived, but nothing in the library is curated today. Library
+contents live in the user's folder, not git, so no environment has them unless re-seeded.
 
 ---
 
 ## Suggested reading order for a new agent
 
-1. This file (what broke / what was decided).
-2. Flat-file library design + plan under `docs/superpowers/`.
-3. `lib/domain/library-service.mjs` (persistence truth).
-4. `lib/audio/source-playback.ts` + `lib/audio/source-metadata.ts` (clips and key resolution).
-5. `app/fragments-app.tsx` (orchestration; treat carefully).
-6. `app/hero-workflow.tsx` (Affinities playback).
-7. `app/fragmentation-workbench.tsx` (slice editor).
+1. `AGENTS.md`, then `docs/operation-plan.md` — conventions, verified state, and what happens next.
+2. `lib/domain/library-service.mjs` — persistence, and the closest thing to truth in the codebase.
+3. `lib/audio/source-playback.ts` + `lib/audio/source-metadata.ts` — clips and key resolution.
+4. `app/fragments-app.tsx` — orchestration; treat carefully.
+5. `app/hero-workflow.tsx` — Affinities playback.
+6. `app/fragmentation-workbench.tsx` — slice editor.
+7. This file, last, for why things are the way they are — not for what is true.
 
 When changing behavior, prefer disk/`source.json` as truth over in-memory cache or prototype fixtures.

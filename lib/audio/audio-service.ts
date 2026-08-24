@@ -271,10 +271,6 @@ export async function quickAnalyzeCached(cacheKey: string): Promise<ProcessedAud
   return promise;
 }
 
-export async function quickAnalyzeFile(file: File, cacheKey: string): Promise<ProcessedAudio> {
-  return quickAnalyzeCached(cacheKey);
-}
-
 export function bindSourceAudio(sourceId: string, cacheKey: string) {
   aliasCacheKey(`source:${sourceId}`, cacheKey);
 }

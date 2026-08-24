@@ -8,6 +8,37 @@
 
 **Tech Stack:** Electron 43, React 19, vinext/Vite, TypeScript 5.9 (strict), Node 22 `node:test`, Essentia.js, Tailwind v4 + shadcn.
 
+---
+
+## Amendments (2026-08-24)
+
+This plan is being executed under [`docs/operation-plan.md`](../../operation-plan.md), which verified
+the baseline and found nine deltas. **Where the two documents disagree, the operation plan wins.**
+The amendments that change a step's instructions:
+
+| Task / step | Amendment |
+| --- | --- |
+| Global | Commit **once per task**, after the user has tested it. Overrides "do not commit during execution" |
+| 1.2 | The given fix clears `TS2345` but not `react-hooks/set-state-in-effect` on the same line. Expected, deferred to 6.5 |
+| 1.7 | `node --test tests/unit/` fails on Node 22 (`Cannot find module`). Use `node --test "tests/unit/*.test.mjs"` |
+| 1.8 | Lint gate split in two. Task 1 fixes config + dead code and downgrades `react-hooks` / `jsx-a11y` to `warn` in scoped, commented blocks; **new Task 6.5** restores `error` and fixes survivors. Rationale: nearly every one sits in code Tasks 5, 6, and 10 delete |
+| 2.2 | `app/lib`, `app/components/audio`, `app/components/ui` **do not exist**. Skip the `rmdir` commands |
+| 2.4 | Done early in Task 1, because Task 1 removes the `build:pages` script the workflow calls |
+| 2.5 | Already done in `d751756`, which deleted all three 2026-08-22 docs as stale. **Do not restore any of them**, including the design doc this plan says to keep — it is stale too. Repair `docs/handoff-context.md`'s links instead, and mark that file as non-authoritative |
+| 3 | Scope grows: `MeasuredAnalysis` must be additively extensible with provenance/versioning (more Essentia features are coming, extracted in batch) and must model the `sonogram` field already on disk |
+| 4 | The **Map stays** (user decision). `musicalMapPoint` needs a replacement for the deleted `brightness` input — a deterministic, explicitly-named placeholder, not a fake measurement |
+| 5, 6, 9, 10 | `app/features/affinities/` does not exist until Task 8 Step 2. Resolve those paths at execution time |
+| 6.8 | **Struck.** No `AFFINITIES_ENABLED` flag (user decision). Affinity surfaces stay reachable, driven by `source.json` relationships. Instead, model `origin` (`"algorithmic" \| "curated" \| "manual"`) so generated links can be labelled and retired incrementally |
+| **6.5 (new)** | Restore `react-hooks` and `jsx-a11y` rules to `error`; fix what survives Tasks 5, 6, and 10 |
+
+Context the plan could not know, from the real library (33 sources): all 33 already have BPM and key,
+so no seeding pass is needed; **all 791 relationships are `origin: "algorithmic"` and zero are
+curated**, including the ones the handoff documents as hand-written — the auto-generator already
+overwrote them. The two live `song1.wav` sources are hand-placed manual-testing assets that never went
+through `beginImport`, so they are not evidence of a duplicate-rejection bug.
+
+---
+
 ## Global Constraints
 
 - No new runtime dependencies. Validation stays hand-rolled; types are plain `type` aliases derived by hand from the same file as the validator. No Zod, no schema DSL, no generics gymnastics.
@@ -128,7 +159,7 @@ Nothing else in this plan is safe without this. Today `tsc` fails with 4 errors,
 - Produces: `npm run typecheck`, `npm run test:unit`, `npm run test:smoke`, `npm run check`.
 - Produces: `AGENTS.md` as the single entry point for conventions.
 
-- [ ] **Step 1: Add the essentia.js module shims**
+- [x] **Step 1: Add the essentia.js module shims**
 
 `lib/audio/essentia-loader.ts:1` imports three untyped entry points. Declare exactly the six members `lib/audio/essentia-analyze.ts` uses. Create `types/essentia.d.ts`:
 
@@ -180,7 +211,7 @@ declare module "essentia.js/dist/essentia.js-extractor.es.js" {
 }
 ```
 
-- [ ] **Step 2: Fix the `useEffect` cleanup return type**
+- [x] **Step 2: Fix the `useEffect` cleanup return type**
 
 `lib/audio/use-audio-cache.ts:14` returns `subscribeAudioCache(...)`, whose unsubscribe returns `boolean` (it is `Set.prototype.delete`). React requires a `void` destructor. Replace lines 10-20 with:
 
@@ -201,7 +232,7 @@ declare module "essentia.js/dist/essentia.js-extractor.es.js" {
   }, [cacheKey]);
 ```
 
-- [ ] **Step 3: Run typecheck and verify it now passes**
+- [x] **Step 3: Run typecheck and verify it now passes**
 
 Run:
 
@@ -211,7 +242,7 @@ npx tsc --noEmit -p tsconfig.json
 
 Expected: exit 0, no output. Before this task it printed 4 errors (3× `TS7016` in `essentia-loader.ts`, 1× `TS2345` in `use-audio-cache.ts`).
 
-- [ ] **Step 4: Stop linting build output**
+- [x] **Step 4: Stop linting build output**
 
 `eslint.config.mjs:11-17` omits `electron-dist/**`, which is why 19 of the 78 errors are `no-require-imports` in compiled JS. Replace the `globalIgnores` call with:
 
@@ -239,13 +270,13 @@ The two hand-written CommonJS launchers legitimately use `require`. Append this 
   },
 ```
 
-- [ ] **Step 5: Delete the brittle source-string test**
+- [x] **Step 5: Delete the brittle source-string test**
 
 `tests/rendered-html.test.mjs:29-110` is a single test named `"ships the complete staged musical corpus and interface data"` that reads 14 source files and makes ~60 regex assertions against their *text* — for example `assert.match(page, /advancedOpen/)` and `assert.match(data, /rel\("r33"/)`. It fails on any rename and asserts nothing about behaviour. It also blocks Task 4, which deletes `app/prototype-data.ts`.
 
 Delete that entire `test(...)` block (lines 29-110). Keep the first test (`"renders the packaged Fragments shell"`, lines 18-27) and the third (`"keeps the musical map layout and camera math deterministic"`, lines 112-137).
 
-- [ ] **Step 6: Split the test tree by speed**
+- [x] **Step 6: Split the test tree by speed**
 
 Create `tests/unit/` and `tests/smoke/`, then move files:
 
@@ -258,7 +289,7 @@ git mv tests/rendered-html.test.mjs tests/smoke/rendered-html.test.mjs
 
 Fix the now-wrong relative import paths: in `tests/unit/library-service.test.mjs` and `tests/unit/app-protocol.test.mjs`, change `../` prefixes to `../../`. In `tests/smoke/rendered-html.test.mjs`, change `../app/map-layout.mjs` to `../../app/map-layout.mjs` and `../dist/client/index.html` to `../../dist/client/index.html`.
 
-- [ ] **Step 7: Add the script surface**
+- [x] **Step 7: Add the script surface**
 
 Replace the `scripts` block in `package.json:9-27` with:
 
@@ -294,7 +325,7 @@ Three notes on what changed and why:
 - `build:pages` is gone; it was a byte-for-byte duplicate of `build:renderer`. Task 2 repoints the workflow.
 - `check` deliberately excludes `test:smoke`, because the smoke test needs a full `vinext build`. `check` is the loop; `test` is the gate before packaging.
 
-- [ ] **Step 8: Fix remaining lint errors**
+- [x] **Step 8: Fix remaining lint errors**
 
 Run `npm run lint` and fix what is left. After Step 4 the `no-require-imports` and most `no-unused-vars` reports are gone. The `@typescript-eslint/no-explicit-any` reports are all at the domain boundary and are fixed by Tasks 3 and 4 — for each one, add a one-line pointer rather than an unconditional suppression:
 
@@ -304,7 +335,7 @@ Run `npm run lint` and fix what is left. After Step 4 the `no-require-imports` a
 
 Leave `@next/next/no-img-element` on `app/fragments-app.tsx:1094` alone; the brand logo is an inlined data URI and `next/image` is not in use.
 
-- [ ] **Step 9: Write AGENTS.md**
+- [x] **Step 9: Write AGENTS.md**
 
 This is the file that stops agents from guessing. Create `AGENTS.md` with the following content (the outer fence below is four backticks, so the nested three-backtick blocks are part of the file):
 
@@ -360,7 +391,7 @@ coordinate, because someone else is probably in there.
 <!-- Task 8 fills in the ownership table here. -->
 ````
 
-- [ ] **Step 10: Verify the whole loop**
+- [x] **Step 10: Verify the whole loop**
 
 Run:
 
@@ -378,7 +409,7 @@ npm test
 
 Expected: exit 0, with 2 additional smoke tests passing.
 
-- [ ] **Step 11: Review checkpoint**
+- [x] **Step 11: Review checkpoint**
 
 Confirm `npm run check` is the only command a reviewer needs. Commit only if the user explicitly requests it.
 
@@ -399,7 +430,7 @@ Every later task gets cheaper if there is less code to read. All of this is unre
 - Move: `docs/superpowers/plans/2026-08-22-electron-flat-file-audio-library.md` → `docs/archive/`
 - Move: `docs/superpowers/specs/2026-08-22-conservative-repository-cleanup-design.md` → `docs/archive/`
 
-- [ ] **Step 1: Remove the dead Python backend**
+- [x] **Step 1: Remove the dead Python backend**
 
 `python-backend/` is a Flask + SongFormer segmentation experiment. Nothing in `app/`, `lib/`, `electron/`, or `scripts/` references `python-backend`, `backend.py`, `SongFormer`, `/segment`, or its ports. Its two launchers even disagree about the port (`backend.py:65` uses 3001, `start.sh:2` uses 8000). It also has committed bytecode at `python-backend/__pycache__/backend.cpython-310.pyc`.
 
@@ -414,7 +445,7 @@ __pycache__/
 *.pyc
 ```
 
-- [ ] **Step 2: Remove empty directories and dead exports**
+- [x] **Step 2: Remove empty directories and dead exports**
 
 The three empty directories are leftovers from an abandoned `app/components/` layout:
 
@@ -427,7 +458,7 @@ In `app/features/library/library-list.ts`, delete `filterLibraryFragments`, `sor
 
 In `lib/audio/audio-service.ts`, delete the exported `quickAnalyzeFile` (line 274). Nothing imports it; `quickAnalyzeCached` is the live path.
 
-- [ ] **Step 3: Fix the stale Electron tsconfig includes**
+- [x] **Step 3: Fix the stale Electron tsconfig includes**
 
 `electron/tsconfig.json:12-16` includes `"../shared/**/*.ts"`, but `shared/` does not exist — it was planned and never built. It also includes `"../lib/domain/**/*.ts"`, which currently matches nothing because the domain is `.mjs`; Task 3 makes that line correct, so keep it. Replace the `include` array with:
 
@@ -440,7 +471,7 @@ In `lib/audio/audio-service.ts`, delete the exported `quickAnalyzeFile` (line 27
   ]
 ```
 
-- [ ] **Step 4: Repoint the Pages workflow**
+- [x] **Step 4: Repoint the Pages workflow**
 
 `.github/workflows/deploy-gh-pages.yml:40` runs `npm run build:pages`, which Task 1 removed as a duplicate. Change that step's `run:` to:
 
@@ -448,7 +479,12 @@ In `lib/audio/audio-service.ts`, delete the exported `quickAnalyzeFile` (line 27
         run: npm run build:renderer
 ```
 
-- [ ] **Step 5: Archive contradicted docs**
+- [x] **Step 5: Archive contradicted docs**
+
+> **Superseded — done differently.** All three 2026-08-22 docs were **deleted** in `d751756`, not
+> archived, and none are restored: the design doc this step says to keep is stale too. Git history is
+> the archive. What was actually needed was repairing `docs/handoff-context.md`, which linked to all
+> three, and marking it non-authoritative. Ignore the instructions below; kept for context.
 
 Two documents now describe a repository that does not exist and will actively mislead an agent that reads them:
 - `docs/superpowers/plans/2026-08-22-electron-flat-file-audio-library.md:13` says "remove GitHub Pages" and line 78 says to delete the workflow — the workflow is still there and is the only CI job. Its target file map also lists `electron/library/*`, `shared/ipc.ts`, and `resources/seed-library.json`, none of which were created.
@@ -470,7 +506,7 @@ Add a one-line header to each archived file so its status is obvious without rea
 > Do not follow this document.
 ```
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 Run:
 
@@ -488,7 +524,7 @@ rg -n "python-backend|quickAnalyzeFile|visibleLibraryFragments|filterLibraryFrag
 
 Expected: no matches outside this plan document.
 
-- [ ] **Step 7: Review checkpoint**
+- [x] **Step 7: Review checkpoint**
 
 Report the line count removed. Commit only if the user explicitly requests it.
 
