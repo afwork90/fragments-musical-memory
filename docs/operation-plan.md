@@ -533,6 +533,42 @@ service, and entirely unused — and import creates no relationships. **Conseque
 sources folder and re-importing yields zero affinities, irrecoverably.** Do the clear-and-reslice
 only after a generator exists, and back the folder up first.
 
+### 9.7 Why the prototype dataset is staying for now
+
+Task 4b was meant to end with the dataset deleted. It is not, and the reason is a data shape only it
+has.
+
+**The 791 real relationships carry no `transform`** — not on disk, and not in `RelationshipDocument`.
+Only the 33 prototype relationships have pitch shifts, half-time, beat offsets, and pre-rendered
+match assets like `f02_match.wav`. `app/hero-workflow.tsx` references `transform` **42 times**: it is
+the Combine and Export workflow. Deleting the dataset would therefore remove the entire "here is what
+this match sounds like after −3 semitones and +2 BPM" demonstration, with nothing to replace it until
+a real affinity engine can emit transforms. It degrades rather than crashes — `transform` is optional
+so the compiler already forced guards, and there are no unguarded accesses — but the demo loses its
+most persuasive moment.
+
+Decision: keep it, and move on to the extractor. What the two 4b commits already achieved makes it
+safe to leave alone:
+
+- It has exactly one consumer (`fragments-app.tsx`); the other 18 importers took only types.
+- Task 4a removed its last route to `source.json`.
+- It is out of the scoring path (see below).
+- Real library data reaches the renderer through the real bridge in both hosts.
+
+Residual harm, accepted knowingly: prototype fragments still appear in the same list as real ones,
+and the opening state is still fake. Retire it once affinities can produce transforms.
+
+### 9.8 The demo overrides are out of the scoring path
+
+`rankedConnectionsFor` contained two hardcoded results: score 94 when the relationship was `r01`, the
+anchor `f01`, and the weights untouched; and score 76 with a rewritten transform once `f02` had been
+corrected. Both are gone, so every relationship is scored by `scoreRelationship` alone. This is a
+precondition for trusting any real affinity work — a scorer with special cases cannot be evaluated.
+
+Also removed: `Fragment.objects` and the eight per-context stem WAVs (`f01_melody.wav` and friends).
+Nothing read the field. Note that `public/audio/instrumental.vtt`, which looks equally orphaned, is a
+live `<track kind="captions">` in the Combine dialog and stays.
+
 ### 9.5 The soft-delete replay hack: keep
 
 A demo affordance whose cost disappears once 9.3 and 9.4 are real. Removing it early only costs a

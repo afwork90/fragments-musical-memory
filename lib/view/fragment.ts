@@ -5,7 +5,7 @@
 // minor" rather than a key plus a scale. `lib/domain/source-document.ts` holds the
 // disk form; `fragments-app.tsx` converts between them.
 
-import type { MusicalRole, SearchContext, SourceType } from "./vocabulary";
+import type { MusicalRole, SourceType } from "./vocabulary";
 
 export type Fragment = {
   id: string;
@@ -33,8 +33,6 @@ export type Fragment = {
   waveform: number[];
   duplicateGroup?: string;
   audio: string;
-  /** Pre-rendered stems per search context, when the host has them. */
-  objects?: Partial<Record<SearchContext, string>>;
   sourceTypes: SourceType[];
 
   beats: number;

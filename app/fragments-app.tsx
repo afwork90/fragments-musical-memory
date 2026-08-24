@@ -467,12 +467,11 @@ export default function FragmentsApp() {
     const sourceFragment=activeFragmentById(sourceId);
     const seen=new Set<string>();
     return allRelationships.filter((relationship) => relationship.source === sourceId || relationship.target === sourceId)
-      .map((relationship) => {
-        const correctedHero=relationship.id === "r01" && Boolean(fragmentOverrides.f02?.analysisRevision);
-        const effectiveRelationship=correctedHero && relationship.transform ? { ...relationship,transform:{ ...relationship.transform,bpm:2,labels:["−3 st","+2 BPM"] } } : relationship;
-        const score=correctedHero ? 76 : relationship.id === "r01" && sourceId === "f01" && context === "whole" && rangeMode === "reasonable" && Object.keys(DEFAULT_WEIGHTS).every((key) => weights[key as keyof SearchWeights] === DEFAULT_WEIGHTS[key as keyof SearchWeights]) ? 94 : scoreRelationship(effectiveRelationship,weights,context,rangeMode);
-        return { ...effectiveRelationship,score,otherId:otherIdFor(effectiveRelationship,sourceId) };
-      })
+      .map((relationship) => ({
+        ...relationship,
+        score:scoreRelationship(relationship,weights,context,rangeMode),
+        otherId:otherIdFor(relationship,sourceId),
+      }))
       .filter((relationship) => {
         const target=activeFragments.find((fragment) => fragment.id === relationship.otherId);
         if (!target || seen.has(target.id) || archived.has(target.id)) return false;

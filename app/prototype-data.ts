@@ -46,17 +46,9 @@ function composeSourceWaveform(fragments: Pick<Fragment, "start" | "end" | "wave
   return peaks;
 }
 
-const heroObjects = (id: "f01" | "f02") => ({
-  whole: `/audio/${id}.wav`,
-  melody: `/audio/${id}_melody.wav`,
-  rhythm: `/audio/${id}_rhythm.wav`,
-  harmony: `/audio/${id}_harmony.wav`,
-  bass: `/audio/${id}_bass.wav`,
-});
-
 const rawFragments: Omit<Fragment, "waveform" | "audio" | "sourceId" | "start" | "end" | "beats" | "bars" | "confidence" | "userTags" | "analysisRevision" | "sourceTypes">[] = [
-  { id:"f01", name:"Balcony guitar, 1:14am", source:"Balcony ideas — Aug 20.m4a", date:"2026-08-20", dateLabel:"Aug 20, 2026", duration:"0:18", key:"A minor", alternateKeys:["C major"], bpm:92, role:"Harmony", roles:["Harmony","Rhythm"], brightness:46, duplicateGroup:"balcony", objects:heroObjects("f01") },
-  { id:"f02", name:"Kitchen hum / winter", source:"Voice Memo 184.m4a", date:"2018-01-06", dateLabel:"Jan 06, 2018", duration:"0:13", key:"Likely C minor", alternateKeys:["E♭ major","A minor after −3 st"], bpm:88, role:"Melody", roles:["Melody","Voice"], brightness:57, objects:heroObjects("f02") },
+  { id:"f01", name:"Balcony guitar, 1:14am", source:"Balcony ideas — Aug 20.m4a", date:"2026-08-20", dateLabel:"Aug 20, 2026", duration:"0:18", key:"A minor", alternateKeys:["C major"], bpm:92, role:"Harmony", roles:["Harmony","Rhythm"], brightness:46, duplicateGroup:"balcony" },
+  { id:"f02", name:"Kitchen hum / winter", source:"Voice Memo 184.m4a", date:"2018-01-06", dateLabel:"Jan 06, 2018", duration:"0:13", key:"Likely C minor", alternateKeys:["E♭ major","A minor after −3 st"], bpm:88, role:"Melody", roles:["Melody","Voice"], brightness:57 },
   { id:"f03", name:"Loose pocket idea", source:"Practice room spill.wav", date:"2021-10-23", dateLabel:"Oct 23, 2021", duration:"0:09", key:"No stable key", alternateKeys:[], bpm:94, role:"Rhythm", roles:["Rhythm"], brightness:64 },
   { id:"f04", name:"Glass piano changes", source:"Piano sketches 03.wav", date:"2024-03-11", dateLabel:"Mar 11, 2024", duration:"0:22", key:"A minor", alternateKeys:["C major"], bpm:90, role:"Harmony", roles:["Harmony","Melody"], brightness:72 },
   { id:"f05", name:"Half-time floor tom", source:"Drum room leftovers.wav", date:"2019-09-02", dateLabel:"Sep 02, 2019", duration:"0:11", key:"—", alternateKeys:[], bpm:46, role:"Rhythm", roles:["Rhythm"], brightness:38 },
