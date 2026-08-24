@@ -52,13 +52,14 @@ function sourceAnalysis(source: SourceFile, cached?: ProcessedAudio) {
   return resolvedSourceAnalysis(source, cached);
 }
 
-function formatTempoKey(source: SourceFile, cached?: ProcessedAudio) {
-  const { bpm, key, scale } = sourceAnalysis(source, cached);
-  const keyLabel = key && scale ? `${key} ${scale}` : null;
-  if (!bpm && !keyLabel) return "—";
-  if (bpm && keyLabel) return `${bpm} BPM · ${keyLabel}`;
-  if (bpm) return `${bpm} BPM`;
-  return keyLabel ?? "—";
+function formatTempo(source: SourceFile, cached?: ProcessedAudio) {
+  const { bpm } = sourceAnalysis(source, cached);
+  return bpm ? `${bpm} BPM` : "—";
+}
+
+function formatKey(source: SourceFile, cached?: ProcessedAudio) {
+  const { key, scale } = sourceAnalysis(source, cached);
+  return key && scale ? `${key} ${scale}` : "—";
 }
 
 function SourceSignalCell({
@@ -86,10 +87,17 @@ function SourceSignalCell({
   );
 }
 
-function SourceTempoKeyCell({ source }: { source: SourceFile }) {
+function SourceTempoCell({ source }: { source: SourceFile }) {
+  const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
+  const label = formatTempo(source, cached);
+
+  return <span className="block truncate" title={label}>{label}</span>;
+}
+
+function SourceKeyCell({ source }: { source: SourceFile }) {
   const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
   const { keyStrength } = sourceAnalysis(source, cached);
-  const label = formatTempoKey(source, cached);
+  const label = formatKey(source, cached);
 
   return (
     <span className="block truncate" title={label}>
@@ -102,7 +110,8 @@ function SourceTempoKeyCell({ source }: { source: SourceFile }) {
 function columnHeadClass(columnId: SourceSortColumn) {
   return cn(
     columnId === "signal" && "min-w-[240px] w-[30%]",
-    columnId === "tempoKey" && "min-w-[120px]",
+    columnId === "tempo" && "min-w-[80px]",
+    columnId === "key" && "min-w-[90px]",
   );
 }
 
@@ -169,10 +178,16 @@ function SourceTableCell({
           {source.format.split(" · ")[0]}
         </TableCell>
       );
-    case "tempoKey":
+    case "tempo":
       return (
-        <TableCell className={sourceTableCellClass("max-w-[160px] truncate text-foreground/90")}>
-          <SourceTempoKeyCell source={source} />
+        <TableCell className={sourceTableCellClass("max-w-[100px] truncate text-foreground/90")}>
+          <SourceTempoCell source={source} />
+        </TableCell>
+      );
+    case "key":
+      return (
+        <TableCell className={sourceTableCellClass("max-w-[120px] truncate text-foreground/90")}>
+          <SourceKeyCell source={source} />
         </TableCell>
       );
     case "fragments":

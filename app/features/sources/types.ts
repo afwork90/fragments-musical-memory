@@ -8,7 +8,8 @@ export type SourceSortColumn =
   | "type"
   | "profile"
   | "format"
-  | "tempoKey"
+  | "tempo"
+  | "key"
   | "fragments"
   | "actions";
 

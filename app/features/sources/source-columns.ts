@@ -8,12 +8,13 @@ export const SOURCE_COLUMNS: SourceColumnDef[] = [
   // { id: "type", label: "Type" },
   // { id: "profile", label: "Profile" },
   // { id: "format", label: "Format" },
-  { id: "tempoKey", label: "Tempo · Key" },
+  { id: "tempo", label: "Tempo" },
+  { id: "key", label: "Key" },
   { id: "fragments", label: "Fragments" },
   { id: "actions", label: "" },
 ];
 
-const DESCENDING_DEFAULT_COLUMNS: SourceSortColumn[] = ["date", "signal", "duration", "fragments"];
+const DESCENDING_DEFAULT_COLUMNS: SourceSortColumn[] = ["date", "signal", "duration", "fragments", "tempo"];
 
 export function toggleSourceSort(column: SourceSortColumn, current: SourceSort): SourceSort {
   return {

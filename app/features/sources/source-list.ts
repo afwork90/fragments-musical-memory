@@ -10,8 +10,27 @@ export function filterSources(sources: SourceFile[], query: string) {
   );
 }
 
+function keyLabelOf(source: SourceFile) {
+  return source.key && source.scale ? `${source.key} ${source.scale}` : null;
+}
+
 export function sortSources(sources: SourceFile[], sort: SourceSort) {
   return [...sources].sort((a, b) => {
+    // Unmeasured values sort last in both directions. Treating them as 0 would
+    // make an unanalysed source read as the slowest one in the library.
+    if (sort.column === "tempo" || sort.column === "key") {
+      const left = sort.column === "tempo" ? a.bpm ?? null : keyLabelOf(a);
+      const right = sort.column === "tempo" ? b.bpm ?? null : keyLabelOf(b);
+      if (left === null || right === null) {
+        if (left === right) return 0;
+        return left === null ? 1 : -1;
+      }
+      const ranked = typeof left === "number" && typeof right === "number"
+        ? left - right
+        : String(left).localeCompare(String(right));
+      return sort.direction === "asc" ? ranked : -ranked;
+    }
+
     let comparison = 0;
 
     if (sort.column === "name") comparison = a.name.localeCompare(b.name);
@@ -25,7 +44,6 @@ export function sortSources(sources: SourceFile[], sort: SourceSort) {
     if (sort.column === "type") comparison = a.sourceTypes.join(" ").localeCompare(b.sourceTypes.join(" "));
     if (sort.column === "profile") comparison = a.analysisProfile.name.localeCompare(b.analysisProfile.name);
     if (sort.column === "format") comparison = a.format.localeCompare(b.format);
-    if (sort.column === "tempoKey") comparison = (a.bpm ?? 0) - (b.bpm ?? 0);
     if (sort.column === "fragments") comparison = a.fragmentIds.length - b.fragmentIds.length;
 
     return sort.direction === "asc" ? comparison : -comparison;

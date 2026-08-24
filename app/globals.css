@@ -125,7 +125,6 @@ nav b { min-width:17px; height:17px; display:inline-grid; place-items:center; ma
   margin:0;
 }
 .library-toolbar .search input { font-size:12px; }
-.library-toolbar .search kbd { font-size:9px; }
 .library-toolbar-actions {
   display:inline-flex;
   align-items:center;
@@ -379,7 +378,9 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .search:focus-within { border-color:#a99cff66; box-shadow:0 0 0 3px #a99cff0c; }
 .search input { width:100%; min-width:0; border:0; outline:0; background:transparent; padding:6px 0; color:var(--ink); font-size:9px; }
 .search input::placeholder { color:#65636d; }
-.search kbd { margin-left:auto; white-space:nowrap; border:1px solid #34323a; padding:1px 4px; border-radius:3px; font:7px var(--font-geist-mono); }
+.search-clear { margin-left:auto; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; width:16px; height:16px; padding:0; border:0; border-radius:3px; background:transparent; color:#73717a; cursor:pointer; transition:.15s; }
+.search-clear:hover { color:var(--ink); background:#ffffff12; }
+.search-clear:focus-visible { outline:2px solid #a99cff66; outline-offset:1px; }
 .toolbar { display:flex; align-items:center; justify-content:flex-start; gap:8px; margin-bottom:8px; flex-shrink:0; }
 .filter-row { display:flex; gap:5px; overflow-x:auto; scrollbar-width:none; }
 .filter-row button { padding:7px 10px; white-space:nowrap; font-size:11px; }
