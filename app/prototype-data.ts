@@ -1,3 +1,22 @@
+// This file is two things at once, and only one of them is real.
+//
+// The **types** below (`Fragment`, `SourceFile`, `Relationship`, ...) are what
+// the whole UI is written against — 18 files import them. Task 4b moves them to
+// `lib/view/`, derived from the domain documents.
+//
+// The **data** below (`FRAGMENTS`, `SOURCE_FILES`, `RELATIONSHIPS`, and the
+// profiles) is the hackathon's fake dataset. It is kept deliberately, for now, as
+// an explicit placeholder: it supplies the app's opening state and the staged
+// "balcony" source that demonstrates the import walkthrough, and several
+// non-null assertions in `fragments-app.tsx` still assume it exists. Nothing here
+// describes anything on disk.
+//
+// Rules while it survives:
+//   - Never write any of it to `source.json`. Task 4a removed the last path that
+//     did (invented BPM/key derived from a hash of the source id).
+//   - Never use it as a fallback for a real source's missing analysis. Missing
+//     analysis is `null` and renders "—".
+
 import prototypeWaveforms from "./prototype-waveforms.json";
 import { parseMusicalKeyLabel } from "@/lib/audio/source-metadata";
 

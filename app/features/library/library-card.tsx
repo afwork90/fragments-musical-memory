@@ -497,7 +497,7 @@ function FragmentLibraryCard({
             <MetaItem label="Recorded" value={fragment.dateLabel} />
             <MetaItem label="Length" value={formatSeconds(fragment.end - fragment.start)} />
             <MetaItem label="Key" value={keyLabel ?? "—"} />
-            <MetaItem label="BPM" value={String(fragment.bpm)} />
+            <MetaItem label="BPM" value={fragment.bpm > 0 ? String(fragment.bpm) : "—"} />
           </>
         )}
       />

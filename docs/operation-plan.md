@@ -388,3 +388,42 @@ Verified: `npm run check` exit 0 (42 unit tests); `npm test` exit 0 (42 unit + 2
 33/54/791 matching §1's baseline, a relationship round-trip is byte-identical to
 `normalize(before)`, `createdAt` is stable across repeated writes, and all four write paths land.
 The real library was not modified.
+
+---
+
+## 8. Task 4 is split, and the plan understates it
+
+The plan treats Task 4 as one step that deletes `app/prototype-data.ts`. An audit says otherwise, so
+it runs as **4a (behaviour)** then **4b (mechanical)** — two commits, each independently testable.
+
+Why: that file is *both* the fake dataset and the app's type module. Eighteen files import only its
+**types**; the fake **data** is consumed almost entirely by `fragments-app.tsx`. And the data is
+load-bearing for the opening state — `OPENING_SOURCE_ID` (`SOURCE_FILES.find(...)!`),
+`fragmentById` (`FRAGMENTS.find(...)!`), and the initial `sources` array all assume it exists, so
+several non-null assertions become crashes on an empty library. "Delete the dataset" therefore
+includes "build a real empty state", which the plan does not mention.
+
+**Decision (yours):** the staged "balcony" source and the fake opening state **stay for now** as an
+explicit placeholder, like the Map. So 4a removes fabrication only, and leaves the placeholder
+standing with a header in `prototype-data.ts` stating the two rules that keep it harmless: never
+write it to `source.json`, never use it as a fallback for a real source's missing analysis.
+
+### 8.1 Task 4a: nothing reaches the UI or the disk unmeasured
+
+- **Deleted the fabricator.** `inventAnalysis` derived a BPM, key, scale, and key strength from a
+  hash of the source id. `analysisNeedsInvention` decided when to apply it. Both gone.
+- **Deleted a write path that persisted invented values.** The library-load effect collected sources
+  whose analysis looked empty, invented values, and called `updateSourceAnalysis` — writing fiction
+  into `source.json` under a "Could not persist invented analysis" warning. Dormant on the current
+  library (all 33 sources already have BPM and key) but a live corruption path on any source that
+  lacked them, and a direct violation of the no-invented-data rule.
+- **Stopped two hardcoded claims** now that Task 3 gave them a persisted home: every real source
+  reported the prototype profile's `sensitivity` (68) and claimed `sourceTypes: ["Voice memo","Jam"]`.
+  Both now read from the document. **Visible consequence:** existing sources have no stored types, so
+  they show none and the source-type filter matches nothing until there is UI to set them — honest,
+  and the reason to wire the `updateSourceSettings` call Task 3 added.
+- **Stopped rendering `0` as a measured tempo** in the fragment card and connections table.
+
+Deliberately **not** in 4a: `Fragment.bpm` stays `number` with `?? 0` as its unknown sentinel.
+Making it `number | null` touches eight files and the arithmetic in the affinity scorer, and the type
+lives in `prototype-data.ts` — so it belongs with 4b's view models.

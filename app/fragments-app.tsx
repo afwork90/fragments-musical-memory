@@ -45,8 +45,6 @@ import {
 import { armBrowserAudioUnlock, playMediaElement } from "@/lib/audio/browser-audio";
 import { resolveAudioUrl } from "@/lib/audio/resolve-audio-url";
 import {
-  analysisNeedsInvention,
-  inventAnalysis,
   parseMusicalKeyLabel,
   resolvedMusicalKey,
   resolvedSourceAnalysis,
@@ -54,7 +52,7 @@ import {
 import { SourceAnalysisValues } from "./features/sources/source-detail-panel";
 import { LibraryCard } from "./features/library/library-card";
 import { MAP_WORLD, musicalMapPoint } from "./map-layout.mjs";
-import type { FragmentDocument, MeasuredAnalysis, SourceDocument } from "@/lib/domain/source-document";
+import type { FragmentDocument, SourceDocument } from "@/lib/domain/source-document";
 import type { MusicalRole as DomainMusicalRole } from "@/lib/domain/source-document";
 import type { SourceRecord } from "@/lib/ipc/contract";
 
@@ -170,10 +168,7 @@ function sourceFileFromDocument(document: SourceRecord, audioUrl?: string): Sour
     throw new Error(`source ${document.id} is not finalized: duration is null`);
   }
   const duration = document.duration;
-  let analysis = document.analysis;
-  if (analysisNeedsInvention(analysis)) {
-    analysis = inventAnalysis(document.id);
-  }
+  const analysis = document.analysis;
   return {
     id: document.id,
     name: document.originalName,
@@ -183,17 +178,19 @@ function sourceFileFromDocument(document: SourceRecord, audioUrl?: string): Sour
     device: "Managed library",
     fragmentIds: document.fragments.map((fragment) => fragment.id),
     waveform: document.waveform?.peaks ?? [],
-    sensitivity: MESSY_PHONE_PROFILE.sensitivity,
+    // Persisted, not assumed: every real source used to report the prototype
+    // profile's sensitivity and claim to be a Voice memo / Jam.
+    sensitivity: document.sensitivity,
     start: 0,
     end: duration,
-    sourceTypes: ["Voice memo","Jam"],
+    sourceTypes: document.sourceTypes,
     analysisProfile: MESSY_PHONE_PROFILE,
     imported: true,
     audioUrl: audioUrl ?? document.audioUrl,
     audioCacheKey: document.id,
-    bpm: analysis?.bpm ?? null,
-    key: analysis?.key ?? null,
-    scale: analysis?.scale ?? null,
+    bpm: analysis.bpm,
+    key: analysis.key,
+    scale: analysis.scale,
     uploadedAt: document.importedAt,
   };
 }
@@ -297,10 +294,7 @@ export default function FragmentsApp() {
   useEffect(() => {
     const bridge = window.fragments;
     if (!bridge) return;
-    void bridge.listSources().then(async (documents) => {
-      const backfill = documents
-        .filter((document) => analysisNeedsInvention(document.analysis))
-        .map((document) => ({ id: document.id, analysis: inventAnalysis(document.id) as MeasuredAnalysis }));
+    void bridge.listSources().then((documents) => {
       const persisted = documents.map((document) => sourceFileFromDocument(document));
       setSources((current) => [...current.filter((source) => !persisted.some((item) => item.id === source.id)),...persisted]);
       setSourceRanges((current) => ({
@@ -318,13 +312,6 @@ export default function FragmentsApp() {
       ]);
       const persistedRelationships = documents.flatMap((document) => document.relationships ?? []);
       setImportedRelationships(persistedRelationships);
-      for (const item of backfill) {
-        try {
-          await bridge.updateSourceAnalysis(item.id, item.analysis);
-        } catch (error) {
-          console.warn("Could not persist invented analysis:", error);
-        }
-      }
     }).catch((error:unknown) => console.error("Could not load managed library:", error));
   }, []);
 

@@ -78,27 +78,7 @@ export function uniqueKeyLabels(labels: string[]) {
   return [...byNormalized.values()].sort((a, b) => a.localeCompare(b));
 }
 
-const KEYS = ["C", "D", "E", "F", "G", "A", "B"];
-
-function hashSeed(input: string) {
-  let seed = 0;
-  for (const char of input) seed = (seed * 31 + char.charCodeAt(0)) >>> 0;
-  return seed;
-}
-
-export function inventAnalysis(sourceId: string) {
-  const seed = hashSeed(sourceId);
-  return {
-    bpm: 72 + (seed % 56),
-    key: KEYS[seed % KEYS.length],
-    scale: seed % 2 === 0 ? "major" : "minor",
-    keyStrength: 55 + (seed % 35),
-  };
-}
-
-export function analysisNeedsInvention(
-  analysis: { bpm?: number | null; key?: string | null } | null | undefined,
-) {
-  if (!analysis) return true;
-  return analysis.bpm == null && analysis.key == null;
-}
+// `inventAnalysis` and `analysisNeedsInvention` lived here. They derived a BPM,
+// key, scale, and key strength from a hash of the source id, and the library load
+// effect wrote those values back to disk. Deleted in Task 4a: analysis that was
+// not measured is `null` and renders as "—".
