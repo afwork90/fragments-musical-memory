@@ -569,6 +569,59 @@ Also removed: `Fragment.objects` and the eight per-context stem WAVs (`f01_melod
 Nothing read the field. Note that `public/audio/instrumental.vtt`, which looks equally orphaned, is a
 live `<track kind="captions">` in the Combine dialog and stays.
 
+### 9.9 The library is 85% seeded prototype audio, and its analysis is fabricated
+
+Established by spiking essentia's core API in Node against the real library, before building
+anything on it. This supersedes §9.6's advice.
+
+**28 of the 33 sources are byte-identical to `public/audio/f01.wav`–`f28.wav`.** They are the
+prototype WAVs, put there by `scripts/seed-library.mjs`: 6 seconds each, 16-bit mono 22.05kHz. Only
+**four** sources are real recordings — `song1.wav` (twice), `09_30_2025_gtrjam.wav`,
+`synth-rec_OBX.wav` — plus one MP3.
+
+**28 of the 33 stored analyses are exactly reproducible by hashing the source id** with the
+`inventAnalysis` that Task 4a deleted (`bpm: 72 + (seed % 56)`, key from a 7-element table, and so
+on). Not approximately — bit-for-bit, all four fields. They were never measured. The five that are
+not reproducible are precisely the real recordings, which carry genuine measurements.
+
+**Therefore the 791 relationships are worthless, and §9.6's warning was wrong.** They were computed
+from BPM and key values that are, for 85% of the library, a hash of a UUID. The −0.968 correlation
+that proved they were rule-based still holds — the rules faithfully processed fiction. Clearing the
+sources folder destroys nothing of value, so **clear and re-import freely**; only the four real
+recordings and the MP3 are worth keeping.
+
+**The extractor is accurate — the disagreements were entirely the fabricated data.** On the four real
+recordings, `RhythmExtractor2013` matched the stored (genuinely measured) BPM within 1.4, 1.4, 0.8,
+and 5.3, and the key matched exactly in three of four. Across the fabricated 28 it agreed with
+almost nothing, which is the correct outcome.
+
+### 9.10 What the spike established about essentia's core API
+
+Facts that cost time to discover and are invisible in the type declarations:
+
+- **The `.es.js` bundles cannot be loaded in Node** — they reference `__dirname` and `require`. Use
+  `essentia-wasm.umd.js`, which *is* the Emscripten module: it carries `arrayToVector`,
+  `vectorToArray`, and the `Vector*` classes, and the 211 algorithms hang off its `EssentiaJS` class.
+  The core `Essentia` class is only a wrapper over those two things, so Node does not need it.
+- **Every algorithm parameter must be passed.** The bindings have no defaults even though
+  `core_api.d.ts` marks parameters optional: `Windowing(frame, true, 2048, "hann")` throws "called
+  with 4 arguments, expected 6".
+- **`vectorToArray` throws "Empty vector input" on a zero-length vector.** An algorithm that
+  legitimately found nothing therefore looks exactly like a crash unless guarded. This is what made
+  "SuperFlux found 0 onsets" present as a failure.
+- **There is no `FrameGenerator` on the Node module.** Frame by hand.
+- **`Resample` aborts the WASM heap on a long 48kHz signal** (95s is 18MB against a 16MB starting
+  heap). Resample in JS before entering WASM. The heap does grow, so 120s at 22.05kHz is fine for
+  whole-signal algorithms.
+- **Features must be computed at one sample rate.** The mel filterbank and HPCP bins both depend on
+  it, so identical audio at 48kHz and 22.05kHz yields different numbers. The library contains both
+  (28 files at 22.05kHz, 4 at 48kHz), so normalizing is mandatory, not optional.
+- **`PercivalBpmEstimator`, which the current code uses, octave-errors badly.** On the gtrjam
+  recording it returned 198.8 against a true 100; `RhythmExtractor2013` returned 100.8. It reported
+  215.3 for many unrelated files, which looks like a default rather than a measurement.
+- Cost: about 7s for a 95s file (frame features dominate at ~3s). The whole library is 6.4 minutes of
+  audio, so a full batch pass is well under a minute.
+
 ### 9.5 The soft-delete replay hack: keep
 
 A demo affordance whose cost disappears once 9.3 and 9.4 are real. Removing it early only costs a

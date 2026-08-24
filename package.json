@@ -22,7 +22,6 @@
     "test": "npm run test:unit && npm run test:smoke",
     "check": "npm run typecheck && npm run lint && npm run test:unit",
     "compute-waveforms": "node scripts/compute-prototype-waveforms.mjs",
-    "seed-library": "npm run build:electron && node scripts/seed-library.mjs",
     "pack": "npm run build && npm run prepack-electron && electron-builder --dir",
     "dist": "npm run build && npm run prepack-electron && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",
@@ -38,13 +37,6 @@
       "electron-dist/**",
       "dist/client/**",
       "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "public/audio",
-        "to": "seed-audio",
-        "filter": ["f??.wav"]
-      }
     ],
     "mac": {
       "category": "public.app-category.music",
