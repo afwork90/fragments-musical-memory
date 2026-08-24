@@ -4,7 +4,39 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createLibraryService } from "../../lib/domain/library-service.mjs";
+import { createLibraryService } from "../../electron-dist/lib/domain/library-service.js";
+
+test("updateFragments is idempotent for fragments stored without createdAt", async () => {
+  // 48 of the 54 fragments in the real library predate the createdAt field, and
+  // the renderer does not send one. Falling back to `now` re-stamped them on
+  // every save, so editing an old source jumped its fragments to the top of a
+  // "latest uploaded" sort. The source's own importedAt is the stable answer.
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const service = createLibraryService(libraryRoot);
+    const filePath = await makeFixtureFile(fixturesDir, "take.wav", "audio-bytes");
+    const pending = await service.beginImport(filePath);
+    await service.finalizeImport(pending.id, validFinalizeMetadata());
+
+    const stripped = [{
+      id: `${pending.id}-a`,
+      name: "a",
+      start: 0,
+      end: 4,
+      roles: [],
+      primaryRole: "Unclassified",
+      userTags: [],
+      analysis: { bpm: null, key: null, scale: null, keyStrength: null },
+      analysisRevision: 1,
+    }];
+
+    const first = await service.updateFragments(pending.id, stripped);
+    assert.equal(first.fragments[0].createdAt, pending.importedAt);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = await service.updateFragments(pending.id, stripped);
+    assert.equal(second.fragments[0].createdAt, first.fragments[0].createdAt);
+  });
+});
 
 function validFinalizeMetadata(overrides = {}) {
   return {

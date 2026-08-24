@@ -23,6 +23,7 @@ import {
   updateCachedAnalysis,
 } from "@/lib/audio/audio-service";
 import type { ProcessedAudio } from "@/lib/audio/types";
+import type { BeginImportResult, SourceRecord } from "@/lib/ipc/contract";
 import { formatSeconds } from "@/lib/format";
 import { SourceType } from "@/app/prototype-data";
 
@@ -31,7 +32,7 @@ export type ImportedSource = ProcessedAudio & {
   persistedId?: string;
   persistedAudioUrl?: string;
   restored?: boolean;
-  persistedDocument?: Record<string, unknown>;
+  persistedDocument?: SourceRecord;
 };
 
 type ImportDialogProps = {
@@ -116,7 +117,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const previewCacheKeyRef = useRef<string | null>(null);
-  const pendingImportRef = useRef<{ id: string; restored?: boolean; duration?: number | null; audioUrl?: string } | null>(null);
+  const pendingImportRef = useRef<BeginImportResult | null>(null);
   const analysisRequestRef = useRef(0);
 
   const releasePreview = () => {
@@ -127,7 +128,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   };
 
   const reset = () => {
-    const bridge = (window as any).fragments;
+    const bridge = window.fragments;
     if (pendingImportRef.current && bridge) {
       const pending = pendingImportRef.current;
       if (!pending.restored && !pending.duration) {
@@ -193,7 +194,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   };
 
   const chooseManagedFile = async () => {
-    const bridge = (window as any).fragments;
+    const bridge = window.fragments;
     if (!bridge) {
       inputRef.current?.click();
       return;
@@ -207,8 +208,8 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
       pendingImportRef.current = pending;
       const next = await processAudioUrl(pending.audioUrl, pending.originalName, { analyze: false });
       applyDecoded(next);
-      const persistedAnalysis = pending.analysis as { bpm?: number | null; key?: string | null; scale?: string | null; keyStrength?: number | null } | undefined;
-      if (pending.restored && persistedAnalysis && (persistedAnalysis.bpm != null || persistedAnalysis.key != null)) {
+      const persistedAnalysis = pending.analysis;
+      if (pending.restored && (persistedAnalysis.bpm != null || persistedAnalysis.key != null)) {
         const enriched = updateCachedAnalysis(next.cacheKey, {
           ...next.analysis,
           bpm: persistedAnalysis.bpm ?? null,
@@ -272,13 +273,13 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
     let persistedId: string | undefined;
     let persistedAudioUrl: string | undefined;
     let restored = false;
-    let persistedDocument: Record<string, unknown> | undefined;
-    const bridge = (window as any).fragments;
+    let persistedDocument: SourceRecord | undefined;
+    const bridge = window.fragments;
     const pending = pendingImportRef.current;
     if (bridge && pending) {
       if (pending.restored || pending.duration) {
         const listed = await bridge.listSources();
-        const existing = listed.find((item: { id: string }) => item.id === pending.id);
+        const existing = listed.find((item) => item.id === pending.id);
         persistedId = (existing ?? pending).id;
         persistedAudioUrl = (existing ?? pending).audioUrl ?? pending.audioUrl;
         restored = Boolean(pending.restored);

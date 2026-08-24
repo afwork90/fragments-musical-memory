@@ -62,32 +62,6 @@ const eslintConfig = defineConfig([
     },
   },
   {
-    // TEMPORARY, remove in Task 3 of docs/operation-plan.md.
-    //
-    // Every `any` here is the untyped IPC/document boundary: `window.fragments`
-    // calls and raw `source.json` objects. Task 3 replaces them with the typed
-    // bridge (`lib/ipc/contract.ts`) and Task 4 with view models, at which point
-    // these casts disappear rather than being annotated. Suppressed in one place
-    // so the count is visible instead of scattered across 22 inline comments.
-    files: [
-      "app/fragments-app.tsx",
-      "app/features/sources/import-dialog.tsx",
-      "lib/audio/desktop-drag.ts",
-    ],
-    rules: {
-      "@typescript-eslint/no-explicit-any": "off",
-    },
-  },
-  {
-    // TEMPORARY, remove in Task 3 of docs/operation-plan.md, which ports this
-    // file's logic into the typed lib/domain/library-service.ts and drops the
-    // file-level `@ts-nocheck`.
-    files: ["electron/persistence.ts"],
-    rules: {
-      "@typescript-eslint/ban-ts-comment": "off",
-    },
-  },
-  {
     // TEMPORARY, remove in Task 10 of docs/operation-plan.md.
     //
     // Real accessibility debt: the waveform rows are click/drag surfaces with no

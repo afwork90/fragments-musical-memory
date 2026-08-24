@@ -557,7 +557,26 @@ Right now the authoritative persistence layer is untyped JavaScript (`lib/domain
 
 **Hard constraint:** `lib/domain/source-document.ts` must import nothing. It is the only domain file the renderer is allowed to import, and it has to work in a browser bundle. `paths.ts`, `atomic-write.ts`, and `library-service.ts` use `node:*` and are main-process only.
 
-- [ ] **Step 1: Write the failing test for schema normalization**
+> **Done. Where it diverged, and what it found.** Delivered as specified, plus: `lib/domain/invent-analysis.mjs`
+> deleted (repointing the seed script orphaned it) and the seed script now persists honest nulls instead of
+> fabricated analysis, since a CLI cannot run Essentia. `updateSourceSettings` and a `FragmentInput` type were
+> added — the latter because `updateFragments` stamps `createdAt` authoritatively, so requiring the renderer to
+> send one was a lie. `RelationshipDocument` is fully required (all 791 on disk have every field and all seven
+> metric axes; verified, not assumed), and `MeasuredAnalysis` deliberately has **no** index signature: unmodeled
+> extractor output survives a read/write cycle, but reading it requires declaring it, or `analysis.bmp` would
+> type-check everywhere.
+>
+> Typing the boundary found three live bugs, all recorded in `docs/operation-plan.md` §7: every persisted
+> fragment carried `primaryRole: "Unclassified"`, a value the UI's six-value `MusicalRole` cannot represent and
+> a cast was erasing; `updateFragments` was non-idempotent and defeated its own `createdAt` guard because 48 of
+> 54 fragments have no stored `createdAt`; and `SourceFile` cannot represent a pending import, which an
+> `as SourceFile[]` cast was hiding. The first two are fixed, the second with a regression test.
+>
+> Outcome beyond the plan's target: **zero `any` and zero `@ts-nocheck`** across `app/`, `lib/`, `electron/`,
+> `types/`, so the temporary `no-explicit-any` and `ban-ts-comment` suppressions from Task 1 are removed rather
+> than narrowed. Step 14's "34 unit tests" is now 42.
+
+- [x] **Step 1: Write the failing test for schema normalization**
 
 This is the one genuinely new behaviour in this task: `SCHEMA_VERSION` is written at `library-service.mjs:253` but never read back, and the two fields the UI collects but silently drops (`sourceTypes` from the import dialog, `sensitivity` from the workbench slider) get a defined default.
 
@@ -622,7 +641,7 @@ test("defaults a missing fragments array to empty", () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run:
 
@@ -632,7 +651,7 @@ npm run test:unit
 
 Expected: FAIL with `Cannot find module .../electron-dist/lib/domain/source-document.js`, because the module does not exist yet.
 
-- [ ] **Step 3: Create the type and validation module**
+- [x] **Step 3: Create the type and validation module**
 
 Create `lib/domain/source-document.ts`. The types are the single definition of what is on disk; the validators are moved verbatim from `library-service.mjs:88-152` with types added. Deliberately plain — no generics, no inference tricks.
 
@@ -833,7 +852,7 @@ export function normalizeSourceDocument(raw: unknown): SourceDocument {
 }
 ```
 
-- [ ] **Step 4: Extract the path guards and the atomic write**
+- [x] **Step 4: Extract the path guards and the atomic write**
 
 Create `lib/domain/paths.ts` by moving `library-service.mjs:22-53` unchanged, adding types:
 
@@ -910,7 +929,7 @@ export async function atomicWriteJson(filePath: string, value: unknown): Promise
 }
 ```
 
-- [ ] **Step 5: Port the library service**
+- [x] **Step 5: Port the library service**
 
 Create `lib/domain/library-service.ts` from `library-service.mjs:154-403`. The logic is unchanged except for four things:
 
@@ -968,7 +987,7 @@ Then delete the old file:
 git rm lib/domain/library-service.mjs
 ```
 
-- [ ] **Step 6: Repoint the existing service tests**
+- [x] **Step 6: Repoint the existing service tests**
 
 `tests/unit/library-service.test.mjs` currently imports the source `.mjs` directly. Change its import to the compiled output:
 
@@ -978,7 +997,7 @@ import { createLibraryService } from "../../electron-dist/lib/domain/library-ser
 
 This works because `electron/postbuild.cjs:9` writes `electron-dist/package.json` with `{"type":"commonjs"}`, and `test:unit` runs `build:electron` first. All 21 existing assertions must still pass unchanged — that is the proof the port was faithful.
 
-- [ ] **Step 7: Run the tests and verify they pass**
+- [x] **Step 7: Run the tests and verify they pass**
 
 Run:
 
@@ -988,7 +1007,7 @@ npm run test:unit
 
 Expected: PASS. 21 existing `library-service` tests, 8 `app-protocol` tests, and 5 new `source-document` tests.
 
-- [ ] **Step 8: Declare the IPC contract**
+- [x] **Step 8: Declare the IPC contract**
 
 The 10 channel names are currently string literals duplicated between `electron/preload.ts:4-17` and `electron/persistence.ts:67-103`, with payloads typed `unknown` on one side and `any` on the other. Create `lib/ipc/contract.ts`:
 
@@ -1060,7 +1079,7 @@ declare global {
 export {};
 ```
 
-- [ ] **Step 9: Rewrite the preload against the contract**
+- [x] **Step 9: Rewrite the preload against the contract**
 
 Replace `electron/preload.ts` entirely. Every method is now typed, and the channel names come from the contract instead of being retyped:
 
@@ -1091,7 +1110,7 @@ const bridge: FragmentsBridge = {
 contextBridge.exposeInMainWorld("fragments", bridge);
 ```
 
-- [ ] **Step 10: Un-`@ts-nocheck` the main process**
+- [x] **Step 10: Un-`@ts-nocheck` the main process**
 
 In `electron/persistence.ts`, delete line 1 (`// @ts-nocheck`) and delete lines 9 and 38-41 — the `nativeImport = new Function(...)` hack and the packaged/unpackaged path juggling. That workaround existed only because a CommonJS-compiled file cannot `import()` a real `.mjs`. Now that the service compiles into `electron-dist` alongside it, use a plain static import at the top of the file:
 
@@ -1138,7 +1157,7 @@ Give `logged` an explicit signature so a wrong handler arity is a compile error:
 
 Also give the two remaining loose spots real types: `dragIcon()` returns `string`, and the `fragments:start-drag` listener's `target` parameter is `DragTarget | string`.
 
-- [ ] **Step 11: Drop the now-unnecessary packaging resource**
+- [x] **Step 11: Drop the now-unnecessary packaging resource**
 
 `package.json:44-47` copies `lib/domain/library-service.mjs` into `extraResources` purely so the `nativeImport` hack could find it at runtime in a packaged app. The compiled service now lives inside `electron-dist/**`, which `build.files` already includes. Delete that `extraResources` entry, leaving only the seed-audio entry:
 
@@ -1152,7 +1171,7 @@ Also give the two remaining loose spots real types: `dragIcon()` returns `string
     ],
 ```
 
-- [ ] **Step 12: Repoint the seed script**
+- [x] **Step 12: Repoint the seed script**
 
 `scripts/seed-library.mjs:12` imports the deleted `.mjs`. Change it to the compiled output:
 
@@ -1168,7 +1187,7 @@ Update the `seed-library` script added in Task 1 so it builds first:
     "seed-library": "npm run build:electron && node scripts/seed-library.mjs",
 ```
 
-- [ ] **Step 13: Replace renderer `any` casts with the typed bridge**
+- [x] **Step 13: Replace renderer `any` casts with the typed bridge**
 
 Every `(window as any).fragments` becomes `window.fragments`, now typed by `types/fragments-bridge.d.ts`. The call sites are:
 - `app/fragments-app.tsx:277, 609, 710, 895`
@@ -1177,7 +1196,7 @@ Every `(window as any).fragments` becomes `window.fragments`, now typed by `type
 
 Delete the `:any` annotations on the `.catch((error: any) => ...)` handlers at the same sites; `unknown` is the correct type and `console.warn` accepts it. Do not convert the document mappers (`fragmentFromDocument`, `sourceFileFromDocument`, `rangesFromDocument` at `app/fragments-app.tsx:93-190`) in this task — Task 4 deletes them outright.
 
-- [ ] **Step 14: Verify**
+- [x] **Step 14: Verify**
 
 Run:
 
@@ -1195,7 +1214,7 @@ npm run dev:all
 
 Expected: the app opens, the library loads from `~/Documents/Fragments Library`, importing a WAV still works, and dragging a fragment to Finder still produces a file. The console line `[fragments] library root: ...` still prints.
 
-- [ ] **Step 15: Review checkpoint**
+- [x] **Step 15: Review checkpoint**
 
 Confirm `lib/domain/source-document.ts` imports nothing and that no renderer file imports `library-service.ts`, `paths.ts`, or `atomic-write.ts`:
 

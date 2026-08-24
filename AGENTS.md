@@ -79,10 +79,31 @@ verified by running the app.
 
 ## Temporary lint suppressions
 
-`eslint.config.mjs` carries four scoped, commented suppressions, each naming the
-task that removes it. They exist so `npm run check` is a trustworthy gate today
-without hand-fixing code that a scheduled task deletes. **Do not add a fifth
-without the same treatment**, and do not let one outlive its task.
+`eslint.config.mjs` carries scoped, commented suppressions, each naming the task
+that removes it. They exist so `npm run check` is a trustworthy gate today
+without hand-fixing code that a scheduled task deletes. **Do not add one without
+the same treatment**, and do not let one outlive its task. Task 3 removed the
+`no-explicit-any` and `ban-ts-comment` entries by making them unnecessary; the
+remainder are `react-hooks/*` and `jsx-a11y/*`, owned by Tasks 5, 6, and 10.
+
+## The domain and IPC boundary
+
+`lib/domain/source-document.ts` is the on-disk contract and **must import
+nothing** — it is compiled for Electron and bundled into the renderer, so no
+`node:*` and no DOM. `paths.ts`, `atomic-write.ts`, and `library-service.ts`
+alongside it are main-process only. Inside `lib/`, use extensionless relative
+imports; inside `electron/`, keep the `.js` suffix.
+
+Renderer/main traffic goes through `lib/ipc/contract.ts`. Adding a call means
+adding it to `FragmentsBridge`, wiring it in `electron/preload.ts` (typed as
+`FragmentsBridge`, so a mismatch is a compile error), and handling the channel in
+`electron/persistence.ts`. Access the bridge as `window.fragments`, which is
+optional — check it, never cast it.
+
+There is currently **no `any` and no `@ts-nocheck`** in `app/`, `lib/`,
+`electron/`, or `types/`. Keep it that way: at an untrusted boundary take
+`unknown` and narrow. `MeasuredAnalysis` has no index signature on purpose, so
+reading a new extractor feature means declaring it there first.
 
 ## Slice ownership
 

@@ -9,9 +9,10 @@ import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLibraryService } from "../lib/domain/library-service.mjs";
+// Requires `npm run build:electron` first: the library service is TypeScript,
+// compiled to electron-dist/.
+import { createLibraryService } from "../electron-dist/lib/domain/library-service.js";
 import { peaksFromWavFile } from "../lib/audio/wav-peaks.mjs";
-import { inventAnalysis } from "../lib/domain/invent-analysis.mjs";
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const audioDir = path.join(repoRoot, "public", "audio");
@@ -41,13 +42,14 @@ async function main() {
     const { peaks, duration, sampleRate } = await peaksFromWavFile(filePath);
 
     const pending = await library.beginImport(filePath);
-    const analysis = inventAnalysis(pending.id);
+    // A CLI seed cannot measure BPM or key: Essentia runs in the renderer.
+    // Persist nulls and let the UI render "—" rather than inventing values.
     await library.finalizeImport(pending.id, {
       duration,
       format: "WAV",
       sampleRate,
       waveform: { version: 1, count: peaks.length, peaks },
-      analysis,
+      analysis: { bpm: null, key: null, scale: null, keyStrength: null },
     });
     console.log(`Imported ${name} -> ${pending.id} (${duration.toFixed(2)}s)`);
     imported++;

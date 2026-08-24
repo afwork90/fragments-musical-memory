@@ -54,6 +54,9 @@ import {
 import { SourceAnalysisValues } from "./features/sources/source-detail-panel";
 import { LibraryCard } from "./features/library/library-card";
 import { MAP_WORLD, musicalMapPoint } from "./map-layout.mjs";
+import type { FragmentDocument, MeasuredAnalysis, SourceDocument } from "@/lib/domain/source-document";
+import type { MusicalRole as DomainMusicalRole } from "@/lib/domain/source-document";
+import type { SourceRecord } from "@/lib/ipc/contract";
 
 type View = "library" | "source" | "map" | "archive";
 type RangeMode = "reasonable" | "experimental";
@@ -84,8 +87,19 @@ function rangeForIndex(source:SourceFile,index:number):EditableRange {
 
 const initialSourceRanges = () => Object.fromEntries(SOURCE_FILES.map((source) => [source.id,Array.from({ length:fragmentCountForSensitivity(source.sensitivity) },(_,index) => rangeForIndex(source,index))]));
 
+/**
+ * The domain has an `"Unclassified"` role for freshly imported audio; the UI's
+ * role list does not. Every fragment written by `finalizeImport` carries it, so
+ * this translation is the common case, not an edge case — the previous
+ * `?? "Texture"` fallback never fired because `"Unclassified"` is truthy, and an
+ * unrepresentable role reached components that switch on the six real ones.
+ */
+function displayRole(role: DomainMusicalRole | undefined): MusicalRole {
+  return role === undefined || role === "Unclassified" ? "Texture" : role;
+}
+
 /** Rebuilds an in-memory Fragment from a source.json fragment record, so persisted segmentation shows up in the Library after a reload. */
-function fragmentFromDocument(fragmentDoc: any, index: number, source: SourceFile): Fragment {
+function fragmentFromDocument(fragmentDoc: FragmentDocument, index: number, source: SourceFile): Fragment {
   return {
     id: fragmentDoc.id,
     name: fragmentDoc.name || defaultFragmentName(source, index),
@@ -100,8 +114,8 @@ function fragmentFromDocument(fragmentDoc: any, index: number, source: SourceFil
     alternateKeys: [],
     bpm: fragmentDoc.analysis?.bpm ?? source.bpm ?? 0,
     uploadedAt: fragmentDoc.createdAt ?? source.uploadedAt,
-    role: (fragmentDoc.primaryRole as MusicalRole) ?? "Texture",
-    roles: fragmentDoc.roles?.length ? fragmentDoc.roles : ["Texture"],
+    role: displayRole(fragmentDoc.primaryRole),
+    roles: fragmentDoc.roles?.length ? fragmentDoc.roles.map(displayRole) : ["Texture"],
     brightness: 0,
     waveform: slicePeaks(source.waveform, fragmentDoc.start, fragmentDoc.end, source.duration),
     beats: 0,
@@ -145,7 +159,17 @@ function isLibraryRelationship(relationship: Relationship) {
   return isLibraryFragmentId(relationship.source) && isLibraryFragmentId(relationship.target);
 }
 
-function sourceFileFromDocument(document: any, audioUrl?: string): SourceFile {
+/**
+ * A pending import has `duration`/`format` still `null`; `SourceFile` cannot
+ * express that, so callers must only pass finalized documents. The main process
+ * filters unfinalized sources out of `listSources`, and this throws rather than
+ * substituting a zero duration that would render as a real, empty recording.
+ */
+function sourceFileFromDocument(document: SourceRecord, audioUrl?: string): SourceFile {
+  if (document.duration === null) {
+    throw new Error(`source ${document.id} is not finalized: duration is null`);
+  }
+  const duration = document.duration;
   let analysis = document.analysis;
   if (analysisNeedsInvention(analysis)) {
     analysis = inventAnalysis(document.id);
@@ -154,14 +178,14 @@ function sourceFileFromDocument(document: any, audioUrl?: string): SourceFile {
     id: document.id,
     name: document.originalName,
     date: new Date(document.importedAt).toLocaleDateString("en-US", { month:"short",day:"2-digit",year:"numeric" }),
-    duration: document.duration,
-    format: document.format,
+    duration,
+    format: document.format ?? "—",
     device: "Managed library",
-    fragmentIds: document.fragments.map((fragment: any) => fragment.id),
+    fragmentIds: document.fragments.map((fragment) => fragment.id),
     waveform: document.waveform?.peaks ?? [],
     sensitivity: MESSY_PHONE_PROFILE.sensitivity,
     start: 0,
-    end: document.duration,
+    end: duration,
     sourceTypes: ["Voice memo","Jam"],
     analysisProfile: MESSY_PHONE_PROFILE,
     imported: true,
@@ -174,8 +198,8 @@ function sourceFileFromDocument(document: any, audioUrl?: string): SourceFile {
   };
 }
 
-function rangesFromDocument(document: any): EditableRange[] {
-  return document.fragments.map((fragment: any, index: number) => ({
+function rangesFromDocument(document: SourceDocument): EditableRange[] {
+  return document.fragments.map((fragment, index) => ({
     id: `${fragment.id}-range`,
     fragmentId: fragment.id,
     start: fragment.start,
@@ -271,53 +295,22 @@ export default function FragmentsApp() {
   }, [filterOpen]);
 
   useEffect(() => {
-    const bridge = (window as any).fragments;
+    const bridge = window.fragments;
     if (!bridge) return;
-    void bridge.listSources().then(async (documents:any[]) => {
-      const backfill: Array<{ id: string; analysis: ReturnType<typeof inventAnalysis> }> = [];
-      const persisted = documents.map((document) => {
-        let analysis = document.analysis;
-        if (analysisNeedsInvention(analysis)) {
-          analysis = inventAnalysis(document.id);
-          backfill.push({ id: document.id, analysis });
-        }
-        return {
-        id: document.id,
-        name: document.originalName,
-        date: new Date(document.importedAt).toLocaleDateString("en-US", { month:"short",day:"2-digit",year:"numeric" }),
-        duration: document.duration,
-        format: document.format,
-        device: "Managed library",
-        fragmentIds: document.fragments.map((fragment:any) => fragment.id),
-        waveform: document.waveform?.peaks ?? [],
-        sensitivity: MESSY_PHONE_PROFILE.sensitivity,
-        start: 0,
-        end: document.duration,
-        sourceTypes: ["Voice memo","Jam"],
-        analysisProfile: MESSY_PHONE_PROFILE,
-        imported: true,
-        audioUrl: document.audioUrl,
-        audioCacheKey: document.id,
-        bpm: analysis?.bpm ?? null,
-        key: analysis?.key ?? null,
-        scale: analysis?.scale ?? null,
-        uploadedAt: document.importedAt,
-      }}) as SourceFile[];
+    void bridge.listSources().then(async (documents) => {
+      const backfill = documents
+        .filter((document) => analysisNeedsInvention(document.analysis))
+        .map((document) => ({ id: document.id, analysis: inventAnalysis(document.id) as MeasuredAnalysis }));
+      const persisted = documents.map((document) => sourceFileFromDocument(document));
       setSources((current) => [...current.filter((source) => !persisted.some((item) => item.id === source.id)),...persisted]);
       setSourceRanges((current) => ({
         ...current,
-        ...Object.fromEntries(documents.map((document) => [document.id,document.fragments.map((fragment:any,index:number) => ({
-          id: `${fragment.id}-range`,
-          fragmentId: fragment.id,
-          start: fragment.start,
-          end: fragment.end,
-          color: RANGE_COLORS[index % RANGE_COLORS.length],
-        }))])),
+        ...Object.fromEntries(documents.map((document) => [document.id, rangesFromDocument(document)])),
       }));
       const persistedFragments = documents.flatMap((document) => {
         const source = persisted.find((item) => item.id === document.id);
         if (!source) return [];
-        return document.fragments.map((fragmentDoc:any,index:number) => fragmentFromDocument(fragmentDoc,index,source));
+        return document.fragments.map((fragmentDoc,index) => fragmentFromDocument(fragmentDoc,index,source));
       });
       setImportedFragments((current) => [
         ...current.filter((fragment) => !documents.some((document) => document.id === fragment.sourceId)),
@@ -332,7 +325,7 @@ export default function FragmentsApp() {
           console.warn("Could not persist invented analysis:", error);
         }
       }
-    }).catch((error:any) => console.error("Could not load managed library:", error));
+    }).catch((error:unknown) => console.error("Could not load managed library:", error));
   }, []);
 
   const activeFragments = useMemo(() => [
@@ -602,8 +595,8 @@ export default function FragmentsApp() {
   };
 
   const saveSourceAnalysis = async (sourceId: string, analysis: SourceAnalysisValues) => {
-    const bridge = (window as any).fragments;
-    if (bridge?.updateSourceAnalysis) {
+    const bridge = window.fragments;
+    if (bridge) {
       try {
         await bridge.updateSourceAnalysis(sourceId, { ...analysis, keyStrength: null });
       } catch (error) {
@@ -690,9 +683,9 @@ export default function FragmentsApp() {
       .filter((fragment) => fragment.sourceId === sourceId)
       .map((fragment) => fragment.id);
     const remainingSources = sources.filter((item) => item.id !== sourceId);
-    const bridge = (window as any).fragments;
-    if (bridge?.archiveSource && source.imported) {
-      void bridge.archiveSource(sourceId).catch((error: any) => console.warn("Could not archive source:", error));
+    const bridge = window.fragments;
+    if (bridge && source.imported) {
+      void bridge.archiveSource(sourceId).catch((error: unknown) => console.warn("Could not archive source:", error));
     }
 
     setArchived((current) => new Set([...current, ...removedFragmentIds]));
@@ -752,10 +745,13 @@ export default function FragmentsApp() {
     const id = imported.persistedId ?? `source-import-${Date.now()}`;
 
     if (imported.restored && imported.persistedDocument) {
-      const document: any = { ...imported.persistedDocument, audioUrl: imported.persistedAudioUrl };
+      const document: SourceRecord = {
+        ...imported.persistedDocument,
+        audioUrl: imported.persistedAudioUrl ?? imported.persistedDocument.audioUrl,
+      };
       const source = sourceFileFromDocument(document, imported.persistedAudioUrl);
       const ranges = rangesFromDocument(document);
-      const fragments = document.fragments.map((fragmentDoc: any, index: number) =>
+      const fragments = document.fragments.map((fragmentDoc, index) =>
         fragmentFromDocument(fragmentDoc, index, source));
 
       retainCachedAudio(imported.cacheKey);
@@ -875,9 +871,9 @@ export default function FragmentsApp() {
     stopAllAudio();setSelectedSourceId(source.id);setCombineDraftRanges((sourceRanges[source.id] ?? []).map((range) => ({ ...range })));setCombineDraftSensitivity(source.sensitivity);setCorrectionOriginal({ duration:candidate.duration,key:candidate.key,bpm:candidate.bpm,bars:candidate.bars,beats:candidate.beats,confidence:candidate.confidence,analysisRevision:candidate.analysisRevision });setCorrectionPhase("edit");setCorrectionRelationship(relationship);setSourcePanelMode("fragmentation");setSourceEditorOpen(true);
   };
   const persistFragmentsForSource = (sourceId:string,fragments:Fragment[]) => {
-    const bridge=(window as any).fragments;
-    if (!bridge?.updateFragments) return;
-    void bridge.updateFragments(sourceId,fragments.map(fragmentToDocument)).catch((error:any) => console.warn("Could not persist fragments:",error));
+    const bridge=window.fragments;
+    if (!bridge) return;
+    void bridge.updateFragments(sourceId,fragments.map(fragmentToDocument)).catch((error:unknown) => console.warn("Could not persist fragments:",error));
   };
 
   /** Turns a not-yet-real "Add fragment" range into a permanent Fragment with a stable id. */

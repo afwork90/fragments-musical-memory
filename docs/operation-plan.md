@@ -338,3 +338,53 @@ Waves 0 and 1 need no further input:
 
 Recording these corrections as amendments in the refactor plan itself is part of step 1, so plan and
 reality do not drift again.
+
+---
+
+## 7. Task 3 outcome: three real bugs the types found
+
+Delivered as planned — `lib/domain/{source-document,paths,atomic-write,library-service}.ts`,
+`lib/ipc/contract.ts`, `types/fragments-bridge.d.ts` — plus: `@ts-nocheck` gone from
+`electron/persistence.ts`, the `new Function("...import...")` loader hack gone (a static import
+replaces it, so the packaged app no longer needs `library-service.mjs` in `extraResources`), and
+**zero `any` and zero `@ts-nocheck` left in `app/`, `lib/`, `electron/`, `types/`**. The 21 original
+service tests pass unchanged against the TypeScript port, which is the evidence the port preserves
+behaviour.
+
+Typing the boundary was not cosmetic. It surfaced three defects that had been invisible:
+
+**7.1 Every persisted fragment carried a role the UI cannot represent.** The domain has
+`primaryRole: "Unclassified"` and `finalizeImport` writes it; the UI's `MusicalRole` has six values
+and no `"Unclassified"`. All 54 fragments on disk carry it. The old code read
+`(fragmentDoc.primaryRole as MusicalRole) ?? "Texture"` — the cast erased the mismatch and the `??`
+never fired, because `"Unclassified"` is truthy. So an out-of-domain role reached every component
+that switches on the six real roles. Now translated explicitly in `displayRole`.
+
+**7.2 `updateFragments` was not idempotent, defeating its own guard.** It preserved `createdAt` via
+`existing?.createdAt ?? fragment.createdAt ?? new Date()`. But 48 of 54 fragments on disk have **no**
+`createdAt` (the renderer's `fragmentToDocument` never sent one), so both operands were `undefined`
+and every save re-stamped them to now — the exact "renaming or re-slicing bumps a fragment to the top
+of a latest-uploaded sort" failure the comment claims to prevent. Now falls back to the source's
+`importedAt`, which is stable and honest. Pinned by a regression test that fails on the old code.
+
+**7.3 `SourceFile` cannot represent a pending import.** `duration`/`format` are `null` until
+`finalizeImport` runs, but the prototype type declares them non-null; an `as SourceFile[]` cast was
+hiding it. `sourceFileFromDocument` now throws rather than substituting a zero duration that would
+render as a real but empty recording. Deduplicating the inline copy of that mapper in the load
+effect removed the cast and ~25 lines.
+
+Two design decisions worth keeping:
+
+- **`MeasuredAnalysis` has no index signature.** Unmodeled extractor output survives a read/write
+  cycle (`normalizeSourceDocument` spreads rather than rebuilds), but *reading* a feature requires
+  declaring it first. An index signature would have made `analysis.bmp` type-check everywhere.
+  Adding a batch-extracted feature is one optional line plus provenance.
+- **`RelationshipDocument` is fully required, including all seven metric axes.** Checked against
+  disk rather than guessed: all 791 relationships have every field and every axis. Typing them
+  optional would have pushed defaulting onto every consumer.
+
+Verified: `npm run check` exit 0 (42 unit tests); `npm test` exit 0 (42 unit + 2 smoke); clean
+`electron-dist/` rebuild works; against a **copy** of the real library, `listSources` returns
+33/54/791 matching §1's baseline, a relationship round-trip is byte-identical to
+`normalize(before)`, `createdAt` is stable across repeated writes, and all four write paths land.
+The real library was not modified.

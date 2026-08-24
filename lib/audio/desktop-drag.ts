@@ -5,10 +5,10 @@
 // Outside Electron we fall back to the browser's `DownloadURL` dataTransfer
 // trick, which some apps accept but is far less reliable.
 
-type DragTarget = { sourceId?: string; assetPath?: string };
+import type { DragTarget } from "../ipc/contract";
 
-function bridge(): { startDrag?: (target: DragTarget) => void } | null {
-  return typeof window !== "undefined" ? (window as any).fragments ?? null : null;
+function bridge() {
+  return typeof window !== "undefined" ? window.fragments ?? null : null;
 }
 
 export function canDragToDesktop(): boolean {

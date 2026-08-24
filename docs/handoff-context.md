@@ -195,7 +195,8 @@ contents live in the user's folder, not git, so no environment has them unless r
 ## Suggested reading order for a new agent
 
 1. `AGENTS.md`, then `docs/operation-plan.md` — conventions, verified state, and what happens next.
-2. `lib/domain/library-service.mjs` — persistence, and the closest thing to truth in the codebase.
+2. `lib/domain/source-document.ts` then `library-service.ts` — the on-disk contract and the only
+   code that writes it. The closest thing to truth in the repository.
 3. `lib/audio/source-playback.ts` + `lib/audio/source-metadata.ts` — clips and key resolution.
 4. `app/fragments-app.tsx` — orchestration; treat carefully.
 5. `app/hero-workflow.tsx` — Affinities playback.
