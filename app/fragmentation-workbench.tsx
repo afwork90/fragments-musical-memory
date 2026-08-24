@@ -14,6 +14,7 @@ import { Play, Square } from "lucide-react";
 import { LibraryCard } from "@/app/features/library/library-card";
 import { LibraryLinkSummary } from "@/app/features/library/library-list";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
+import { useSourceWaveform } from "@/lib/audio/use-source-waveform";
 import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
@@ -45,6 +46,14 @@ function waveformSlice(values: number[], time: number, duration: number) {
   const slice = values.slice(start, Math.min(values.length, center + 6));
   return slice.length > 2 ? slice : values;
 }
+
+/**
+ * The dial only feeds `fragmentCountForSensitivity`, which maps it to a fragment
+ * count between 1 and 6 — it does not influence any real onset detection. Hidden
+ * rather than deleted: it earns its place back once slicing runs off measured
+ * onsets, and the plumbing behind it is still wired.
+ */
+const SHOW_SENSITIVITY: boolean = false;
 
 function SensitivityKnob({
   sensitivity,
@@ -192,7 +201,8 @@ export function FragmentationWorkbench({
   const [previewingId, setPreviewingId] = useState<string | null>(null);
   const [previewProgress, setPreviewProgress] = useState<number | null>(null);
   const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
-  const waveform = cached?.peaks ?? source.waveform;
+  const sidecar = useSourceWaveform(source.id);
+  const waveform = cached?.peaks ?? sidecar ?? source.waveform;
   const analysisMeta = resolvedSourceAnalysis(source, cached);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const previewScopeRef = useRef<PreviewScope | null>(null);
@@ -412,7 +422,7 @@ export function FragmentationWorkbench({
           </p>
         </div>
         <div className="source-editor-head-controls">
-          <SensitivityKnob sensitivity={sensitivity} onSensitivityChange={onSensitivityChange} />
+          {SHOW_SENSITIVITY && <SensitivityKnob sensitivity={sensitivity} onSensitivityChange={onSensitivityChange} />}
           {headerFragment && (
             <Button
               type="button"

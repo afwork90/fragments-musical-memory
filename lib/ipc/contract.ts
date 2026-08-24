@@ -24,6 +24,8 @@ export const FRAGMENTS_CHANNELS = {
   updateSourceSettings: "fragments:update-source-settings",
   updateFragments: "fragments:update-fragments",
   updateRelationships: "fragments:update-relationships",
+  readWaveform: "fragments:read-waveform",
+  writeWaveform: "fragments:write-waveform",
   startDrag: "fragments:start-drag",
 } as const;
 
@@ -69,6 +71,7 @@ export type BridgeCapabilities = {
 export const WEB_LIBRARY_ROUTES = {
   sources: "/__library/sources",
   audio: "/__library/audio",
+  waveform: "/__library/waveform",
 } as const;
 
 export type FragmentsBridge = {
@@ -84,6 +87,16 @@ export type FragmentsBridge = {
   updateSourceSettings(id: string, settings: SourceSettingsPatch): Promise<SourceRecord>;
   updateFragments(id: string, fragments: FragmentInput[]): Promise<SourceRecord>;
   updateRelationships(id: string, relationships: RelationshipDocument[]): Promise<SourceRecord>;
+  /**
+   * The high-resolution waveform sidecar, or `null` when the source has none.
+   *
+   * Kept off `SourceRecord` deliberately: it is fetched per source on screen, not
+   * for every row of the library, which is the whole reason it is not in
+   * `source.json`. Encoded by `lib/analysis/peaks`.
+   */
+  readWaveform(id: string): Promise<ArrayBuffer | null>;
+  /** Requires the `persist` capability. */
+  writeWaveform(id: string, bytes: ArrayBuffer): Promise<void>;
   /** Fire-and-forget: starts an OS-level file drag. */
   startDrag(target: DragTarget): void;
 };

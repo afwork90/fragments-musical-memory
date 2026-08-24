@@ -22,6 +22,8 @@ const bridge: FragmentsBridge = {
     ipcRenderer.invoke(FRAGMENTS_CHANNELS.updateFragments, id, fragments),
   updateRelationships: (id, relationships) =>
     ipcRenderer.invoke(FRAGMENTS_CHANNELS.updateRelationships, id, relationships),
+  readWaveform: (id) => ipcRenderer.invoke(FRAGMENTS_CHANNELS.readWaveform, id),
+  writeWaveform: (id, bytes) => ipcRenderer.invoke(FRAGMENTS_CHANNELS.writeWaveform, id, bytes),
   startDrag: (target) => ipcRenderer.send(FRAGMENTS_CHANNELS.startDrag, target),
 };
 

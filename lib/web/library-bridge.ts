@@ -78,6 +78,18 @@ export function createWebLibraryBridge(): FragmentsBridge {
       return unsupported();
     },
 
+    async readWaveform(id: string) {
+      const response = await fetch(`${WEB_LIBRARY_ROUTES.waveform}/${encodeURIComponent(id)}`);
+      // A source without a sidecar is the normal case, not a failure: the caller
+      // falls back to the thumbnail from `source.json`.
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error(`waveform request failed with ${response.status}`);
+      return response.arrayBuffer();
+    },
+    async writeWaveform(): Promise<void> {
+      return unsupported();
+    },
+
     startDrag() {
       // A browser cannot hand a real file to another application. Callers check
       // `capabilities.drag` first; this stays silent so a stray call is harmless.

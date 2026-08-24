@@ -85,6 +85,33 @@ export function libraryDevServer(): Plugin {
         }
       });
 
+      server.middlewares.use(WEB_LIBRARY_ROUTES.waveform, async (request, response) => {
+        // Vite strips the mount prefix, so `url` is `/<sourceId>`.
+        const id = decodeURIComponent((request.url ?? "").replace(/^\/+/, "").split("?")[0]);
+        if (!id) {
+          response.statusCode = 400;
+          response.end("missing source id");
+          return;
+        }
+
+        try {
+          const bytes = await library.readWaveform(id);
+          if (!bytes) {
+            response.statusCode = 404;
+            response.end("no waveform");
+            return;
+          }
+          response.setHeader("Content-Type", "application/octet-stream");
+          response.setHeader("Cache-Control", "no-store");
+          response.setHeader("Content-Length", String(bytes.byteLength));
+          response.end(Buffer.from(bytes));
+        } catch (error) {
+          server.config.logger.error(`[fragments] reading a waveform failed: ${String(error)}`);
+          response.statusCode = 500;
+          response.end("could not read the waveform");
+        }
+      });
+
       server.middlewares.use(WEB_LIBRARY_ROUTES.audio, async (request, response) => {
         // Vite strips the mount prefix, so `url` is `/<sourceId>`.
         const id = decodeURIComponent((request.url ?? "").replace(/^\/+/, "").split("?")[0]);

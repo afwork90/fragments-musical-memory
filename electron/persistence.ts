@@ -120,6 +120,21 @@ export async function initializePersistence() {
   logged(FRAGMENTS_CHANNELS.updateRelationships, async (_event, id: unknown, relationships: unknown) => (
     withAudioUrl(await library.updateRelationships(assertId(id), relationships as never))
   ));
+  logged(FRAGMENTS_CHANNELS.readWaveform, async (_event, id: unknown) => {
+    const bytes = await library.readWaveform(assertId(id));
+    // A fresh copy, because a Buffer view over a pooled allocation would serialise
+    // whatever else shares that pool.
+    return bytes ? new Uint8Array(bytes).slice().buffer : null;
+  });
+  logged(FRAGMENTS_CHANNELS.writeWaveform, async (_event, id: unknown, bytes: unknown) => {
+    if (!(bytes instanceof ArrayBuffer) && !ArrayBuffer.isView(bytes)) {
+      throw new Error("waveform payload must be binary");
+    }
+    const view = bytes instanceof ArrayBuffer
+      ? new Uint8Array(bytes)
+      : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    await library.writeWaveform(assertId(id), view);
+  });
 
   const icon = dragIcon();
   const publicAssetsRoot = process.env.ELECTRON_RENDERER_URL

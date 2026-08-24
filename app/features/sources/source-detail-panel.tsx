@@ -7,6 +7,7 @@ import { formatMusicalKey, resolvedSourceAnalysis } from "@/lib/audio/source-met
 import { Button } from "@/lib/ui/button";
 import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
+import { useSourceWaveform } from "@/lib/audio/use-source-waveform";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
 import { formatSeconds } from "@/lib/format";
 import type { Fragment } from "@/lib/view/fragment";
@@ -65,7 +66,8 @@ export function SourceDetailPanel({
   onSaveFragmentMeta,
 }: SourceDetailPanelProps) {
   const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
-  const values = cached?.peaks ?? source.waveform;
+  const sidecar = useSourceWaveform(source.id);
+  const values = cached?.peaks ?? sidecar ?? source.waveform;
   const { bpm: resolvedBpm, key: resolvedKey, scale: resolvedScale, keyStrength } = resolvedSourceAnalysis(source, cached);
   const keyLabel = formatMusicalKey(resolvedKey, resolvedScale);
   const roleOptions = LIBRARY_ROLES.filter((role): role is MusicalRole => role !== "All");

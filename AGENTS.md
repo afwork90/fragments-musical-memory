@@ -129,6 +129,115 @@ There is currently **no `any` and no `@ts-nocheck`** in `app/`, `lib/`,
 `unknown` and narrow. `MeasuredAnalysis` has no index signature on purpose, so
 reading a new extractor feature means declaring it there first.
 
+## Measuring audio
+
+`lib/analysis/` is host-agnostic and compiled twice, like `lib/domain/`: no
+`node:*`, no DOM, extensionless relative imports.
+
+- `wav.ts` decodes linear PCM (16/24/32-bit, any channel count) to a mono
+  `Float32Array`. It takes bytes, so every host can use it. It walks the chunk
+  list rather than assuming a 44-byte header — real recordings carry `bext` and
+  `junk` chunks before `data`.
+- `resample.ts` brings everything to `FEATURE_SAMPLE_RATE` (22050).
+  **This is mandatory, not tidiness.** Mel filterbanks and chroma bins are defined
+  in terms of the sample rate, so identical audio at 48kHz and 22.05kHz yields
+  different MFCC and HPCP numbers. The library mixes rates. Features are only
+  comparable when they were measured at the same rate, which is why
+  `featureSampleRate` is persisted alongside them.
+- `features.ts` owns the essentia parameters and framing, with essentia
+  **injected** — Node and the browser load different bundles.
+
+Both hosts run `extractFeatures`, so the app and `npm run analyze` cannot report
+different numbers for the same audio; verified by measuring one recording through
+each path and comparing. The renderer needs no extra bundle: `EssentiaExtractor`
+extends `Essentia`, so the instance it already loads exposes the whole core
+algorithm surface as `.algorithms`. The browser decodes via `decodeAudioData`,
+which is what makes MP3, M4A, and FLAC work in the app; the Node script handles
+WAV only and says so rather than guessing.
+
+Run a batch pass with `npm run analyze` (reports, writes nothing) or
+`node scripts/analyze-library.mjs --write`. It writes through
+`updateSourceAnalysis`, the same path the app uses, and refuses to overwrite an
+analysis whose `provenance.origin` is `"edited"` unless given `--force`.
+
+**ffmpeg is an optional dependency of that script.** With it on PATH the script
+decodes every format; without it, WAV only, and it says so per file rather than
+guessing. Do not make it required — the app must work without it.
+
+Never hand essentia an unbounded signal. `windowForFeatures` caps at
+`FEATURE_MAX_SECONDS` (90) and both hosts use it, so they cannot report different
+numbers for the same file. It returns a **copy**, not a `subarray`: a view keeps its
+whole backing buffer alive. Exceeding the WASM heap gets the process `SIGKILL`ed —
+exit 137, no stack, nothing to catch, because an Emscripten abort is not a JS
+exception.
+
+Essentia's own type declarations are misleading in ways that only fail at runtime.
+`types/essentia.d.ts` is hand-written for this reason — do not replace it with
+`any`:
+
+- **Pass every parameter.** The bindings have no defaults despite `core_api.d.ts`
+  marking them optional. `Windowing(frame, true, 2048, "hann")` throws.
+- **`vectorToArray` throws on an empty vector,** so "found no onsets" is
+  indistinguishable from a crash unless guarded.
+- **The `.es.js` bundles cannot load in Node** (they reference `__dirname`); use
+  `essentia-wasm.umd.js`, which *is* the Emscripten module — vector helpers on the
+  module, algorithms on its `EssentiaJS` class. There is no `FrameGenerator`
+  there, so frame by hand.
+- **Emscripten throws bare numbers** for C++ aborts, so catch clauses cannot
+  assume an `Error`.
+- **Use `RhythmExtractor2013`, not `PercivalBpmEstimator`.** Percival octave-errors
+  badly: 198.8 against a true 100 on a library recording, and a repeated 215.3
+  across unrelated files.
+- **Check `bpmConfidence` before trusting a BPM.** Short or unrhythmic audio
+  characteristically returns a plausible tempo at confidence 0.
+
+## Waveforms
+
+`lib/analysis/peaks.ts` measures peaks **per second** (`PEAKS_PER_SECOND`, 200),
+never a fixed count per file. A fixed count — the old scheme stored 512 — makes
+resolution fall as duration rises, so a two-second fragment of a six-minute
+recording resolved to two points while the same cut from a ten-second take got
+forty. Since this app is mostly used on fragments, that is the difference between
+a waveform and a smear.
+
+Peaks are **min/max pairs**, not absolute magnitude. Real waveforms are not
+symmetric about zero, and the renderer will eventually draw both extremes; the
+file already carries what it needs, so that change requires no regeneration.
+`magnitudes()` collapses a range to the 0–100 values today's components draw.
+
+There are three places peaks come from, and callers should prefer them in this
+order — `useSourceWaveform` and the audio cache are interchangeable, both being
+whole-source at the same rate, so either can be sliced to a fragment:
+
+1. **Decoded audio in the renderer cache** (`ProcessedAudio.peaks`). Exact, but
+   the file has to be decoded first.
+2. **The sidecar** (`useSourceWaveform`). One small fetch, no decode.
+3. **`source.json`'s 512-point thumbnail.** The only form small enough to live in
+   a document that is parsed for every source on every `listSources()` and
+   rewritten whole on every metadata edit. Never persist high-resolution peaks
+   there — persist `ProcessedAudio.thumbnail`.
+
+The sidecar is `sources/<id>/waveform.bin`: a 16-byte header (magic `FRWV`,
+version, peaks-per-second, point count, sample rate) then interleaved Int16
+min/max, written with the same rename-into-place discipline as `source.json`. At
+roughly 800 bytes per second of audio, a six-minute recording costs ~140KB.
+**A missing sidecar is normal, not an error** — return `null` and fall back.
+
+Both hosts generate it, because neither can do it alone. `scripts/analyze-library.mjs`
+writes one for every WAV it decodes, but Node has no MP3 decoder, so
+**a source with no sidecar measures its own on first display**: `loadSourceWaveform`
+decodes the audio through `decodeAudioData` — the only decoder in the stack that
+handles every format the app accepts — writes the result, and never repeats it.
+
+Do not put that backfill on an import-only path. Playback uses an `<audio>`
+element, not Web Audio, so nothing else ever decodes an already-imported source;
+a backfill hanging off `bindSourceAudio` alone reaches new imports only and leaves
+every existing source pinned to its thumbnail. Decodes are serialised through one
+queue so a library with no sidecars yet does not open an `AudioContext` per card.
+
+Do not add a `Math.max(floor, ...)` to peak values. Drawing silence as a small
+non-zero bar is the same invented data as a fabricated BPM, in visual form.
+
 ## Slice ownership
 
 Feature work should touch one slice. If your change needs to edit a shared

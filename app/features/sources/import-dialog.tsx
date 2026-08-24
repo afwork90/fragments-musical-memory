@@ -301,12 +301,18 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
           duration: decoded.duration,
           format: decoded.format,
           sampleRate: decoded.sampleRate,
-          waveform: { version: 1, count: decoded.peaks.length, peaks: decoded.peaks },
+          // The thumbnail, not `decoded.peaks`: display peaks run at 200/second, which
+          // for a six-minute import is ~70k numbers, and `source.json` is rewritten
+          // atomically on every metadata edit. High resolution lives in a sidecar.
+          waveform: { version: 1, count: decoded.thumbnail.length, peaks: decoded.thumbnail },
           analysis: decoded.analysis,
         });
         persistedId = finalized.id;
         persistedAudioUrl = finalized.audioUrl;
       }
+      // The high-resolution sidecar is written by `bindSourceAudio`, which the app
+      // calls once this resolves — the same path that backfills a source imported
+      // before sidecars existed.
       pendingImportRef.current = null;
     }
     releasePreview();

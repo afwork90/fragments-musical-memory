@@ -5,6 +5,7 @@ import { Check, Pencil, Play, Square, Trash2 } from "lucide-react";
 import { ScrubbableWaveform } from "@/lib/audio/scrubbable-waveform";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
+import { useSourceWaveform } from "@/lib/audio/use-source-waveform";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
 import { formatMusicalKey, resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
 import { resolveSourceAudioUrl, buildFragmentPreviewScope } from "@/lib/audio/source-playback";
@@ -342,7 +343,8 @@ function SourceLibraryCard({
   waveActions?: ReactNode;
 }) {
   const cached = useCachedAudioBySourceId(source.id);
-  const peaks = cached?.peaks ?? source.waveform;
+  const sidecar = useSourceWaveform(source.id);
+  const peaks = cached?.peaks ?? sidecar ?? source.waveform;
   const matchCount = source.fragmentIds.reduce((sum, id) => sum + linkSummaryFor(id).total, 0);
   const analysis = resolvedSourceAnalysis(source, cached);
   const bpm = analysis.bpm;
@@ -460,14 +462,17 @@ function FragmentLibraryCard({
     ? { start: fragment.start, end: fragment.end, duration: source.duration }
     : undefined;
   const cached = useCachedAudioBySourceId(fragment.sourceId);
+  const sidecar = useSourceWaveform(fragment.sourceId);
+  // Whole-source peaks, which still need slicing to this fragment. `fragment.waveform`
+  // is already a slice of the thumbnail, so it must not be sliced again.
+  const wholeSource = cached?.peaks ?? sidecar;
   const peaks = useMemo(() => {
     if (waveformValues) return waveformValues;
-    const base = cached?.peaks ?? fragment.waveform;
-    if (slice && cached?.peaks) {
-      return slicePeaks(base, slice.start, slice.end, slice.duration);
+    if (slice && wholeSource) {
+      return slicePeaks(wholeSource, slice.start, slice.end, slice.duration);
     }
-    return base;
-  }, [cached?.peaks, fragment.waveform, slice, waveformValues]);
+    return wholeSource ?? fragment.waveform;
+  }, [wholeSource, fragment.waveform, slice, waveformValues]);
   const canPlay = Boolean(source && buildFragmentPreviewScope(fragment, source, fragmentAudioFor));
   const dragAudioUrl = source ? resolveSourceAudioUrl(source, fragmentAudioFor) ?? "" : "";
 
@@ -499,6 +504,9 @@ function FragmentLibraryCard({
             <MetaItem label="Length" value={formatSeconds(fragment.end - fragment.start)} />
             <MetaItem label="Key" value={keyLabel ?? "—"} />
             <MetaItem label="BPM" value={fragment.bpm > 0 ? String(fragment.bpm) : "—"} />
+            {/* Falls back to the denormalized name so a fragment whose source has
+                been archived still says where it came from. */}
+            <MetaItem label="Source" value={source?.name || fragment.source || "—"} />
           </>
         )}
       />

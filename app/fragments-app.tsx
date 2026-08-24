@@ -463,7 +463,10 @@ export default function FragmentsApp() {
     return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); };
   }, [resizingConnections]);
 
-  const rankedConnectionsFor = (sourceId:string,limit=6):ScoredRelationship[] => {
+  // Returns every eligible match, ranked. There used to be a limit of 6 here,
+  // which silently hid matches that had passed the tolerance filters — the count
+  // on the card and the rows in the panel disagreed.
+  const rankedConnectionsFor = (sourceId:string):ScoredRelationship[] => {
     const sourceFragment=activeFragmentById(sourceId);
     const seen=new Set<string>();
     return allRelationships.filter((relationship) => relationship.source === sourceId || relationship.target === sourceId)
@@ -491,12 +494,11 @@ export default function FragmentsApp() {
         }
         seen.add(target.id);return true;
       })
-      .sort((a,b) => b.score - a.score)
-      .slice(0,limit);
+      .sort((a,b) => b.score - a.score);
   };
 
   const linkSummaryFor = (fragmentId:string) => {
-    const eligible=rankedConnectionsFor(fragmentId,allRelationships.length);
+    const eligible=rankedConnectionsFor(fragmentId);
     return { total:eligible.length,manual:eligible.filter((relationship) => manualRelationshipIds.has(relationship.id)).length };
   };
 
@@ -581,7 +583,15 @@ export default function FragmentsApp() {
     const bridge = getFragmentsBridge();
     if (bridge?.capabilities.persist) {
       try {
-        await bridge.updateSourceAnalysis(sourceId, { ...analysis, keyStrength: null });
+        // Marked "edited" so a later batch pass will not overwrite the correction.
+        // keyStrength is cleared deliberately: a hand-typed key has no measured
+        // confidence, and keeping the old number would attribute the machine's
+        // certainty to the user's choice.
+        await bridge.updateSourceAnalysis(sourceId, {
+          ...analysis,
+          keyStrength: null,
+          provenance: { origin: "edited", extractor: null, at: new Date().toISOString() },
+        });
       } catch (error) {
         console.error("Could not persist source analysis:", error);
         notify("Could not save metadata to disk.");
@@ -1015,7 +1025,7 @@ export default function FragmentsApp() {
   const mapPoints=useMemo(() => new Map(activeFragments.map((fragment) => [fragment.id,musicalMapPoint(fragment)])),[activeFragments]);
   const mapTakeEdges=useMemo(() => { const firstByGroup=new Map<string,string>();const edges:{ source:string;target:string }[]=[];activeFragments.forEach((fragment) => { if (!fragment.duplicateGroup || archived.has(fragment.id) || duplicateExclusions.has(fragment.id)) return;const first=firstByGroup.get(fragment.duplicateGroup);if (first) edges.push({ source:first,target:fragment.id });else firstByGroup.set(fragment.duplicateGroup,fragment.id); });return edges; },[activeFragments,archived,duplicateExclusions]);
   const mapRelationshipScores=new Map<string,number>();
-  mapFragments.filter((fragment) => !archived.has(fragment.id)).forEach((fragment) => rankedConnectionsFor(fragment.id,allRelationships.length).forEach((relationship) => mapRelationshipScores.set(relationship.id,Math.max(mapRelationshipScores.get(relationship.id) ?? 0,relationship.score))));
+  mapFragments.filter((fragment) => !archived.has(fragment.id)).forEach((fragment) => rankedConnectionsFor(fragment.id).forEach((relationship) => mapRelationshipScores.set(relationship.id,Math.max(mapRelationshipScores.get(relationship.id) ?? 0,relationship.score))));
   const mapRelationships=allRelationships.filter((relationship) => mapRelationshipScores.has(relationship.id) && !archived.has(relationship.source) && !archived.has(relationship.target) && relationshipStatuses[relationship.id] !== "rejected");
   const mapDegreeFor=(id:string) => mapRelationships.filter((relationship) => relationship.source === id || relationship.target === id);
   const mapFragment=mapSelectedId && !archived.has(mapSelectedId) ? activeFragments.find((fragment) => fragment.id === mapSelectedId) ?? null : null;

@@ -39,6 +39,15 @@ import type {
 
 const SOURCES_DIR_NAME = "sources";
 const SOURCE_DOCUMENT_FILENAME = "source.json";
+/**
+ * High-resolution peaks live beside `source.json` rather than inside it.
+ *
+ * `source.json` is read for every source on every `listSources()` and rewritten
+ * whole on every metadata edit, so a hundred kilobytes of peaks per source would
+ * be parsed to draw a table that only needs the thumbnail and rewritten every time
+ * a BPM is corrected. A sidecar is fetched only for the source on screen.
+ */
+const WAVEFORM_FILENAME = "waveform.bin";
 
 /** Thrown when a live source already holds the same original filename. */
 export type DuplicateSourceError = Error & { code: "DUPLICATE_SOURCE" };
@@ -55,6 +64,10 @@ export type LibraryService = {
   listSources(): Promise<SourceDocument[]>;
   archiveSource(sourceId: string): Promise<SourceDocument>;
   resolveAudioPath(sourceId: string, audioFile: string): string;
+  resolveWaveformPath(sourceId: string): string;
+  /** Resolves `null` when a source has no sidecar yet, which is not an error. */
+  readWaveform(sourceId: string): Promise<Uint8Array | null>;
+  writeWaveform(sourceId: string, bytes: Uint8Array): Promise<void>;
   updateSourceAnalysis(sourceId: string, analysis: MeasuredAnalysis): Promise<SourceDocument>;
   updateSourceSettings(sourceId: string, settings: SourceSettings): Promise<SourceDocument>;
   updateFragments(sourceId: string, fragments: FragmentInput[]): Promise<SourceDocument>;
@@ -267,6 +280,36 @@ export function createLibraryService(libraryRoot: string): LibraryService {
     return resolveWithinDir(sourceDirFor(sourceId), audioFile);
   }
 
+  function resolveWaveformPath(sourceId: string): string {
+    return resolveWithinDir(sourceDirFor(sourceId), WAVEFORM_FILENAME);
+  }
+
+  async function readWaveform(sourceId: string): Promise<Uint8Array | null> {
+    try {
+      return await fs.readFile(resolveWaveformPath(sourceId));
+    } catch (error) {
+      // A source imported before sidecars existed, or one never analyzed, simply
+      // has none. Callers fall back to the thumbnail.
+      if (isErrnoException(error) && error.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  async function writeWaveform(sourceId: string, bytes: Uint8Array): Promise<void> {
+    const target = resolveWaveformPath(sourceId);
+    // Same rename-into-place discipline as `source.json`: a half-written sidecar
+    // would decode into a waveform that misrepresents the audio.
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    try {
+      await fs.writeFile(temporary, bytes);
+      await fs.rename(temporary, target);
+    } catch (error) {
+      await fs.rm(temporary, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
+
   async function cancelImport(sourceId: string): Promise<void> {
     await fs.rm(sourceDirFor(sourceId), { recursive: true, force: true });
   }
@@ -281,7 +324,12 @@ export function createLibraryService(libraryRoot: string): LibraryService {
   ): Promise<SourceDocument> {
     validateMeasuredAnalysis(analysis);
     const existing = await readSourceDocument(sourceId);
-    return writeSourceDocument({ ...existing, analysis });
+    // Merged, not replaced. The UI's correction panel sends only the three fields
+    // it collects (bpm, key, scale); replacing would delete the measured features
+    // — timbre, chroma, onsets — every time someone corrected a tempo by hand.
+    // A caller wanting to clear a field sends it explicitly as null, which the
+    // batch extractor does.
+    return writeSourceDocument({ ...existing, analysis: { ...existing.analysis, ...analysis } });
   }
 
   /**
@@ -368,6 +416,9 @@ export function createLibraryService(libraryRoot: string): LibraryService {
     listSources,
     archiveSource,
     resolveAudioPath,
+    resolveWaveformPath,
+    readWaveform,
+    writeWaveform,
     updateSourceAnalysis,
     updateSourceSettings,
     updateFragments,

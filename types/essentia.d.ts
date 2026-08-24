@@ -14,32 +14,14 @@ declare module "essentia.js/dist/essentia.js-extractor.es.js" {
     vectorToArray(input: unknown): Float32Array;
     FrameGenerator(signal: unknown, frameSize: number, hopSize: number): EssentiaVector;
     melSpectrumExtractor(frame: Float32Array, sampleRate: number): number[];
-    PercivalBpmEstimator(
-      signal: unknown,
-      frameSize: number,
-      frameSizeOSS: number,
-      hopSize: number,
-      hopSizeOSS: number,
-      maxBPM: number,
-      minBPM: number,
-      sampleRate: number,
-    ): { bpm: number };
-    KeyExtractor(
-      signal: unknown,
-      averageDetuningCorrection: boolean,
-      frameSize: number,
-      hopSize: number,
-      hpcpSize: number,
-      maxFrequency: number,
-      maximumSpectralPeaks: number,
-      minFrequency: number,
-      pcpThreshold: number,
-      profileType: string,
-      sampleRate: number,
-      spectralPeaksThreshold: number,
-      tuningFrequency: number,
-      weightType: string,
-      windowType: string,
-    ): { key: string; scale: string; strength: number };
+
+    /**
+     * The raw algorithm surface. `EssentiaExtractor` extends `Essentia`, which
+     * constructs `new EssentiaWASM.EssentiaJS(...)` and keeps it here, so the one
+     * bundle the renderer already loads carries every core algorithm too. Typed
+     * from `lib/analysis/features` so the browser and Node share one definition
+     * of what is called and with which parameters.
+     */
+    algorithms: import("../lib/analysis/features").EssentiaAlgorithms;
   }
 }

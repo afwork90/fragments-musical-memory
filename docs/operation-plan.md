@@ -622,6 +622,196 @@ Facts that cost time to discover and are invisible in the type declarations:
 - Cost: about 7s for a 95s file (frame features dominate at ~3s). The whole library is 6.4 minutes of
   audio, so a full batch pass is well under a minute.
 
+### 9.11 The extractor, and what it measured
+
+`lib/analysis/` holds three modules, split so the two that are pure can be unit-tested and the one
+that cannot be is small: `wav.ts` (decode to mono `Float32Array`), `resample.ts` (normalise to
+22050Hz), `features.ts` (essentia, injected). 13 new unit tests cover the decoder and resampler,
+including 24-bit sign extension and the chunk walking that a `bext`-carrying recording needs.
+
+`MeasuredAnalysis` gained six optional fields, exactly as Task 3 designed for: `bpmConfidence`,
+`timbre` (13 MFCC means), `chroma` (12 HPCP bins), `centroidHz`, `onsets`, and `featureSampleRate`.
+`normalizeSourceDocument` spreads `raw.analysis` over the empty analysis rather than rebuilding it
+field by field, so the additive extension needed no read-side change — verified end to end through
+the dev server.
+
+Measured results on the four real WAVs:
+
+| source | BPM (was) | confidence | key (was) | onsets |
+| --- | --- | --- | --- | --- |
+| `song1.wav` ×2 | 140 (141) | 3.21 | D minor (D minor) | 160 |
+| `09_30_2025_gtrjam.wav` | 101 (100) | 2.74 | D major (C minor) | 189 |
+| `synth-rec_OBX.wav` | 139 (134) | **0.00** | A minor (A minor) | 0 |
+
+`bpmConfidence` justified itself immediately: the one file whose tempo disagrees materially with the
+stored measurement is the only one reporting zero confidence — a 9.5s synth pad with no onsets, where
+there is no tempo to find. The two files with real rhythm land within 1 BPM. Without the confidence
+field all three would have looked equally authoritative, which is how the fabricated analysis passed
+for real for so long.
+
+The remaining disagreement worth a human ear is gtrjam's key: measured D major against a stored
+C minor. Both came from essentia's `KeyExtractor`; the stored value was computed in the renderer at
+the browser's own sample rate, this one at 22050. The mean chroma peaks at B, the relative minor of
+D major, so the new value is at least self-consistent.
+
+The MP3 is skipped — there is no MP3 decoder in the Node path, and the script says so rather than
+guessing. That is 5.8 minutes of the library's ~12 minutes of audio, so a decoder (or routing that
+one file through the renderer) is the obvious next gap.
+
+### 9.12 One extractor, two hosts — and the sonogram that was never real
+
+Essentia does not decode audio; every algorithm takes PCM floats. The MP3 was therefore never
+unanalysable, only unanalysable *from Node*: the renderer decodes through `decodeAudioData`, which
+handles MP3, M4A, and FLAC. Rather than adding an MP3 decoder to the script, the renderer was moved
+onto the shared `extractFeatures`. Measuring `09_30_2025_gtrjam.wav` through both paths now returns
+identical values (101 BPM, confidence 2.74, D major, 189 onsets), which is the property that matters:
+the app and `npm run analyze` cannot drift.
+
+This needed no new bundle. `EssentiaExtractor` extends `Essentia`, whose constructor stores
+`new EssentiaWASM.EssentiaJS(...)` on `this.algorithms` — so the bundle the renderer already loads
+carries the entire core surface. Verified at runtime before relying on it, since a hand-written
+declaration proves nothing about what exists at run time.
+
+Two real defects fell out of the work:
+
+**The renderer was using `PercivalBpmEstimator`** — the estimator measured at 198.8 against a true
+100. In-app tempo was therefore unreliable for anything rhythmic. It now uses
+`RhythmExtractor2013` like the batch pass.
+
+**The sonogram never worked, and it was taking the analysis down with it.**
+`melSpectrumExtractor` computes its MelBands input size as `frameSize / (2 + 1)` — 682 for a 2048
+frame whose spectrum is actually 1025 long — and aborts inside WASM on every call. Every
+`source.json` in the library stored `{ bands: 0, frames: [] }`; nothing ever read it. Worse, it ran
+outside a try/catch, so in `"full"` mode its abort discarded the BPM and key with it. That is very
+likely why the real recordings' analysis only ever arrived through the `"quick"` path. The field is
+deleted from `EssentiaAnalysis` and marked deprecated in `MeasuredAnalysis` so existing documents
+still validate. With it went the `mode` parameter, which only ever selected the sonogram — quick
+versus full is the caller's choice of *how much signal* to pass, not a different measurement.
+
+**`updateSourceAnalysis` now merges instead of replacing.** It took a whole `MeasuredAnalysis` and
+wrote it over the existing one, while the correction panel sends only bpm, key, and scale. Correcting
+a tempo by hand would have silently deleted the measured timbre, chroma, and onsets. The correction
+path also now stamps `provenance.origin: "edited"`, which is what makes the batch pass's refusal to
+overwrite hand-edited analysis (and its `--force` escape) actually reachable — before this, nothing
+ever wrote `"edited"`.
+
+### 9.13 Debugging affordances
+
+- The library card shows **Source** after BPM, falling back to the fragment's denormalized source
+  name so an archived source still says where a fragment came from.
+- The search box has a **clear button** in place of the `⌘ K` hint, shown only when there is a query.
+- **Tempo and Key are separate sortable columns** in the sources table. Unmeasured values sort last
+  in both directions rather than as `0`, which would have parked every unanalysed source at the
+  "slowest" end. The 9-column `.source-table-row` grid in `globals.css` is vestigial — the table is a
+  real `<table>` driven by `SOURCE_COLUMNS` — so adding a column needed no CSS.
+- **The affinities list is no longer capped.** `rankedConnectionsFor` took `limit = 6`, so the panel
+  showed six while the card's "Affinities (N)" badge counted all of them by overriding the same
+  limit. Every caller wanted the full list, so the parameter is gone.
+- **The sensitivity dial is hidden** behind `SHOW_SENSITIVITY` in `fragmentation-workbench.tsx`. It
+  only ever fed `fragmentCountForSensitivity`, which maps it to a fragment count of 1–6 and touches
+  no onset detection, so it promises control it does not have until slicing runs off measured onsets.
+  Hidden rather than deleted, with the plumbing intact.
+
+### 9.14 Waveform resolution: peaks per second in a binary sidecar
+
+Two problems, one of which was a correctness bug rather than a cosmetic one.
+
+**Resolution fell as duration rose.** `peaksFromBuffer` took a fixed count, always 512, so a source's
+resolution depended on its length: 19ms per point for the 9.5s synth take, 677ms per point for the
+5.8-minute MP3. Fragments inherit that, and this app is mostly used on fragments.
+
+**Short fragments drew the wrong audio.** `slicePeaks` returned the *entire source's* peaks whenever a
+slice came out under six points. The MP3's 2-second fragment resolved to 2 points, so its card
+rendered all 5.8 minutes. Not a coarse picture of the right audio — a picture of different audio.
+Measured on the real library before the change:
+
+| source | duration | ms/point | a 2s fragment got |
+| --- | --- | --- | --- |
+| Cloud Collapse.mp3 | 346.7s | 677 | 2 points → fell back to the whole source |
+| 09_30_2025_gtrjam.wav | 95.2s | 186 | 10 points |
+| synth-rec_OBX.wav | 9.5s | 19 | 400 points |
+
+**What was built.** `lib/analysis/peaks.ts`, host-agnostic like the extractor, measuring
+`PEAKS_PER_SECOND = 200` — 5ms per point regardless of length — as Int16 **min/max pairs** rather
+than `Math.abs` magnitudes, because real waveforms are asymmetric and the renderer will eventually
+draw both. `magnitudes()` collapses a range to the 0–100 values today's components take, so the
+resolution win landed without rewriting the drawing code, and upgrading that code later needs no
+regeneration.
+
+**Why a sidecar and not `source.json`.** That document is parsed for every source on every
+`listSources()` and rewritten whole on every metadata edit; 140KB of peaks per source would be read
+to draw a table that only needs a thumbnail, and rewritten every time a BPM is corrected. So
+`sources/<id>/waveform.bin` — 16-byte header then interleaved Int16, rename-into-place — fetched only
+for the source on screen. The existing 512-point array stays in `source.json` as the thumbnail and
+last-resort fallback. SVG was considered and rejected: it is a rendering, not data, so it cannot be
+re-decimated to a different pixel width or computed from, and 40k points of path text is larger than
+the binary.
+
+**Why both hosts generate it.** Neither can do it alone. `scripts/analyze-library.mjs` writes one for
+every WAV it decodes — from the signal at its original rate, not the 22050Hz copy the feature
+extractor uses — but Node cannot decode MP3. So a source with no sidecar measures its own on first
+display, by decoding through `decodeAudioData`. Same answer as 9.12: one measurement module, two
+hosts, the browser covering the formats Node cannot read.
+
+The first attempt at that backfill hung off `bindSourceAudio`, and was wrong in a way worth recording:
+**nothing in the app ever decodes an already-imported source.** `processAudioUrl` is exported and
+unused, and playback goes through an `<audio>` element pointed at the custom protocol rather than
+through Web Audio, so `bindSourceAudio` fires only on import and restore. The WAVs looked fixed
+because the batch script had written their sidecars; the MP3 had no sidecar and no cache entry and sat
+on its 512-point thumbnail, which is exactly what testing caught. Measurement now hangs off
+*display*, in `loadSourceWaveform`, which is the one event that always happens for a source the user
+can see. Decodes are serialised so a library with no sidecars does not open an `AudioContext` per card.
+
+**Verified against the library**, not just in tests: durations reconstruct to 0.1s and peak amplitudes
+match the audio's true maximum to three decimals (0.879, 0.844, 0.160), and a 2-second window now
+yields 400 columns where it yielded 2. Costs 44KB for 56.6s, 74KB for 95.2s.
+
+Also removed the `Math.max(4, ...)` floor on peak values, which drew digital silence as a 4% bar —
+the same invented data as a fabricated BPM, in visual form.
+
+Still open: the components draw magnitudes, so the stored minima are unused until
+`ScrubbableWaveform` and `waveform-path.ts` learn to draw both extremes. The file is already
+future-proof for that.
+
+### 9.15 What testing the MP3 actually found
+
+The MP3's fragments stayed low-resolution after all of the above, and none of the three causes was
+the waveform code.
+
+**Its audio had been unreachable the whole time.** `source.json` recorded
+`audioFile: "Andrew Huang - Cloud Collapse.mp3"` while the managed copy on disk is `original.mp3` —
+almost certainly a hand-prepared document from the soft-delete replay hack in 9.5, since all four
+WAVs correctly say `original.wav`. Every path that resolves audio was therefore broken for that
+source: playback, the dev server's audio route, and the browser decode the sidecar backfill depends
+on. Repaired in place, with a `source.json.bak` alongside. **`beginImport` names the copy
+`original.<ext>`; nothing should ever write an original filename into `audioFile`,** and validation
+does not currently catch it.
+
+**ffmpeg closes the Node gap properly.** It is already on this machine, so the batch script now
+decodes anything ffmpeg reads rather than skipping non-WAV, which makes the MP3 measurable without a
+browser and — more usefully — verifiable on disk. Optional by design: absent ffmpeg, the script
+behaves exactly as before. Worth noting the web build cannot verify a backfill at all, because
+`capabilities.persist` is false there, so nothing is written; testing a sidecar means Electron or the
+script.
+
+**Two latent bugs surfaced, both of which killed the process with no error to read.** Exit 137 is
+`SIGKILL`, and an Emscripten abort is not a catchable JS exception, so neither produced a stack:
+
+- `ffprobe -show_entries stream=sample_rate,channels` emits fields in the *stream's* order, not the
+  requested order. Reading them positionally swapped them, so `sampleRate` became `2`, which asked
+  `computePeaks` for `samples / (2/200)` — 1.5 billion points for six minutes. Now parsed by key.
+  `computePeaks` also rejects any rate under 1000Hz outright, because a diagnosable error beats a
+  killed process.
+- The batch pass had no cap on the signal reaching essentia and had merely got away with it on files
+  under two minutes. `windowForFeatures` in `lib/analysis/features.ts` now caps at 90 seconds for both
+  hosts, and returns a copy rather than a `subarray` so a view cannot keep the full-length buffer
+  alive. The waveform is computed and written *before* features, from the full-length signal, since it
+  is pure JS and should not be lost to an essentia failure.
+
+**The MP3's analysis was fabricated too**, as 9.9 predicted: it read 148 BPM in C minor and measures
+118 BPM at confidence 2.26 in C major. All five sources now carry measured analysis and a sidecar
+(7KB to 271KB).
+
 ### 9.5 The soft-delete replay hack: keep
 
 A demo affordance whose cost disappears once 9.3 and 9.4 are real. Removing it early only costs a

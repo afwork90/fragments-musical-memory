@@ -13,6 +13,7 @@
     "./**/*.ts",
     "../lib/domain/**/*.ts",
     "../lib/ipc/**/*.ts",
+    "../lib/analysis/**/*.ts",
     "../types/**/*.d.ts"
   ]
 }

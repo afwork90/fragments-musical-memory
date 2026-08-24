@@ -480,3 +480,71 @@ test("beginImport rejects importing a file that is already active in the library
     assert.equal(sourceDirs.length, 1);
   });
 });
+
+test("readWaveform reports absence rather than throwing", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const service = createLibraryService(libraryRoot);
+    const filePath = await makeFixtureFile(fixturesDir, "take.wav", "audio");
+    const pending = await service.beginImport(filePath);
+
+    // Every source imported before sidecars existed is in this state. It has to
+    // read as "none", not as an error, or the card cannot fall back to its thumbnail.
+    assert.equal(await service.readWaveform(pending.id), null);
+  });
+});
+
+test("a waveform sidecar survives a round trip through a fresh service", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const service = createLibraryService(libraryRoot);
+    const filePath = await makeFixtureFile(fixturesDir, "take.wav", "audio");
+    const pending = await service.beginImport(filePath);
+
+    const bytes = new Uint8Array([0x46, 0x52, 0x57, 0x56, 1, 0, 200, 0, 2, 0, 0, 0]);
+    await service.writeWaveform(pending.id, bytes);
+
+    const reread = await createLibraryService(libraryRoot).readWaveform(pending.id);
+    assert.deepEqual(Array.from(reread), Array.from(bytes));
+  });
+});
+
+test("writing a waveform twice replaces it and leaves no temp files behind", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const service = createLibraryService(libraryRoot);
+    const filePath = await makeFixtureFile(fixturesDir, "take.wav", "audio");
+    const pending = await service.beginImport(filePath);
+
+    await service.writeWaveform(pending.id, new Uint8Array([1, 2, 3, 4]));
+    await service.writeWaveform(pending.id, new Uint8Array([9, 9]));
+
+    assert.deepEqual(Array.from(await service.readWaveform(pending.id)), [9, 9]);
+
+    // A leftover .tmp would be shipped as part of the library directory.
+    const entries = await readdir(path.join(libraryRoot, "sources", pending.id));
+    assert.deepEqual(entries.filter((name) => name.includes(".tmp")), []);
+  });
+});
+
+test("a waveform sidecar does not enlarge source.json", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const service = createLibraryService(libraryRoot);
+    const filePath = await makeFixtureFile(fixturesDir, "take.wav", "audio");
+    const pending = await service.beginImport(filePath);
+    const documentPath = path.join(libraryRoot, "sources", pending.id, "source.json");
+
+    const before = (await readFile(documentPath)).byteLength;
+    await service.writeWaveform(pending.id, new Uint8Array(80_000));
+    const after = (await readFile(documentPath)).byteLength;
+
+    // The whole point of the sidecar: the document rewritten on every metadata
+    // edit stays small no matter how long the recording is.
+    assert.equal(before, after);
+  });
+});
+
+test("a waveform id cannot escape its source directory", async () => {
+  await withTempDirs(async ({ libraryRoot }) => {
+    const service = createLibraryService(libraryRoot);
+    await assert.rejects(() => service.readWaveform("../../etc/passwd"), /identifier|traversal/);
+    await assert.rejects(() => service.writeWaveform("..", new Uint8Array(1)), /identifier|traversal/);
+  });
+});

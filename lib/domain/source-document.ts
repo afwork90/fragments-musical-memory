@@ -62,8 +62,50 @@ export type MeasuredAnalysis = {
   key: string | null;
   scale: string | null;
   keyStrength: number | null;
+  /**
+   * @deprecated Never populated. The extractor that produced it aborted inside
+   * WASM on every call (see `lib/audio/types.ts`), so every document on disk
+   * carries `{ bands: 0, frames: [] }`. Kept only so those documents still
+   * validate; nothing writes it and nothing reads it.
+   */
   sonogram?: SonogramData | null;
   provenance?: AnalysisProvenance;
+
+  /**
+   * How confident the beat tracker was. Low confidence with a plausible-looking
+   * BPM is the normal outcome for short or unrhythmic audio, so this decides
+   * whether the tempo is worth using rather than merely worth showing.
+   */
+  bpmConfidence?: number | null;
+
+  /**
+   * Mean MFCC across frames — a timbre fingerprint. Compared between fragments by
+   * cosine distance; this is the axis that finds "sounds like it belongs with".
+   */
+  timbre?: number[] | null;
+
+  /**
+   * Mean HPCP chroma, 12 bins starting at A. Harmonic content without committing
+   * to a key label, so two fragments can be compared even when neither has a
+   * confident key.
+   */
+  chroma?: number[] | null;
+
+  /** Mean spectral centroid in Hz: the measured basis for "brightness". */
+  centroidHz?: number | null;
+
+  /**
+   * Onset times in seconds from the start of the source. Both the input to real
+   * slicing and, via inter-onset intervals, the honest basis for a rhythm axis.
+   */
+  onsets?: number[] | null;
+
+  /**
+   * The rate every feature above was computed at. Mel filterbanks and chroma bins
+   * depend on it, so features computed at different rates are not comparable —
+   * recording it is what makes a mixed-format library safe to compare across.
+   */
+  featureSampleRate?: number | null;
 };
 
 export type WaveformData = {

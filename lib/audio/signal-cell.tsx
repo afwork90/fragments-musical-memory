@@ -5,6 +5,7 @@ import { Play, Square } from "lucide-react";
 import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
+import { useSourceWaveform } from "@/lib/audio/use-source-waveform";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
 import { Button } from "@/lib/ui/button";
 import { cn } from "@/lib/utils";
@@ -43,13 +44,15 @@ export function SignalCell({
   desktopDrag,
 }: SignalCellProps) {
   const cached = useCachedAudioBySourceId(cacheSourceAudio && sourceId ? sourceId : null);
+  const sidecar = useSourceWaveform(sourceId ?? undefined);
+  // `values` may already be a slice, so only the whole-source forms get sliced here.
+  const wholeSource = cached?.peaks ?? sidecar;
   const peaks = useMemo(() => {
-    const base = cached?.peaks ?? values;
-    if (slice && cached?.peaks) {
-      return slicePeaks(base, slice.start, slice.end, slice.duration);
+    if (slice && wholeSource) {
+      return slicePeaks(wholeSource, slice.start, slice.end, slice.duration);
     }
-    return base;
-  }, [cached?.peaks, values, slice]);
+    return wholeSource ?? values;
+  }, [wholeSource, values, slice]);
 
   return (
     <div className={cn("source-signal-cell flex w-full min-w-0 items-stretch gap-2", className)}>
