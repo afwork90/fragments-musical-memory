@@ -564,6 +564,86 @@ export default function FragmentsApp() {
     setSources((current) => current.map((source) => source.id === selectedSourceId ? { ...source,sensitivity:value } : source));
   };
 
+  const applyDetectedRanges = (
+    segments: { start: number; end: number; label: string }[],
+  ) => {
+    if (!Array.isArray(segments)) {
+      notify("Unexpected response from the fragmentation backend.");
+      return;
+    }
+
+    const detectedRanges: EditableRange[] = segments
+      // drop silence — remove this filter if you want silence kept as its own fragment
+      //.filter((segment) => segment.label !== "silence")
+      .map((segment, index) => ({
+        id: `${selectedSource.id}-detected-${Date.now()}-${index}`,
+        start: Math.round(segment.start * 100) / 100, // rounded to 2 decimals
+        end: Math.round(segment.end * 100) / 100,
+        color: RANGE_COLORS[index % RANGE_COLORS.length],
+      }));
+
+    setSourceRanges((current) => ({ ...current, [selectedSource.id]: detectedRanges }));
+    notify(
+      `Detected ${detectedRanges.length} fragment${detectedRanges.length === 1 ? "" : "s"} — click "Save boundaries" to add ${detectedRanges.length === 1 ? "it" : "them"} to the library.`,
+    );
+  };
+
+  const detectionTimerRef = useRef<number | null>(null);
+
+  const startDetectionTimer = () => {
+    const startedAt = Date.now();
+    setToast(`Detecting fragments… ${formatSeconds(0)}`);
+    detectionTimerRef.current = window.setInterval(() => {
+      const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+      setToast(`Detecting fragments… ${formatSeconds(elapsedSeconds)}`);
+    }, 1000);
+  };
+
+  const stopDetectionTimer = () => {
+    if (detectionTimerRef.current !== null) {
+      window.clearInterval(detectionTimerRef.current);
+      detectionTimerRef.current = null;
+    }
+  };
+
+  const detectFragments = async () => {
+    startDetectionTimer();
+    try {
+      const segments = await sendSourceForFragmentation(selectedSource);
+      if (!segments) return;
+      applyDetectedRanges(segments);
+    } finally {
+      stopDetectionTimer();
+      setToast(null);
+    }
+  };
+
+  const sendSourceForFragmentation = async (source: SourceFile) => {
+    try {
+      const audioUrl = resolveSourceAudioUrl(source);
+      if (!audioUrl) throw new Error("No audio available for this source.");
+
+      const audioResponse = await fetch(audioUrl);
+      const blob = await audioResponse.blob();
+
+      const formData = new FormData();
+      formData.append("file", blob, source.name);
+
+      const response = await fetch("http://localhost:3001/segment", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error(`Detection failed (${response.status})`);
+      const result = await response.json();
+      notify(`Detected fragments for ${source.name}.`);
+      return result;
+    } catch (error) {
+      console.error("Could not detect fragments:", error);
+      notify("Couldn't reach the detection backend.");
+    }
+  };
+
   const addManualFragment = () => {
     const index=selectedRanges.length;
     const next={ ...rangeForIndex(selectedSource,index),fragmentId:undefined,id:`${selectedSource.id}-manual-${Date.now()}` };
@@ -1170,7 +1250,7 @@ export default function FragmentsApp() {
   const editorSensitivity=correctionRelationship ? (combineDraftSensitivity ?? selectedSource.sensitivity) : selectedSource.sensitivity;
   const correctedRange=correctionRelationship ? editorRanges.find((range) => range.fragmentId === correctionRelationship.otherId) : null;
   const correctionFooter=correctionRelationship && correctionPhase === "recompute" ? <div className="recompute workbench-result"><i/><strong>Recomputing metadata and active match…</strong><span>Revision {(correctionOriginal?.analysisRevision ?? 1) + 1}</span></div> : correctionRelationship && correctionPhase === "prompt" && correctionOriginal ? <div className="correction-result workbench-result"><div className="metadata-diff"><span>Field</span><span>Before</span><span>After</span>{[["Duration",correctionOriginal.duration,formatSeconds((correctedRange?.end ?? 0) - (correctedRange?.start ?? 0))],["Key",correctionOriginal.key,"C minor"],["BPM",correctionOriginal.bpm,"90"],["Bars",correctionOriginal.bars,"3"],["Beats",correctionOriginal.beats,"17"],["Confidence",`${Math.round(correctionOriginal.confidence * 100)}%`,`93%`],["Match",`${correctionRelationship.score}%`,`76%`]].map((row) => row.map((cell,index) => <span className={index === 2 ? "changed" : ""} key={`${row[0]}-${index}`}>{cell}</span>))}</div><div className="link-prompt"><span className="relationship-badge manual">criteria changed</span><h3>This fragment no longer matches the original search. Keep it linked to this comparison?</h3><p>The boundary correction is saved either way. A manual link preserves your musical judgment.</p><div><button onClick={rejectCorrectionLink}>Reject and show next</button><button className="primary-button" onClick={keepCorrectionLink}>Yes, keep linked</button></div></div></div> : null;
-  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => { if (correctionRelationship) { setCombineDraftRanges(ranges);return; } markSourceEdited(selectedSource.id);setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges })); }} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} onRenameFragment={correctionRelationship ? undefined : renameFragmentOrRange} onDeleteFragment={correctionRelationship ? undefined : deleteFragmentOrRange} unsavedChanges={correctionRelationship ? undefined : editorUnsaved} saveLabel={correctionRelationship ? "Save & recompute" : "Save all fragments"} footerContent={correctionFooter}/> : null;
+  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => { if (correctionRelationship) { setCombineDraftRanges(ranges);return; } markSourceEdited(selectedSource.id);setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges })); }} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onDetectFragments={detectFragments} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} onRenameFragment={correctionRelationship ? undefined : renameFragmentOrRange} onDeleteFragment={correctionRelationship ? undefined : deleteFragmentOrRange} unsavedChanges={correctionRelationship ? undefined : editorUnsaved} saveLabel={correctionRelationship ? "Save & recompute" : "Save all fragments"} footerContent={correctionFooter}/> : null;
   const detailFragment = infoFragmentId ? activeFragments.find((fragment) => fragment.id === infoFragmentId) ?? null : null;
   const detailPanel=sourceEditorOpen && sourcePanelMode === "detail" ? <SourceDetailPanel
     source={selectedSource}

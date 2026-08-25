@@ -270,6 +270,7 @@ export function FragmentationWorkbench({
   onRangesChange,
   onSensitivityChange,
   onAddRange,
+  onDetectFragments,
   onSave,
   onClose,
   onOpenFragment,
@@ -287,6 +288,7 @@ export function FragmentationWorkbench({
   onRangesChange: (ranges: EditableRange[]) => void;
   onSensitivityChange: (value: number) => void;
   onAddRange: () => void;
+  onDetectFragments: () => void;
   onSave: () => void;
   onClose: () => void;
   onOpenFragment?: (id: string) => void;
@@ -700,6 +702,9 @@ export function FragmentationWorkbench({
           <div className="fragment-workbench-cards-head">
             <h3>Fragments</h3>
             <div className="detected-actions">
+              <Button type="button" variant="outline" size="sm" className="library-card-action" onClick={onDetectFragments}>
+                ✨ Detect fragments
+              </Button>
               <Button type="button" variant="outline" size="sm" className="library-card-action" onClick={onAddRange}>
                 ＋ Add fragment
               </Button>

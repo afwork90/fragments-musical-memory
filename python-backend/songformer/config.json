@@ -1,0 +1,28 @@
+{
+    "architectures": [
+        "SongFormerModel"
+    ],
+    "model_type": "songformer",
+    "auto_map": {
+        "AutoConfig": "configuration_songformer.SongFormerConfig",
+        "AutoModel": "modeling_songformer.SongFormerModel"
+    },
+    "custom_code_modules": [
+        "modules/",
+        "utils/",
+        "preprocessing/"
+    ],
+    "custom_files": [
+        "model_config.py",
+        "model.py",
+        "msd_stats.json",
+        "muq_config2.json",
+        "dataset/custom_types.py",
+        "dataset/label2id.py",
+        "dataset.py",
+        "model.py",
+        "model_config.py",
+        "musicfm.py",
+        "postprocessing.py"
+    ]
+}
