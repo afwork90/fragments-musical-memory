@@ -79,8 +79,27 @@
   --waveform-frame-radius:6px;
   --source-table-row-height:72px;
   --shadow:0 22px 80px #00000066;
+  --scroll-thumb:#3f3b48;
+  --scroll-track:#100f14;
 }
 * { box-sizing:border-box; }
+
+/* Scrollbars, in one place.
+
+   `color-scheme` is what makes the platform draw its own widgets dark — scrollbars
+   on overflowing panels, and the select and text inputs in the info panel — whatever
+   our own colours say.
+
+   `scrollbar-width` and `scrollbar-color` are inherited, so setting them on the root
+   reaches every scroll container; a container that wants no scrollbar at all still
+   overrides with `scrollbar-width:none`. Do not add `::-webkit-scrollbar` rules to
+   go with these: Chromium ignores those pseudo-elements on any element where the
+   standard properties are set, which after this is everything. */
+html {
+  color-scheme:dark;
+  scrollbar-width:thin;
+  scrollbar-color:var(--scroll-thumb) var(--scroll-track);
+}
 html,body { margin:0; min-height:100%; background:var(--bg); color:var(--ink); }
 body { font-family:var(--font-geist-sans),Arial,sans-serif; background:radial-gradient(circle at 72% -20%,#2b2342 0,transparent 32%),var(--bg); }
 html, body { height:100%; }
@@ -203,8 +222,6 @@ nav b { min-width:17px; height:17px; display:inline-grid; place-items:center; ma
   min-height:0;
   overflow:auto;
   padding-right:2px;
-  scrollbar-width:thin;
-  scrollbar-color:#4d4855 #131117;
 }
 .library-filter-section {
   margin:0;
@@ -777,7 +794,7 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .sources-toolbar .library-card-action { order:0; }
 .sources-toolbar .search { order:1; }
 
-.fragment-lanes-scroll { max-height:165px;margin-bottom:5px;overflow-y:auto;overflow-x:hidden;border-bottom:1px solid #2a2730;background:linear-gradient(90deg,#ffffff05 1px,transparent 1px);background-size:10% 100%;scrollbar-color:#4d4855 #131117;scrollbar-width:thin; }
+.fragment-lanes-scroll { max-height:165px;margin-bottom:5px;overflow-y:auto;overflow-x:hidden;border-bottom:1px solid #2a2730;background:linear-gradient(90deg,#ffffff05 1px,transparent 1px);background-size:10% 100%; }
 .fragment-lanes-scroll .fragment-lanes { margin-bottom:0;border-bottom:0;background:none; }
 .sensitivity-dial:focus-visible { outline:2px solid var(--lime);outline-offset:2px; }
 .detected-actions { display:flex;gap:5px; }
@@ -871,8 +888,6 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
   min-height:0;
   overflow:auto;
   padding-right:2px;
-  scrollbar-width:thin;
-  scrollbar-color:#4d4855 #131117;
 }
 
 .scan-playhead { position:absolute;z-index:3;top:0;bottom:0;left:0;width:1px;background:var(--lime);box-shadow:0 0 9px #c8fa78;animation:scanWave 2.6s linear infinite;pointer-events:none; }
@@ -890,7 +905,7 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .candidate-edit-source:hover { border-color:#74d8ff66;color:#8de0ff; }
 .correction-head-actions { display:flex;align-items:center;gap:7px; }
 .correction-add { height:28px;border:1px solid #74d8ff66;border-radius:5px;background:#74d8ff12;color:#93e1ff;padding:0 9px;font-size:8px; }
-.correction-lanes { height:120px;overflow-y:auto;scrollbar-color:#4d4855 #131117;scrollbar-width:thin; }
+.correction-lanes { height:120px;overflow-y:auto; }
 @keyframes scanWave { from{left:0} to{left:100%} }
 
 @media(max-width:900px){.candidate-controls{grid-column:2}.candidate-edit-source{margin-top:8px}.fragment-lanes-scroll{max-height:165px}}
@@ -1001,7 +1016,7 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .column-filter-compare.bars-filter label { flex-basis:66px; }
 .column-filter-compare.date-filter label { flex-basis:125px; }
 .column-filter-compare.date-filter input { padding:0 4px;font-size:7px; }
-.column-filter-options { max-height:190px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#4e4856 #141218;padding-right:2px; }
+.column-filter-options { max-height:190px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;padding-right:2px; }
 .column-filter-options label { min-height:25px;display:grid;grid-template-columns:15px minmax(0,1fr);align-items:center;gap:5px;border:1px solid transparent;border-radius:4px;padding:2px 5px;color:#98949e;cursor:pointer; }
 .column-filter-options label:hover { background:#ffffff08;color:#d2ced7; }
 .column-filter-options label.selected { border-color:#a99cff35;background:#a99cff0b;color:#c8c1e6; }
