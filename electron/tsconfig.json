@@ -1,0 +1,21 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node10",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "rootDir": "..",
+    "outDir": "../electron-dist",
+    "noEmit": false
+  },
+  "include": [
+    "./**/*.ts",
+    "../lib/domain/**/*.ts",
+    "../lib/ipc/**/*.ts",
+    "../lib/analysis/**/*.ts",
+    "../lib/affinity/**/*.ts",
+    "../lib/view/**/*.ts",
+    "../types/**/*.d.ts"
+  ]
+}

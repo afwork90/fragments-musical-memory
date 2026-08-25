@@ -22,6 +22,10 @@
 .DS_Store
 *.pem
 
+# python bytecode (a dead Flask experiment used to live here)
+__pycache__/
+*.pyc
+
 # debug
 npm-debug.log*
 yarn-debug.log*
@@ -38,3 +42,9 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+*.tsbuildinfo
+/electron-dist/
+/release/
+
+# Local-only media/assets (logo is inlined in app/fragments-logo.ts).
+/app/assets/

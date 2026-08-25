@@ -1,0 +1,289 @@
+import {
+  aliasCacheKey,
+  getCachedAudio,
+  hasCachedAudio,
+  releaseCachedAudio,
+  retainCachedAudio,
+  setCachedAudio,
+  subscribeAudioCache,
+  updateCachedAnalysis,
+} from "./audio-cache";
+import { windowForFeatures } from "../analysis/features";
+import { computePeaks, magnitudes, peaksForRange } from "../analysis/peaks";
+import { backfillSourceWaveform } from "./waveform-sidecar";
+import type { AudioProcessOptions, ProcessedAudio } from "./types";
+import { EMPTY_AUDIO_ANALYSIS } from "./types";
+import { analyzeSignal } from "./essentia-analyze";
+
+export const QUICK_ANALYSIS_SECONDS = 20;
+
+const inflight = new Map<string, Promise<ProcessedAudio>>();
+const quickInflight = new Map<string, Promise<ProcessedAudio>>();
+const stagedQuickWindows = new Map<string, { signal: Float32Array; sampleRate: number }>();
+
+function stageQuickWindow(cacheKey: string, mono: Float32Array, sampleRate: number) {
+  stagedQuickWindows.set(cacheKey, {
+    signal: loudestWindow(mono, sampleRate),
+    sampleRate,
+  });
+}
+
+function takeQuickWindow(cacheKey: string) {
+  const staged = stagedQuickWindows.get(cacheKey);
+  stagedQuickWindows.delete(cacheKey);
+  return staged;
+}
+
+// Only used as an in-memory cache key (not a security or persistence hash —
+// the main process computes a real SHA-256 of the copied file on disk), so a
+// fast synchronous hash avoids depending on Web Crypto's `subtle`, which is
+// only available in a secure context and isn't reliably one across every
+// custom Electron protocol this renderer loads from.
+async function hashArrayBuffer(buffer: ArrayBuffer) {
+  if (crypto.subtle) {
+    try {
+      const digest = await crypto.subtle.digest("SHA-256", buffer);
+      return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    } catch {
+      // fall through to the non-cryptographic hash below
+    }
+  }
+
+  const bytes = new Uint8Array(buffer);
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let index = 0; index < bytes.length; index++) {
+    const byte = bytes[index];
+    h1 = Math.imul(h1 ^ byte, 2654435761);
+    h2 = Math.imul(h2 ^ byte, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `${(h1 >>> 0).toString(16).padStart(8, "0")}${(h2 >>> 0).toString(16).padStart(8, "0")}${bytes.length.toString(16)}`;
+}
+
+function monoFromBuffer(buffer: AudioBuffer) {
+  if (buffer.numberOfChannels === 1) return buffer.getChannelData(0).slice();
+
+  const left = buffer.getChannelData(0);
+  const right = buffer.getChannelData(1);
+  const mono = new Float32Array(left.length);
+
+  for (let index = 0; index < left.length; index++) {
+    mono[index] = (left[index] + right[index]) / 2;
+  }
+
+  return mono;
+}
+
+/**
+ * Measures the waveform once, then derives both the high-resolution display peaks
+ * and the small thumbnail that gets persisted, so the signal is only walked once.
+ */
+function measureWaveform(mono: Float32Array, buffer: AudioBuffer, thumbnailCount: number) {
+  const waveform = computePeaks(mono, buffer.sampleRate);
+  const points = waveform.pairs.length / 2;
+
+  return {
+    waveform,
+    peaks: magnitudes(peaksForRange(waveform, 0, buffer.duration, points)),
+    thumbnail: magnitudes(peaksForRange(waveform, 0, buffer.duration, thumbnailCount)),
+  };
+}
+
+// The cap lives in `lib/analysis/features` so the batch pass uses the same window.
+
+function loudestWindow(signal: Float32Array, sampleRate: number, windowSeconds = QUICK_ANALYSIS_SECONDS) {
+  const windowSize = Math.min(signal.length, Math.floor(sampleRate * windowSeconds));
+  if (signal.length <= windowSize) return signal;
+
+  const hop = Math.floor(sampleRate * 5);
+  let bestStart = 0;
+  let bestEnergy = -1;
+
+  for (let start = 0; start <= signal.length - windowSize; start += hop) {
+    let energy = 0;
+    for (let sample = start; sample < start + windowSize; sample += 2048) {
+      energy += signal[sample] * signal[sample];
+    }
+    if (energy > bestEnergy) {
+      bestEnergy = energy;
+      bestStart = start;
+    }
+  }
+
+  return signal.subarray(bestStart, bestStart + windowSize);
+}
+
+async function decodeMonoFromArrayBuffer(arrayBuffer: ArrayBuffer) {
+  const audioContext = new AudioContext();
+  if (audioContext.state === "suspended") {
+    await audioContext.resume();
+  }
+
+  try {
+    const buffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+    return { mono: monoFromBuffer(buffer), sampleRate: buffer.sampleRate };
+  } finally {
+    await audioContext.close();
+  }
+}
+
+function hasQuickMetadata(analysis: ProcessedAudio["analysis"]) {
+  return analysis.bpm != null || analysis.key != null;
+}
+
+async function decodeAndAnalyze(
+  arrayBuffer: ArrayBuffer,
+  options: AudioProcessOptions,
+): Promise<ProcessedAudio> {
+  const cacheKey = options.cacheKey ?? await hashArrayBuffer(arrayBuffer);
+  const cached = getCachedAudio(cacheKey);
+  if (cached) {
+    retainCachedAudio(cacheKey);
+    return cached;
+  }
+
+  options.onProgress?.("decoding");
+
+  const objectUrl = URL.createObjectURL(new Blob([arrayBuffer], { type: options.format || "audio/wav" }));
+  const audioContext = new AudioContext();
+  if (audioContext.state === "suspended") {
+    await audioContext.resume();
+  }
+
+  try {
+    const buffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+    const mono = buffer.numberOfChannels === 1 ? buffer.getChannelData(0) : monoFromBuffer(buffer);
+    const { waveform, peaks, thumbnail } = measureWaveform(mono, buffer, options.peakCount ?? 512);
+    stageQuickWindow(cacheKey, mono, buffer.sampleRate);
+
+    let analysis = EMPTY_AUDIO_ANALYSIS;
+    if (options.analyze === "full") {
+      options.onProgress?.("analyzing");
+      try {
+        const mono = windowForFeatures(monoFromBuffer(buffer), buffer.sampleRate);
+        analysis = await analyzeSignal(mono, buffer.sampleRate);
+      } catch (error) {
+        console.warn("Audio analysis failed; continuing with waveform only.", error);
+      }
+    }
+
+    const processed: ProcessedAudio = {
+      cacheKey,
+      name: options.name,
+      duration: buffer.duration,
+      peaks,
+      waveform,
+      thumbnail,
+      objectUrl,
+      format: options.format || options.name.split(".").pop()?.toUpperCase() || "AUDIO",
+      sampleRate: buffer.sampleRate,
+      analysis,
+    };
+
+    setCachedAudio(processed);
+    return getCachedAudio(cacheKey)!;
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl);
+    throw error;
+  } finally {
+    await audioContext.close();
+  }
+}
+
+export async function processAudioBuffer(
+  arrayBuffer: ArrayBuffer,
+  options: AudioProcessOptions,
+): Promise<ProcessedAudio> {
+  const cacheKey = options.cacheKey ?? await hashArrayBuffer(arrayBuffer);
+  if (hasCachedAudio(cacheKey)) {
+    retainCachedAudio(cacheKey);
+    return getCachedAudio(cacheKey)!;
+  }
+
+  const existing = inflight.get(cacheKey);
+  if (existing) {
+    const processed = await existing;
+    retainCachedAudio(processed.cacheKey);
+    return processed;
+  }
+
+  const promise = decodeAndAnalyze(arrayBuffer, { ...options, cacheKey }).finally(() => {
+    inflight.delete(cacheKey);
+  });
+  inflight.set(cacheKey, promise);
+  return promise;
+}
+
+export async function processAudioFile(file: File, options: Omit<AudioProcessOptions, "name" | "format"> = {}) {
+  const arrayBuffer = await file.arrayBuffer();
+  return processAudioBuffer(arrayBuffer, {
+    ...options,
+    name: file.name,
+    format: file.type,
+  });
+}
+
+export async function processAudioUrl(
+  url: string,
+  name: string,
+  options: Omit<AudioProcessOptions, "name" | "format"> = {},
+) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not read managed audio (${response.status})`);
+  return processAudioBuffer(await response.arrayBuffer(), {
+    ...options,
+    name,
+    format: name.split(".").pop()?.toUpperCase() || "AUDIO",
+  });
+}
+
+async function decodeQuickWindowFromCached(cached: ProcessedAudio) {
+  const response = await fetch(cached.objectUrl);
+  const arrayBuffer = await response.arrayBuffer();
+  const { mono, sampleRate } = await decodeMonoFromArrayBuffer(arrayBuffer);
+  return { signal: loudestWindow(mono, sampleRate), sampleRate };
+}
+
+export async function quickAnalyzeCached(cacheKey: string): Promise<ProcessedAudio> {
+  const cached = getCachedAudio(cacheKey);
+  if (!cached) throw new Error("Audio not in cache");
+  if (hasQuickMetadata(cached.analysis)) return cached;
+
+  const existing = quickInflight.get(cacheKey);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const staged = takeQuickWindow(cacheKey) ?? await decodeQuickWindowFromCached(cached);
+    const analysis = await analyzeSignal(staged.signal, staged.sampleRate);
+    return updateCachedAnalysis(cacheKey, analysis) ?? cached;
+  })().finally(() => {
+    quickInflight.delete(cacheKey);
+  });
+
+  quickInflight.set(cacheKey, promise);
+  return promise;
+}
+
+export function bindSourceAudio(sourceId: string, cacheKey: string) {
+  aliasCacheKey(`source:${sourceId}`, cacheKey);
+
+  // The one place a decoded buffer becomes associated with a persisted source, so
+  // the one place worth checking whether that source still needs a sidecar. Not
+  // awaited: nothing on screen depends on it.
+  const cached = getCachedAudio(cacheKey);
+  if (cached) void backfillSourceWaveform(sourceId, cached.waveform);
+}
+
+export {
+  aliasCacheKey,
+  getCachedAudio,
+  hasCachedAudio,
+  releaseCachedAudio,
+  retainCachedAudio,
+  subscribeAudioCache,
+  updateCachedAnalysis,
+};
+
+export type { ProcessedAudio, EssentiaAnalysis, AudioProcessPhase } from "./types";

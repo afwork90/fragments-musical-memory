@@ -1,100 +1,61 @@
-# vinext-starter
+# Fragments — Musical Memory
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+Desktop app (Electron) for browsing source recordings, fragmenting them, and combining fragments into a musical library. Imported audio is copied into a flat-file library on disk (no database) so it persists across restarts. The same UI also runs as a plain web page in a browser, but only the Electron app persists imports and supports dragging audio out to the desktop/DAW.
 
 ## Prerequisites
 
 - Node.js `>=22.13.0`
 
-## Quick Start
+## Quick start
 
 ```bash
 npm install
-npm run dev
-npm run build
+npm run dev             # browser-only dev server (no persistence), http://localhost:3000
 ```
 
-This starter does not use `wrangler.jsonc`.
+Other useful scripts:
 
-## Included Shape
-
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
-
-## Workspace Auth Headers
-
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
-
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```bash
+npm run dev:electron    # launch Electron against an already-running dev server (needs `npm run dev` in another terminal)
+npm run dev:all         # renderer (Vite) + Electron together in one command, with hot reload
+npm run start:electron  # full build, then launch Electron once (no hot reload)
+npm run build           # build renderer + electron main process
+npm run test            # build + smoke tests
+npm run lint
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+## Local library
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+When running in Electron, imported audio files are copied into `~/Documents/Fragments Library/sources/<id>/`, each with the original audio file plus a `source.json` of metadata (duration, waveform peaks, BPM/key if analyzed). Override the location with the `FRAGMENTS_LIBRARY_ROOT` env var. In plain-browser mode there's no Electron bridge, so imports only live in memory for that tab.
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+## Building installers
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+```bash
+npm run dist:mac    # macOS dmg + zip, under release/
+npm run dist:win    # Windows nsis installer + zip, under release/
+```
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+`dist:win` can be run from macOS — electron-builder downloads its own bundled Wine automatically to build the Windows installer, no manual Wine install needed. On Apple Silicon, make sure Rosetta is installed (`softwareupdate --install-rosetta`) since the bundled Wine build runs under it. The resulting Windows build isn't code-signed.
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+## Repository layout
 
-## Useful Commands
+```
+fragments-musical-memory/
+├── app/                 # React UI, routes, demo fixtures (prototype-data.ts)
+├── electron/            # Electron main process, preload, persistence IPC, custom protocols
+├── lib/
+│   ├── audio/           # Decode, cache, Essentia BPM/key, waveform components, desktop drag-out
+│   ├── domain/          # library-service.mjs — flat-file library persistence core
+│   ├── ui/              # shadcn primitives (button, dialog, table)
+│   └── format.ts, utils.ts
+├── scripts/             # seed-library.mjs and other one-off maintenance scripts
+├── public/audio/        # Demo WAV corpus
+├── tests/               # Smoke tests (rendered HTML, library service, app protocol)
+├── vite.config.ts       # Vite + vinext plugin
+└── package.json
+```
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+## Learn more
 
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+- [vinext documentation](https://github.com/cloudflare/vinext)
+- [Electron native file drag & drop](https://www.electronjs.org/docs/latest/tutorial/native-file-drag-drop)
