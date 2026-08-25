@@ -1,17 +1,21 @@
 "use client";
 
-import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Pencil, Play, Square, Trash2 } from "lucide-react";
+import { DragEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Check, Hand, Pencil, Play, Square, Trash2 } from "lucide-react";
 import { ScrubbableWaveform } from "@/lib/audio/scrubbable-waveform";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
+import { useSourceWaveform } from "@/lib/audio/use-source-waveform";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
-import { formatMusicalKey, resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
+import { MIN_BPM_CONFIDENCE } from "@/lib/analysis/features";
+import { formatMusicalKey, fragmentKeyLabels, resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
 import { resolveSourceAudioUrl, buildFragmentPreviewScope } from "@/lib/audio/source-playback";
 import { Button } from "@/lib/ui/button";
 import { cn } from "@/lib/utils";
 import { formatSeconds } from "@/lib/format";
-import { Fragment, SourceFile } from "../../prototype-data";
+import type { DragTarget } from "@/lib/ipc/contract";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
 import { LibraryLinkSummary } from "./library-list";
 import { LibraryItem } from "./library-items";
 
@@ -38,13 +42,79 @@ type LibraryCardProps = {
   onSave?: () => void;
   onDelete?: () => void;
   isSaved?: boolean;
+  dragPayload?: DragPayload;
 };
 
-function MetaItem({ label, value }: { label: string; value: string }) {
+/**
+ * What a drag out of this card hands over, when it is not simply the managed source
+ * file.
+ *
+ * The affinities workspace supplies the rendered match here, so what a DAW receives
+ * is what was being auditioned — the slice, at the matched tempo, in the matched
+ * key.
+ */
+export type DragPayload = {
+  target: DragTarget;
+  /** For the browser, which cannot hand over a path. A blob URL is fine. */
+  audioUrl?: string;
+  fileName?: string;
+};
+
+/**
+ * Dragging a card out to the desktop or a DAW.
+ *
+ * Deliberately its own target rather than the waveform. The waveform's click places
+ * the playhead, so making the whole strip draggable put two gestures on one control
+ * and advertised only the one you could not perform by clicking — the tooltip said
+ * "drag me" while a click did something else entirely.
+ */
+function DragHandle({
+  disabled,
+  label,
+  onDragStart,
+}: {
+  disabled: boolean;
+  label: string;
+  onDragStart: (event: DragEvent<HTMLElement>) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="library-card-drag-handle"
+      draggable={!disabled}
+      disabled={disabled}
+      onDragStart={onDragStart}
+      // The card below would otherwise take a click that was only ever a missed grab.
+      onClick={(event) => event.stopPropagation()}
+      title={disabled ? undefined : "Drag onto your desktop or into a DAW"}
+      aria-label={label}
+    >
+      <Hand className="size-4" aria-hidden />
+    </button>
+  );
+}
+
+function MetaItem({
+  label,
+  value,
+  unsure,
+  hint,
+}: {
+  label: string;
+  value: string;
+  /** Measured, but not firmly enough for anything to act on. */
+  unsure?: boolean;
+  hint?: string;
+}) {
   return (
     <span className="library-card-meta-item">
       <span className="library-card-meta-label">{label}</span>
-      <span className="library-card-meta-value">{value}</span>
+      <span
+        className={cn("library-card-meta-value", unsure && "library-card-meta-unsure")}
+        title={hint}
+      >
+        {value}
+      </span>
     </span>
   );
 }
@@ -246,7 +316,6 @@ export function LibraryCard({
   isSelected,
   isPreviewing,
   previewProgress,
-  sourceNameFor,
   sourceForId,
   linkSummaryFor,
   fragmentAudioFor,
@@ -264,6 +333,7 @@ export function LibraryCard({
   onSave,
   onDelete,
   isSaved,
+  dragPayload,
 }: LibraryCardProps) {
   if (item.kind === "source") {
     return (
@@ -308,6 +378,7 @@ export function LibraryCard({
       onSave={onSave}
       onDelete={onDelete}
       isSaved={isSaved}
+      dragPayload={dragPayload}
     />
   );
 }
@@ -342,7 +413,8 @@ function SourceLibraryCard({
   waveActions?: ReactNode;
 }) {
   const cached = useCachedAudioBySourceId(source.id);
-  const peaks = cached?.peaks ?? source.waveform;
+  const sidecar = useSourceWaveform(source.id);
+  const peaks = cached?.peaks ?? sidecar ?? source.waveform;
   const matchCount = source.fragmentIds.reduce((sum, id) => sum + linkSummaryFor(id).total, 0);
   const analysis = resolvedSourceAnalysis(source, cached);
   const bpm = analysis.bpm;
@@ -364,7 +436,7 @@ function SourceLibraryCard({
         onOpenInfo={onOpenInfo}
         meta={(
           <>
-            <MetaItem label="Recorded" value={source.date} />
+            <MetaItem label="Imported" value={source.date} />
             <MetaItem label="Length" value={formatSeconds(source.duration)} />
             <MetaItem label="Key" value={keyLabel ?? "—"} />
             <MetaItem label="BPM" value={bpm != null ? String(bpm) : "—"} />
@@ -385,15 +457,7 @@ function SourceLibraryCard({
           {isPreviewing ? <Square className="size-4 fill-current" /> : <Play className="size-4 fill-current" />}
         </Button>
         {waveActions}
-        <div
-          className={cn("library-card-wave-slot", canPlay && "cursor-grab active:cursor-grabbing")}
-          draggable={canPlay}
-          onDragStart={(event) => {
-            if (!canPlay) return;
-            startDesktopDrag(event, { sourceId: source.id }, { audioUrl: resolveSourceAudioUrl(source, fragmentAudioFor) ?? "", fileName: `${source.name}.wav` });
-          }}
-          title={canPlay ? "Drag onto your desktop or into a DAW" : undefined}
-        >
+        <div className="library-card-wave-slot">
           <ScrubbableWaveform
             values={peaks}
             active={isPreviewing}
@@ -401,6 +465,13 @@ function SourceLibraryCard({
             onSeek={canPlay ? onSeek : undefined}
           />
         </div>
+        <DragHandle
+          disabled={!canPlay}
+          label={`Drag ${source.name} out`}
+          onDragStart={(event) => {
+            startDesktopDrag(event, { sourceId: source.id, label: source.name }, { audioUrl: resolveSourceAudioUrl(source, fragmentAudioFor) ?? "", fileName: `${source.name}.wav` });
+          }}
+        />
       </div>
     </article>
   );
@@ -428,6 +499,7 @@ function FragmentLibraryCard({
   onSave,
   onDelete,
   isSaved,
+  dragPayload,
 }: {
   fragment: Fragment;
   isSelected: boolean;
@@ -450,26 +522,44 @@ function FragmentLibraryCard({
   onSave?: () => void;
   onDelete?: () => void;
   isSaved?: boolean;
+  dragPayload?: DragPayload;
 }) {
   const source = sourceForId(fragment.sourceId);
   const links = linkSummaryFor(fragment.id);
-  const keyLabel =
-    formatMusicalKey(source?.key, source?.scale) ??
-    (fragment.key && fragment.key !== "—" ? fragment.key : null);
+  // The fragment's own measurement first. `fragment.key` already falls back to the
+  // source when the fragment was never measured, so reading the source here only
+  // hid what analysis found: an F# minor fragment of a D major take.
+  const [keyLabel] = fragmentKeyLabels(fragment, source);
+  // Essentia answers with a plausible tempo at zero confidence for unrhythmic audio,
+  // and 12 of 26 fragments come back that way. Printing that number bare is what made
+  // the transform console look arbitrary when it declined to match to it.
+  const tempoUnsure = fragment.bpm > 0
+    && fragment.measured !== undefined
+    && (fragment.measured.bpmConfidence ?? 0) < MIN_BPM_CONFIDENCE;
   const slice = source
     ? { start: fragment.start, end: fragment.end, duration: source.duration }
     : undefined;
   const cached = useCachedAudioBySourceId(fragment.sourceId);
+  const sidecar = useSourceWaveform(fragment.sourceId);
+  // Whole-source peaks, which still need slicing to this fragment. `fragment.waveform`
+  // is already a slice of the thumbnail, so it must not be sliced again.
+  const wholeSource = cached?.peaks ?? sidecar;
   const peaks = useMemo(() => {
     if (waveformValues) return waveformValues;
-    const base = cached?.peaks ?? fragment.waveform;
-    if (slice && cached?.peaks) {
-      return slicePeaks(base, slice.start, slice.end, slice.duration);
+    if (slice && wholeSource) {
+      return slicePeaks(wholeSource, slice.start, slice.end, slice.duration);
     }
-    return base;
-  }, [cached?.peaks, fragment.waveform, slice, waveformValues]);
+    return wholeSource ?? fragment.waveform;
+  }, [wholeSource, fragment.waveform, slice, waveformValues]);
   const canPlay = Boolean(source && buildFragmentPreviewScope(fragment, source, fragmentAudioFor));
-  const dragAudioUrl = source ? resolveSourceAudioUrl(source, fragmentAudioFor) ?? "" : "";
+  // Without an override the drag hands over the whole managed recording, which is
+  // all the main process can resolve from a source id alone. `label` is what keeps
+  // the dropped file from being named after a uuid.
+  const dragTarget = dragPayload?.target ?? { sourceId: fragment.sourceId, label: fragment.name };
+  const dragAudioUrl =
+    dragPayload?.audioUrl
+    ?? (source ? resolveSourceAudioUrl(source, fragmentAudioFor) ?? "" : "");
+  const dragFileName = dragPayload?.fileName ?? `${fragment.name}.wav`;
 
   return (
     <article
@@ -495,10 +585,20 @@ function FragmentLibraryCard({
         isSaved={isSaved}
         meta={(
           <>
-            <MetaItem label="Recorded" value={fragment.dateLabel} />
+            <MetaItem label="Imported" value={fragment.dateLabel} />
             <MetaItem label="Length" value={formatSeconds(fragment.end - fragment.start)} />
             <MetaItem label="Key" value={keyLabel ?? "—"} />
-            <MetaItem label="BPM" value={String(fragment.bpm)} />
+            <MetaItem
+              label="BPM"
+              value={fragment.bpm > 0 ? String(fragment.bpm) : "—"}
+              unsure={tempoUnsure}
+              hint={tempoUnsure
+                ? "Measured at low confidence, which is how essentia answers unrhythmic audio. Nothing matches tempo to it."
+                : undefined}
+            />
+            {/* Falls back to the denormalized name so a fragment whose source has
+                been archived still says where it came from. */}
+            <MetaItem label="Source" value={source?.name || fragment.source || "—"} />
           </>
         )}
       />
@@ -516,15 +616,7 @@ function FragmentLibraryCard({
           {isPreviewing ? <Square className="size-4 fill-current" /> : <Play className="size-4 fill-current" />}
         </Button>
         {waveActions}
-        <div
-          className={cn("library-card-wave-slot", canPlay && "cursor-grab active:cursor-grabbing")}
-          draggable={canPlay}
-          onDragStart={(event) => {
-            if (!canPlay || !dragAudioUrl) return;
-            startDesktopDrag(event, { sourceId: fragment.sourceId }, { audioUrl: dragAudioUrl, fileName: `${fragment.name}.wav` });
-          }}
-          title={canPlay ? "Drag onto your desktop or into a DAW" : undefined}
-        >
+        <div className="library-card-wave-slot">
           <ScrubbableWaveform
             values={peaks}
             active={isPreviewing}
@@ -532,6 +624,14 @@ function FragmentLibraryCard({
             onSeek={canPlay ? onSeek : undefined}
           />
         </div>
+        <DragHandle
+          disabled={!canPlay || !dragAudioUrl}
+          label={`Drag ${fragment.name} out`}
+          onDragStart={(event) => {
+            if (!dragAudioUrl) return;
+            startDesktopDrag(event, dragTarget, { audioUrl: dragAudioUrl, fileName: dragFileName });
+          }}
+        />
       </div>
     </article>
   );

@@ -1,11 +1,11 @@
-import { MusicalRole } from "../../prototype-data";
+import type { MusicalRole } from "@/lib/view/vocabulary";
 import { LibraryColumnDef, LibrarySort, LibrarySortColumn } from "./types";
 
 export const LIBRARY_COLUMNS: LibraryColumnDef[] = [
   { id: "name", label: "Name" },
   { id: "source", label: "Source" },
   { id: "signal", label: "Signal" },
-  { id: "date", label: "Recorded" },
+  { id: "date", label: "Imported" },
   { id: "uploaded", label: "Uploaded" },
   { id: "start", label: "Start" },
   { id: "end", label: "End" },

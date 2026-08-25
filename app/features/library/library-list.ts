@@ -4,8 +4,8 @@ import {
   sourceKeyLabels,
 } from "@/lib/audio/source-metadata";
 import { LibraryFilters, matchesRangeFilter } from "../../library-filter-popover";
-import { Fragment, SourceFile } from "../../prototype-data";
-import { LibrarySort } from "./types";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
 
 export type LibraryLinkSummary = { total: number; manual: number };
 
@@ -61,36 +61,3 @@ export function matchesSourceFilters(source: SourceFile, filters: LibraryFilters
   return true;
 }
 
-export function filterLibraryFragments(fragments: Fragment[], query: string, filters: LibraryFilters, ctx: LibraryListContext) {
-  const normalized = query.trim().toLowerCase();
-  return fragments.filter((fragment) => {
-    if (normalized && !`${fragment.name} ${ctx.sourceNameFor(fragment)} ${fragment.key} ${fragment.roles.join(" ")} ${fragment.userTags.join(" ")}`.toLowerCase().includes(normalized)) return false;
-    return matchesLibraryFilters(fragment, filters, ctx);
-  });
-}
-
-export function sortLibraryFragments(fragments: Fragment[], sort: LibrarySort, ctx: LibraryListContext) {
-  return [...fragments].sort((a, b) => {
-    let comparison = 0;
-    if (sort.column === "name") comparison = a.name.localeCompare(b.name);
-    if (sort.column === "source") comparison = ctx.sourceNameFor(a).localeCompare(ctx.sourceNameFor(b));
-    if (sort.column === "signal") comparison = a.brightness - b.brightness;
-    if (sort.column === "date") comparison = a.date.localeCompare(b.date);
-    if (sort.column === "start") comparison = a.start - b.start;
-    if (sort.column === "end") comparison = a.end - b.end;
-    if (sort.column === "duration") comparison = (a.end - a.start) - (b.end - b.start);
-    if (sort.column === "bars") comparison = a.bars - b.bars || a.beats - b.beats;
-    if (sort.column === "key") comparison = a.key.localeCompare(b.key);
-    if (sort.column === "tempo") comparison = a.bpm - b.bpm;
-    if (sort.column === "confidence") comparison = a.confidence - b.confidence;
-    if (sort.column === "tags") comparison = a.userTags.join(" ").localeCompare(b.userTags.join(" "));
-    if (sort.column === "role") comparison = a.role.localeCompare(b.role);
-    if (sort.column === "links") comparison = ctx.linkSummaryFor(a.id).total - ctx.linkSummaryFor(b.id).total;
-    if (sort.column === "takes") comparison = ctx.relatedTakeCountFor(a) - ctx.relatedTakeCountFor(b);
-    return sort.direction === "asc" ? comparison : -comparison;
-  });
-}
-
-export function visibleLibraryFragments(fragments: Fragment[], query: string, filters: LibraryFilters, sort: LibrarySort, ctx: LibraryListContext) {
-  return sortLibraryFragments(filterLibraryFragments(fragments, query, filters, ctx), sort, ctx);
-}

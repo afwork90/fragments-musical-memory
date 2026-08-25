@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownAZ, ArrowUpAZ, ListFilter } from "lucide-react";
+import { ArrowDownAZ, ArrowUpAZ, ListFilter, X } from "lucide-react";
 import { RefObject } from "react";
 import { activeLibraryFilterCount, LibraryFilters } from "../../library-filter-popover";
 import { LIBRARY_COLUMNS, toggleLibrarySort } from "./library-columns";
@@ -49,7 +49,19 @@ export function LibraryToolbar({
           placeholder="Search"
           aria-label="Search fragments"
         />
-        <kbd>⌘ K</kbd>
+        {query && (
+          <button
+            type="button"
+            className="search-clear"
+            onClick={() => {
+              onQueryChange("");
+              searchRef.current?.focus();
+            }}
+            aria-label="Clear search"
+          >
+            <X className="size-3.5" />
+          </button>
+        )}
       </label>
 
       <div className="library-toolbar-actions">

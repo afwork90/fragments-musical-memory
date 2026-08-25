@@ -23,15 +23,26 @@ import {
   updateCachedAnalysis,
 } from "@/lib/audio/audio-service";
 import type { ProcessedAudio } from "@/lib/audio/types";
+import type { BeginImportResult, FragmentsBridge, SourceRecord } from "@/lib/ipc/contract";
+import { getFragmentsBridge } from "@/lib/web/bridge";
 import { formatSeconds } from "@/lib/format";
-import { SourceType } from "@/app/prototype-data";
+import type { SourceType } from "@/lib/view/vocabulary";
+
+/**
+ * The bridge only if this host can actually copy a file into the library. The web
+ * preview has a bridge for reading, so presence alone is not permission to import.
+ */
+function importBridge(): FragmentsBridge | null {
+  const bridge = getFragmentsBridge();
+  return bridge?.capabilities.import ? bridge : null;
+}
 
 export type ImportedSource = ProcessedAudio & {
   sourceTypes: SourceType[];
   persistedId?: string;
   persistedAudioUrl?: string;
   restored?: boolean;
-  persistedDocument?: Record<string, unknown>;
+  persistedDocument?: SourceRecord;
 };
 
 type ImportDialogProps = {
@@ -116,7 +127,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const previewCacheKeyRef = useRef<string | null>(null);
-  const pendingImportRef = useRef<{ id: string; restored?: boolean; duration?: number | null; audioUrl?: string } | null>(null);
+  const pendingImportRef = useRef<BeginImportResult | null>(null);
   const analysisRequestRef = useRef(0);
 
   const releasePreview = () => {
@@ -127,7 +138,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   };
 
   const reset = () => {
-    const bridge = (window as any).fragments;
+    const bridge = importBridge();
     if (pendingImportRef.current && bridge) {
       const pending = pendingImportRef.current;
       if (!pending.restored && !pending.duration) {
@@ -193,8 +204,10 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   };
 
   const chooseManagedFile = async () => {
-    const bridge = (window as any).fragments;
+    const bridge = importBridge();
     if (!bridge) {
+      // No managed import here (browser preview): decode a file in-memory so the
+      // dialog still demonstrates the flow without pretending it was persisted.
       inputRef.current?.click();
       return;
     }
@@ -207,8 +220,8 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
       pendingImportRef.current = pending;
       const next = await processAudioUrl(pending.audioUrl, pending.originalName, { analyze: false });
       applyDecoded(next);
-      const persistedAnalysis = pending.analysis as { bpm?: number | null; key?: string | null; scale?: string | null; keyStrength?: number | null } | undefined;
-      if (pending.restored && persistedAnalysis && (persistedAnalysis.bpm != null || persistedAnalysis.key != null)) {
+      const persistedAnalysis = pending.analysis;
+      if (pending.restored && (persistedAnalysis.bpm != null || persistedAnalysis.key != null)) {
         const enriched = updateCachedAnalysis(next.cacheKey, {
           ...next.analysis,
           bpm: persistedAnalysis.bpm ?? null,
@@ -272,13 +285,13 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
     let persistedId: string | undefined;
     let persistedAudioUrl: string | undefined;
     let restored = false;
-    let persistedDocument: Record<string, unknown> | undefined;
-    const bridge = (window as any).fragments;
+    let persistedDocument: SourceRecord | undefined;
+    const bridge = importBridge();
     const pending = pendingImportRef.current;
     if (bridge && pending) {
       if (pending.restored || pending.duration) {
         const listed = await bridge.listSources();
-        const existing = listed.find((item: { id: string }) => item.id === pending.id);
+        const existing = listed.find((item) => item.id === pending.id);
         persistedId = (existing ?? pending).id;
         persistedAudioUrl = (existing ?? pending).audioUrl ?? pending.audioUrl;
         restored = Boolean(pending.restored);
@@ -288,12 +301,18 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
           duration: decoded.duration,
           format: decoded.format,
           sampleRate: decoded.sampleRate,
-          waveform: { version: 1, count: decoded.peaks.length, peaks: decoded.peaks },
+          // The thumbnail, not `decoded.peaks`: display peaks run at 200/second, which
+          // for a six-minute import is ~70k numbers, and `source.json` is rewritten
+          // atomically on every metadata edit. High resolution lives in a sidecar.
+          waveform: { version: 1, count: decoded.thumbnail.length, peaks: decoded.thumbnail },
           analysis: decoded.analysis,
         });
         persistedId = finalized.id;
         persistedAudioUrl = finalized.audioUrl;
       }
+      // The high-resolution sidecar is written by `bindSourceAudio`, which the app
+      // calls once this resolves — the same path that backfills a source imported
+      // before sidecars existed.
       pendingImportRef.current = null;
     }
     releasePreview();

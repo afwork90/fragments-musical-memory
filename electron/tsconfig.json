@@ -11,7 +11,11 @@
   },
   "include": [
     "./**/*.ts",
-    "../shared/**/*.ts",
-    "../lib/domain/**/*.ts"
+    "../lib/domain/**/*.ts",
+    "../lib/ipc/**/*.ts",
+    "../lib/analysis/**/*.ts",
+    "../lib/affinity/**/*.ts",
+    "../lib/view/**/*.ts",
+    "../types/**/*.d.ts"
   ]
 }

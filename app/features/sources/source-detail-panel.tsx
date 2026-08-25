@@ -1,15 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Play, Square } from "lucide-react";
+import { MIN_BPM_CONFIDENCE } from "@/lib/analysis/features";
 import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
+import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { formatMusicalKey, resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
 import { Button } from "@/lib/ui/button";
 import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
+import { useSourceWaveform } from "@/lib/audio/use-source-waveform";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
 import { formatSeconds } from "@/lib/format";
-import { Fragment, MusicalRole, SourceFile } from "../../prototype-data";
+import type { MeasuredSummary } from "@/lib/view/analysis";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
+import type { MusicalRole } from "@/lib/view/vocabulary";
 import { LIBRARY_ROLES } from "../library/library-columns";
 import { cn } from "@/lib/utils";
 
@@ -37,16 +43,64 @@ type SourceDetailPanelProps = {
   onSaveFragmentMeta?: (fragmentId: string, meta: FragmentLibraryMeta) => void;
 };
 
-function MetadataRow({ label, value }: { label: string; value: string }) {
+function MetadataRow({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
   return (
     <div className="flex items-baseline justify-between gap-4 border-b border-border/50 py-2 last:border-b-0">
-      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <span
+        className="shrink-0 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground"
+        title={hint}
+      >
         {label}
       </span>
       <span className="min-w-0 truncate text-[11px] text-foreground/90" title={value}>
         {value}
       </span>
     </div>
+  );
+}
+
+/** The 12 chroma bins, in the order essentia emits them: bin 0 is A. */
+const PITCH_CLASS_NAMES = ["A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"];
+
+/**
+ * The chroma vector as twelve bars.
+ *
+ * Unlabelled on purpose: at this size the numbers would be unreadable and the
+ * shape is the point — which pitch classes a fragment leans on, and whether it
+ * leans at all. Heights are relative to the strongest bin, so this shows the
+ * balance between pitch classes and not how loud the fragment was.
+ */
+function ChromaSparkline({ chroma }: { chroma: number[] }) {
+  const peak = Math.max(...chroma);
+  if (!(peak > 0)) return null;
+
+  const strongest = PITCH_CLASS_NAMES[chroma.indexOf(peak)] ?? "—";
+
+  return (
+    <span
+      className="chroma-sparkline"
+      role="img"
+      aria-label={`Pitch class balance, strongest ${strongest}`}
+      title={chroma
+        .map((value, index) => `${PITCH_CLASS_NAMES[index]} ${Math.round((value / peak) * 100)}%`)
+        .join("  ")}
+    >
+      {chroma.map((value, index) => (
+        <span
+          key={PITCH_CLASS_NAMES[index]}
+          className="chroma-sparkline-bar"
+          style={{ height: `${(value / peak) * 100}%` }}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -63,7 +117,19 @@ export function SourceDetailPanel({
   onSaveFragmentMeta,
 }: SourceDetailPanelProps) {
   const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
-  const values = cached?.peaks ?? source.waveform;
+  const sidecar = useSourceWaveform(source.id);
+  const wholeSource = cached?.peaks ?? sidecar;
+  // A fragment's panel must show the fragment. Showing the whole recording made
+  // every fragment of one source look identical, which is exactly the information
+  // the panel exists to give.
+  const values = useMemo(() => {
+    if (fragment) {
+      return wholeSource
+        ? slicePeaks(wholeSource, fragment.start, fragment.end, source.duration)
+        : fragment.waveform;
+    }
+    return wholeSource ?? source.waveform;
+  }, [fragment, wholeSource, source.waveform, source.duration]);
   const { bpm: resolvedBpm, key: resolvedKey, scale: resolvedScale, keyStrength } = resolvedSourceAnalysis(source, cached);
   const keyLabel = formatMusicalKey(resolvedKey, resolvedScale);
   const roleOptions = LIBRARY_ROLES.filter((role): role is MusicalRole => role !== "All");
@@ -297,15 +363,133 @@ export function SourceDetailPanel({
         ) : null}
 
         <div>
-          <MetadataRow label="Recorded" value={source.date} />
-          <MetadataRow label="Duration" value={formatSeconds(source.duration)} />
+          {fragment ? (
+            <>
+              <MetadataRow label="Source" value={source.name} />
+              <MetadataRow label="Position" value={`${formatSeconds(fragment.start)} – ${formatSeconds(fragment.end)}`} />
+              <MetadataRow label="Duration" value={formatSeconds(fragment.end - fragment.start)} />
+            </>
+          ) : (
+            <>
+              <MetadataRow label="Duration" value={formatSeconds(source.duration)} />
+              <MetadataRow label="Fragments" value={String(fragmentCount)} />
+            </>
+          )}
           <MetadataRow label="Format" value={source.format} />
-          <MetadataRow label="Device" value={source.device} />
-          <MetadataRow label="Type" value={source.sourceTypes.join(" · ") || "—"} />
-          <MetadataRow label="Profile" value={source.analysisProfile.name} />
-          <MetadataRow label="Fragments" value={String(fragmentCount)} />
+          {/* `date` is derived from importedAt, so it is when this arrived in the
+              library, not when it was recorded — which nothing on disk records. */}
+          <MetadataRow label="Imported" value={source.date} />
         </div>
+
+        <MeasuredBlock measured={fragment ? fragment.measured : source.measured} />
       </div>
     </aside>
   );
+}
+
+/**
+ * The measurements, or an honest statement that there are none.
+ *
+ * Every value can be absent, and absent renders as "—". A tempo is shown with its
+ * confidence because essentia returns a plausible BPM at confidence 0 for short or
+ * unrhythmic audio, and a bare "139 BPM" would present that as settled.
+ *
+ * Each row is a number a musician can act on, which is why the raw MFCC means and
+ * the feature sample rate are not here: one has no readable units and the other is
+ * a property of the pipeline, not of the audio. Labels say what the number means
+ * rather than which algorithm produced it — "Rhythmic", not "Onsets".
+ */
+function MeasuredBlock({ measured }: { measured?: MeasuredSummary }) {
+  if (!measured) {
+    return (
+      <div className="space-y-1 rounded-lg border border-border bg-card/40 p-4">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Measured</span>
+        {/* No command here: the panel is read by whoever is using the app, not by
+            whoever is building it. Where analysis comes from is our problem. */}
+        <p className="text-[11px] text-muted-foreground">
+          Nothing measured yet, so any tempo or key shown above is the recording&apos;s own or
+          a placeholder.
+        </p>
+      </div>
+    );
+  }
+
+  const tempo = measured.bpm === null
+    ? "—"
+    : measured.bpmConfidence === null
+      ? `${measured.bpm} BPM`
+      : measured.bpmConfidence >= MIN_BPM_CONFIDENCE
+        ? `${measured.bpm} BPM · confidence ${measured.bpmConfidence.toFixed(2)}`
+        : `${measured.bpm} BPM · confidence ${measured.bpmConfidence.toFixed(2)}, too low to trust`;
+
+  const key = measured.key
+    ? `${formatMusicalKey(measured.key, measured.scale) ?? measured.key}${measured.keyStrength != null ? ` · ${measured.keyStrength}% strength` : ""}`
+    : "—";
+
+  const loudness = measured.lufs === null
+    ? "—"
+    : measured.loudnessRange === null
+      ? `${measured.lufs.toFixed(1)} LUFS`
+      : `${measured.lufs.toFixed(1)} LUFS · range ${measured.loudnessRange.toFixed(1)} LU`;
+
+  // Head and tail only. An interior gap count is not shipped: essentia's
+  // GapsDetector found none anywhere in the library, and a hand-rolled envelope
+  // count swung from 0 to 17 gaps on one recording across a 10dB span of
+  // threshold, which makes it a knob rather than a measurement.
+  const silence = measured.leadingSilence === null && measured.trailingSilence === null
+    ? "—"
+    : measured.leadingSilence === 0 && measured.trailingSilence === 0
+      ? "none"
+      : `head ${(measured.leadingSilence ?? 0).toFixed(2)}s · tail ${(measured.trailingSilence ?? 0).toFixed(2)}s`;
+
+  return (
+    <div className="space-y-1 rounded-lg border border-border bg-card/40 p-4">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Measured</span>
+      <div>
+        <MetadataRow label="Tempo" value={tempo} />
+        <MetadataRow label="Key" value={key} />
+        <MetadataRow
+          label="Rhythmic"
+          hint="Detected note attacks per second. A pad is near zero; a drum take is several."
+          value={measured.onsetsPerSecond === null ? "—" : `${measured.onsetsPerSecond.toFixed(1)} onsets/sec`}
+        />
+        <MetadataRow
+          label="Brightness"
+          hint="Spectral centroid: where the energy sits."
+          value={measured.centroidHz === null ? "—" : `${Math.round(measured.centroidHz)} Hz`}
+        />
+        <MetadataRow
+          label="Texture"
+          hint="Spectral flatness: how tonal or how noise-like the sound is."
+          value={measured.flatness === null ? "—" : `${measured.flatness.toFixed(2)} (0 tonal, 1 noise)`}
+        />
+        <MetadataRow label="Loudness" hint="Integrated loudness over the analysed audio." value={loudness} />
+        <MetadataRow
+          label="Dynamics"
+          hint="Dynamic complexity: how much the level moves. A steady loop is low; a performance that breathes is high."
+          value={measured.dynamicComplexity === null ? "—" : `${measured.dynamicComplexity.toFixed(1)} dB`}
+        />
+        <MetadataRow label="Intensity" value={intensityLabel(measured.intensity)} />
+        <MetadataRow label="Silence" hint="Silence at the head and tail, worth trimming." value={silence} />
+        <div className="flex items-center justify-between gap-4 border-b border-border/50 py-2 last:border-b-0">
+          <span
+            className="shrink-0 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground"
+            title="Which pitch classes the fragment leans on, octaves collapsed. Hover for the balance."
+          >
+            Chroma
+          </span>
+          {measured.chroma
+            ? <ChromaSparkline chroma={measured.chroma} />
+            : <span className="text-[11px] text-foreground/90">—</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Essentia's intensity is -1, 0 or 1; the numbers mean nothing to a reader. */
+function intensityLabel(intensity: number | null) {
+  if (intensity === null) return "—";
+  if (intensity < 0) return "Relaxed";
+  return intensity > 0 ? "Aggressive" : "Moderate";
 }

@@ -1,4 +1,5 @@
-import { Fragment, SourceFile } from "@/app/prototype-data";
+import type { Fragment } from "../view/fragment";
+import type { SourceFile } from "../view/source-file";
 
 export type PreviewClip = {
   start: number;
@@ -21,9 +22,18 @@ export function resolveSourceAudioUrl(
   return null;
 }
 
+/**
+ * Whether clip positions mean anything against this URL.
+ *
+ * A `/audio/` asset is one of the demo dataset's per-fragment files, so it *is* already
+ * a slice: the demo source's `audioUrl` is its first fragment's file, and the fragment
+ * offsets belong to a timeline that file does not have. Seeking a 20-second file to
+ * 2:14 fails quietly and playback stays at 0, so every fragment of that source played
+ * its first fragment from the top. An `imported` flag used to override this, which is
+ * what put the staged demo source — the one with fragments to compare — on that path.
+ */
 function sourceSupportsSlicing(source: SourceFile | undefined, sourceUrl: string | null): boolean {
   if (!source || !sourceUrl || source.duration <= 0) return false;
-  if (source.audioCacheKey || source.imported) return true;
   return !sourceUrl.startsWith("/audio/");
 }
 

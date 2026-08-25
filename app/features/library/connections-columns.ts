@@ -3,7 +3,7 @@ export const CONNECTIONS_COLUMNS = [
   { id: "name", label: "Fragment" },
   { id: "source", label: "Source" },
   { id: "signal", label: "Signal" },
-  { id: "date", label: "Recorded" },
+  { id: "date", label: "Imported" },
   { id: "key", label: "Key" },
   { id: "tempo", label: "BPM" },
   { id: "role", label: "Role" },

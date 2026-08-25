@@ -1,12 +1,16 @@
-// @ts-nocheck
 import { app, dialog, ipcMain, nativeImage, net, protocol } from "electron";
+import type { IpcMainInvokeEvent } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveRendererPath } from "./protocols/resolve-renderer-path.js";
+import { createLibraryService } from "../lib/domain/library-service.js";
+import { resolveLibraryRoot } from "../lib/domain/paths.js";
+import { FRAGMENTS_CHANNELS } from "../lib/ipc/contract.js";
+import type { DragTarget, SourceRecord } from "../lib/ipc/contract.js";
+import type { SourceDocument } from "../lib/domain/source-document.js";
 
 const AUDIO_SCHEME = "fragments-audio";
-const nativeImport = new Function("specifier", "return import(specifier)");
 
 // `startDrag` requires a non-empty icon on macOS. Electron's own native-drag
 // tutorial writes the icon to a real file on disk and passes a path (rather
@@ -35,14 +39,15 @@ export function registerAudioScheme() {
 }
 
 export async function initializePersistence() {
-  const modulePath = app.isPackaged
-    ? path.join(process.resourcesPath, "library-service.mjs")
-    : path.join(app.getAppPath(), "lib", "domain", "library-service.mjs");
-  const { createLibraryService } = await nativeImport(pathToFileURL(modulePath).href);
-  const libraryRoot = process.env.FRAGMENTS_LIBRARY_ROOT
-    || path.join(app.getPath("documents"), "Fragments Library");
+  const libraryRoot = resolveLibraryRoot(app.getPath("documents"));
   const library = createLibraryService(libraryRoot);
-  const audioUrl = (id) => `${AUDIO_SCHEME}://source/${encodeURIComponent(id)}`;
+  const audioUrl = (id: string) => `${AUDIO_SCHEME}://source/${encodeURIComponent(id)}`;
+
+  /** Adds the custom-protocol audio URL the renderer needs but disk does not store. */
+  const withAudioUrl = <T extends SourceDocument>(source: T): T & SourceRecord => ({
+    ...source,
+    audioUrl: audioUrl(source.id),
+  });
 
   protocol.handle(AUDIO_SCHEME, async (request) => {
     const url = new URL(request.url);
@@ -53,10 +58,16 @@ export async function initializePersistence() {
     return net.fetch(pathToFileURL(library.resolveAudioPath(id, source.audioFile)).href);
   });
 
-  function logged(channel, handler) {
+  // Handler args arrive over IPC as `unknown` by construction: a compromised or
+  // buggy renderer can send anything. Each handler therefore asserts the shapes
+  // it needs, and the library service validates again before writing.
+  function logged(
+    channel: string,
+    handler: (event: IpcMainInvokeEvent, ...args: never[]) => unknown,
+  ) {
     ipcMain.handle(channel, async (event, ...args) => {
       try {
-        return await handler(event, ...args);
+        return await handler(event, ...(args as never[]));
       } catch (error) {
         console.error(`[fragments] ${channel} failed:`, error);
         throw error;
@@ -64,43 +75,88 @@ export async function initializePersistence() {
     });
   }
 
-  logged("fragments:pick-audio", async () => {
+  function assertId(value: unknown): string {
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error("source id must be a non-empty string");
+    }
+    return value;
+  }
+
+  /** The service rejects traversal too; this keeps the wrong type out first. */
+  function assertFileName(value: unknown): string {
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error("file name must be a non-empty string");
+    }
+    return value;
+  }
+
+  function asBytes(value: unknown, label: string): Uint8Array {
+    if (!(value instanceof ArrayBuffer) && !ArrayBuffer.isView(value)) {
+      throw new Error(`${label} payload must be binary`);
+    }
+    return value instanceof ArrayBuffer
+      ? new Uint8Array(value)
+      : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+
+  logged(FRAGMENTS_CHANNELS.pickAudio, async () => {
     const result = await dialog.showOpenDialog({
       properties: ["openFile"],
       filters: [{ name: "Audio", extensions: ["wav", "mp3", "m4a", "aif", "aiff", "flac", "ogg"] }],
     });
     return result.canceled ? null : result.filePaths[0];
   });
-  logged("fragments:begin-import", async (_event, filePath) => {
-    const source = await library.beginImport(filePath);
-    return { ...source, audioUrl: audioUrl(source.id) };
+  logged(FRAGMENTS_CHANNELS.beginImport, async (_event, filePath: unknown) => {
+    if (typeof filePath !== "string" || filePath.length === 0) {
+      throw new Error("beginImport requires a file path");
+    }
+    return withAudioUrl(await library.beginImport(filePath));
   });
-  logged("fragments:finalize-import", async (_event, id, metadata) => {
-    const source = await library.finalizeImport(id, metadata);
-    return { ...source, audioUrl: audioUrl(source.id) };
-  });
-  logged("fragments:cancel-import", (_event, id) => library.cancelImport(id));
-  logged("fragments:archive-source", async (_event, id) => {
-    const source = await library.archiveSource(id);
-    return { ...source, audioUrl: audioUrl(source.id) };
-  });
-  logged("fragments:list-sources", async () => (
+  logged(FRAGMENTS_CHANNELS.finalizeImport, async (_event, id: unknown, metadata: unknown) => (
+    // The service validates `metadata` before writing anything.
+    withAudioUrl(await library.finalizeImport(assertId(id), metadata as never))
+  ));
+  logged(FRAGMENTS_CHANNELS.cancelImport, (_event, id: unknown) => library.cancelImport(assertId(id)));
+  logged(FRAGMENTS_CHANNELS.archiveSource, async (_event, id: unknown) => (
+    withAudioUrl(await library.archiveSource(assertId(id)))
+  ));
+  logged(FRAGMENTS_CHANNELS.deleteSource, (_event, id: unknown) => library.deleteSource(assertId(id)));
+  logged(FRAGMENTS_CHANNELS.listSources, async () => (
     (await library.listSources())
       .filter((source) => source.duration)
-      .map((source) => ({ ...source, audioUrl: audioUrl(source.id) }))
+      .map(withAudioUrl)
   ));
-  logged("fragments:update-source-analysis", async (_event, id, analysis) => {
-    const source = await library.updateSourceAnalysis(id, analysis);
-    return { ...source, audioUrl: audioUrl(source.id) };
+  logged(FRAGMENTS_CHANNELS.updateSourceAnalysis, async (_event, id: unknown, analysis: unknown) => (
+    withAudioUrl(await library.updateSourceAnalysis(assertId(id), analysis as never))
+  ));
+  logged(FRAGMENTS_CHANNELS.updateSourceSettings, async (_event, id: unknown, settings: unknown) => (
+    withAudioUrl(await library.updateSourceSettings(assertId(id), settings as never))
+  ));
+  logged(FRAGMENTS_CHANNELS.updateFragments, async (_event, id: unknown, fragments: unknown) => (
+    withAudioUrl(await library.updateFragments(assertId(id), fragments as never))
+  ));
+  logged(FRAGMENTS_CHANNELS.updateRelationships, async (_event, id: unknown, relationships: unknown) => (
+    withAudioUrl(await library.updateRelationships(assertId(id), relationships as never))
+  ));
+  logged(FRAGMENTS_CHANNELS.readWaveform, async (_event, id: unknown) => {
+    const bytes = await library.readWaveform(assertId(id));
+    // A fresh copy, because a Buffer view over a pooled allocation would serialise
+    // whatever else shares that pool.
+    return bytes ? new Uint8Array(bytes).slice().buffer : null;
   });
-  logged("fragments:update-fragments", async (_event, id, fragments) => {
-    const source = await library.updateFragments(id, fragments);
-    return { ...source, audioUrl: audioUrl(source.id) };
+  logged(FRAGMENTS_CHANNELS.writeWaveform, async (_event, id: unknown, bytes: unknown) => {
+    await library.writeWaveform(assertId(id), asBytes(bytes, "waveform"));
   });
-  logged("fragments:update-relationships", async (_event, id, relationships) => {
-    const source = await library.updateRelationships(id, relationships);
-    return { ...source, audioUrl: audioUrl(source.id) };
+  logged(FRAGMENTS_CHANNELS.readRender, async (_event, id: unknown, fileName: unknown) => {
+    const bytes = await library.readRender(assertId(id), assertFileName(fileName));
+    return bytes ? new Uint8Array(bytes).slice().buffer : null;
   });
+  logged(
+    FRAGMENTS_CHANNELS.writeRender,
+    async (_event, id: unknown, fileName: unknown, bytes: unknown) => {
+      await library.writeRender(assertId(id), assertFileName(fileName), asBytes(bytes, "render"));
+    },
+  );
 
   const icon = dragIcon();
   const publicAssetsRoot = process.env.ELECTRON_RENDERER_URL
@@ -114,7 +170,7 @@ export async function initializePersistence() {
   // receiving app even though drag metadata (name/extension) comes through -
   // some DAWs show a placeholder and then drop nothing. Staging a throwaway
   // copy in the (unprotected) temp folder before dragging works around this.
-  async function stageForDrag(filePath, label) {
+  async function stageForDrag(filePath: string, label: string) {
     const stagingDir = path.join(app.getPath("temp"), "fragments-drag-staging");
     await fs.promises.mkdir(stagingDir, { recursive: true });
     const extension = path.extname(filePath) || ".wav";
@@ -124,12 +180,20 @@ export async function initializePersistence() {
     return staged;
   }
 
-  ipcMain.on("fragments:start-drag", async (event, target) => {
+  ipcMain.on(FRAGMENTS_CHANNELS.startDrag, async (event, target: string | DragTarget | null) => {
     try {
       const sourceId = typeof target === "string" ? target : target?.sourceId;
-      const assetPath = typeof target === "object" ? target?.assetPath : null;
-      let filePath = null;
-      if (sourceId) {
+      const assetPath = (typeof target === "object" ? target?.assetPath : null) ?? null;
+      const renderFile = (typeof target === "object" ? target?.renderFile : null) ?? null;
+      let filePath: string | null = null;
+      if (sourceId && renderFile) {
+        // A render is the fragment itself — sliced, and matched if that was asked
+        // for — so it wins over the whole recording. Missing is normal: it may have
+        // been pruned, or never written because this host cannot persist.
+        const candidate = library.resolveRenderPath(sourceId, renderFile);
+        if (await fs.promises.stat(candidate).then(() => true, () => false)) filePath = candidate;
+      }
+      if (!filePath && sourceId) {
         const source = (await library.listSources()).find((item) => item.id === sourceId);
         if (source) filePath = library.resolveAudioPath(sourceId, source.audioFile);
       }
@@ -137,7 +201,9 @@ export async function initializePersistence() {
         filePath = resolveRendererPath(publicAssetsRoot, assetPath);
       }
       if (!filePath) return;
-      const label = sourceId || path.basename(assetPath || filePath, path.extname(filePath));
+      const label = (typeof target === "object" ? target?.label : null)
+        || sourceId
+        || path.basename(assetPath || filePath, path.extname(filePath));
       const staged = await stageForDrag(filePath, label).catch((error) => {
         console.error("[fragments] drag staging failed, dragging original path:", error);
         return filePath;

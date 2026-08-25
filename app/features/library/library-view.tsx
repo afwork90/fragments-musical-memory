@@ -1,8 +1,10 @@
 "use client";
 
 import { CSSProperties, ReactNode, RefObject, useMemo } from "react";
-import { sourceKeyLabels, uniqueKeyLabels } from "@/lib/audio/source-metadata";
-import { Fragment, MusicalRole, SourceFile } from "../../prototype-data";
+import { fragmentKeyLabels, sourceKeyLabels, uniqueKeyLabels } from "@/lib/audio/source-metadata";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
+import type { MusicalRole } from "@/lib/view/vocabulary";
 import { LIBRARY_ROLES } from "./library-columns";
 import { visibleLibraryItems } from "./library-items";
 import { LibraryLinkSummary } from "./library-list";
@@ -100,11 +102,8 @@ export function LibraryView({
     () =>
       uniqueKeyLabels([
         ...sources.flatMap((source) => sourceKeyLabels(source)),
-        ...fragments.flatMap((fragment) => {
-          const fromSource = sourceKeyLabels(sourceForId(fragment.sourceId));
-          if (fromSource.length) return fromSource;
-          return fragment.key && fragment.key !== "—" ? [fragment.key] : [];
-        }),
+        // The same rule the filter matches with, so every option offered can hit.
+        ...fragments.flatMap((fragment) => fragmentKeyLabels(fragment, sourceForId(fragment.sourceId))),
       ]),
     [sources, fragments, sourceForId],
   );

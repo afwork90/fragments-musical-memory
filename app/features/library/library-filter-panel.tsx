@@ -1,6 +1,6 @@
 "use client";
 
-import { MusicalRole } from "../../prototype-data";
+import type { MusicalRole } from "@/lib/view/vocabulary";
 import {
   LibraryFilters,
   RangeFilter,
@@ -107,7 +107,6 @@ export function LibraryFilterPanel({
   filters,
   keyOptions,
   tagOptions,
-  roleOptions,
   resultCount,
   totalCount,
   onChange,

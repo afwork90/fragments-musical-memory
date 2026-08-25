@@ -8,9 +8,12 @@ import {
   subscribeAudioCache,
   updateCachedAnalysis,
 } from "./audio-cache";
+import { windowForFeatures } from "../analysis/features";
+import { computePeaks, magnitudes, peaksForRange } from "../analysis/peaks";
+import { backfillSourceWaveform } from "./waveform-sidecar";
 import type { AudioProcessOptions, ProcessedAudio } from "./types";
 import { EMPTY_AUDIO_ANALYSIS } from "./types";
-import { analyzeQuick, analyzeSignal } from "./essentia-analyze";
+import { analyzeSignal } from "./essentia-analyze";
 
 export const QUICK_ANALYSIS_SECONDS = 20;
 
@@ -18,11 +21,10 @@ const inflight = new Map<string, Promise<ProcessedAudio>>();
 const quickInflight = new Map<string, Promise<ProcessedAudio>>();
 const stagedQuickWindows = new Map<string, { signal: Float32Array; sampleRate: number }>();
 
-function stageQuickWindow(cacheKey: string, buffer: AudioBuffer) {
-  const mono = monoFromBuffer(buffer);
+function stageQuickWindow(cacheKey: string, mono: Float32Array, sampleRate: number) {
   stagedQuickWindows.set(cacheKey, {
-    signal: loudestWindow(mono, buffer.sampleRate),
-    sampleRate: buffer.sampleRate,
+    signal: loudestWindow(mono, sampleRate),
+    sampleRate,
   });
 }
 
@@ -74,32 +76,22 @@ function monoFromBuffer(buffer: AudioBuffer) {
   return mono;
 }
 
-function peaksFromBuffer(buffer: AudioBuffer, count: number) {
-  const channel = buffer.numberOfChannels === 1
-    ? buffer.getChannelData(0)
-    : monoFromBuffer(buffer);
-  const blockSize = Math.max(1, Math.floor(channel.length / count));
-  const peaks: number[] = [];
+/**
+ * Measures the waveform once, then derives both the high-resolution display peaks
+ * and the small thumbnail that gets persisted, so the signal is only walked once.
+ */
+function measureWaveform(mono: Float32Array, buffer: AudioBuffer, thumbnailCount: number) {
+  const waveform = computePeaks(mono, buffer.sampleRate);
+  const points = waveform.pairs.length / 2;
 
-  for (let index = 0; index < count; index++) {
-    const start = index * blockSize;
-    const end = Math.min(channel.length, start + blockSize);
-    let max = 0;
-
-    for (let sample = start; sample < end; sample++) {
-      max = Math.max(max, Math.abs(channel[sample]));
-    }
-
-    peaks.push(Math.max(4, Math.round(max * 100)));
-  }
-
-  return peaks;
+  return {
+    waveform,
+    peaks: magnitudes(peaksForRange(waveform, 0, buffer.duration, points)),
+    thumbnail: magnitudes(peaksForRange(waveform, 0, buffer.duration, thumbnailCount)),
+  };
 }
 
-function signalForAnalysis(signal: Float32Array, sampleRate: number, maxSeconds = 90) {
-  const maxSamples = Math.min(signal.length, Math.floor(sampleRate * maxSeconds));
-  return signal.length === maxSamples ? signal : signal.subarray(0, maxSamples);
-}
+// The cap lives in `lib/analysis/features` so the batch pass uses the same window.
 
 function loudestWindow(signal: Float32Array, sampleRate: number, windowSeconds = QUICK_ANALYSIS_SECONDS) {
   const windowSize = Math.min(signal.length, Math.floor(sampleRate * windowSeconds));
@@ -162,15 +154,16 @@ async function decodeAndAnalyze(
 
   try {
     const buffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
-    const peaks = peaksFromBuffer(buffer, options.peakCount ?? 512);
-    stageQuickWindow(cacheKey, buffer);
+    const mono = buffer.numberOfChannels === 1 ? buffer.getChannelData(0) : monoFromBuffer(buffer);
+    const { waveform, peaks, thumbnail } = measureWaveform(mono, buffer, options.peakCount ?? 512);
+    stageQuickWindow(cacheKey, mono, buffer.sampleRate);
 
     let analysis = EMPTY_AUDIO_ANALYSIS;
     if (options.analyze === "full") {
       options.onProgress?.("analyzing");
       try {
-        const mono = signalForAnalysis(monoFromBuffer(buffer), buffer.sampleRate, 90);
-        analysis = await analyzeSignal(mono, buffer.sampleRate, "full");
+        const mono = windowForFeatures(monoFromBuffer(buffer), buffer.sampleRate);
+        analysis = await analyzeSignal(mono, buffer.sampleRate);
       } catch (error) {
         console.warn("Audio analysis failed; continuing with waveform only.", error);
       }
@@ -181,6 +174,8 @@ async function decodeAndAnalyze(
       name: options.name,
       duration: buffer.duration,
       peaks,
+      waveform,
+      thumbnail,
       objectUrl,
       format: options.format || options.name.split(".").pop()?.toUpperCase() || "AUDIO",
       sampleRate: buffer.sampleRate,
@@ -261,7 +256,7 @@ export async function quickAnalyzeCached(cacheKey: string): Promise<ProcessedAud
 
   const promise = (async () => {
     const staged = takeQuickWindow(cacheKey) ?? await decodeQuickWindowFromCached(cached);
-    const analysis = await analyzeQuick(staged.signal, staged.sampleRate);
+    const analysis = await analyzeSignal(staged.signal, staged.sampleRate);
     return updateCachedAnalysis(cacheKey, analysis) ?? cached;
   })().finally(() => {
     quickInflight.delete(cacheKey);
@@ -271,12 +266,14 @@ export async function quickAnalyzeCached(cacheKey: string): Promise<ProcessedAud
   return promise;
 }
 
-export async function quickAnalyzeFile(file: File, cacheKey: string): Promise<ProcessedAudio> {
-  return quickAnalyzeCached(cacheKey);
-}
-
 export function bindSourceAudio(sourceId: string, cacheKey: string) {
   aliasCacheKey(`source:${sourceId}`, cacheKey);
+
+  // The one place a decoded buffer becomes associated with a persisted source, so
+  // the one place worth checking whether that source still needs a sidecar. Not
+  // awaited: nothing on screen depends on it.
+  const cached = getCachedAudio(cacheKey);
+  if (cached) void backfillSourceWaveform(sourceId, cached.waveform);
 }
 
 export {
@@ -289,4 +286,4 @@ export {
   updateCachedAnalysis,
 };
 
-export type { ProcessedAudio, EssentiaAnalysis, SonogramData, AudioProcessPhase } from "./types";
+export type { ProcessedAudio, EssentiaAnalysis, AudioProcessPhase } from "./types";

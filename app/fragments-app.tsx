@@ -1,24 +1,30 @@
 "use client";
 
-import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
-  DEFAULT_WEIGHTS,
-  DEFAULT_TOLERANCES,
   FRAGMENTS,
   IMPORTED_FRAGMENT_IDS,
-  MESSY_PHONE_PROFILE,
   RELATIONSHIPS,
   SOURCE_FILES,
-  Fragment,
-  MatchTolerances,
-  MusicalRole,
-  Relationship,
-  RelationshipStatus,
-  SearchContext,
-  SearchWeights,
-  SourceFile,
 } from "./prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { Relationship } from "@/lib/view/relationship";
+import type { SourceFile } from "@/lib/view/source-file";
+import { scoreRelationship } from "@/lib/affinity/score";
+import { DEFAULT_TOLERANCES, DEFAULT_WEIGHTS } from "@/lib/view/search";
+import type { MatchTolerances, SearchWeights } from "@/lib/view/search";
+import type { MusicalRole, RangeMode, RelationshipStatus, SearchContext } from "@/lib/view/vocabulary";
 import { Waveform } from "@/lib/audio/waveform";
+import { Button } from "@/lib/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/lib/ui/dialog";
+import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { DuplicateTakesDialog } from "./features/library/duplicate-takes-dialog";
 import { ConnectionsTable } from "./features/library/connections-table";
 import { LibraryView } from "./features/library/library-view";
@@ -29,11 +35,12 @@ import { SourcesView } from "./features/sources/sources-view";
 import { SourceSort } from "./features/sources/types";
 import { CombineCandidate, CombineWorkspace, ExportSheet } from "./hero-workflow";
 import { FRAGMENTS_LOGO_SRC } from "./fragments-logo";
-import { defaultFragmentName, draftFragmentForRange, EditableRange, FragmentationWorkbench } from "./fragmentation-workbench";
+import { defaultFragmentName, draftFragmentForRange, EditableRange, FragmentationWorkbench, hasUnsavedRanges } from "./fragmentation-workbench";
 import { LibraryFilters, createLibraryFilters } from "./library-filter-popover";
 import { formatSeconds } from "@/lib/format";
 import { bindSourceAudio, getCachedAudio, retainCachedAudio, updateCachedAnalysis } from "@/lib/audio/audio-service";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
+import { FEATURE_MAX_SECONDS } from "@/lib/analysis/features";
 import {
   PreviewScope,
   buildFragmentPreviewScope,
@@ -45,9 +52,6 @@ import {
 import { armBrowserAudioUnlock, playMediaElement } from "@/lib/audio/browser-audio";
 import { resolveAudioUrl } from "@/lib/audio/resolve-audio-url";
 import {
-  analysisNeedsInvention,
-  formatMusicalKey,
-  inventAnalysis,
   parseMusicalKeyLabel,
   resolvedMusicalKey,
   resolvedSourceAnalysis,
@@ -55,18 +59,19 @@ import {
 import { SourceAnalysisValues } from "./features/sources/source-detail-panel";
 import { LibraryCard } from "./features/library/library-card";
 import { MAP_WORLD, musicalMapPoint } from "./map-layout.mjs";
+import { DEFAULT_SENSITIVITY } from "@/lib/domain/source-document";
+import type { FragmentDocument, SourceDocument } from "@/lib/domain/source-document";
+import type { MeasuredAnalysis, MusicalRole as DomainMusicalRole } from "@/lib/domain/source-document";
+import type { MeasuredSummary } from "@/lib/view/analysis";
+import type { SourceRecord } from "@/lib/ipc/contract";
+import { getFragmentsBridge } from "@/lib/web/bridge";
 
 type View = "library" | "source" | "map" | "archive";
-type RangeMode = "reasonable" | "experimental";
 type ScoredRelationship = Relationship & { score: number; otherId: string };
 type ReturnSnapshot = { kind:"source-edit";view:View;selectedId:string;selectedSourceId:string;connectionsOpen:boolean;advancedOpen:boolean;scrollY:number };
 type CorrectionPhase = "edit" | "recompute" | "prompt";
 type SourcePanelMode = "detail" | "fragmentation";
 
-const CONTEXTS: { id: SearchContext; label: string }[] = [
-  { id: "whole", label: "Whole" }, { id: "melody", label: "Melody" }, { id: "rhythm", label: "Rhythm" },
-  { id: "harmony", label: "Harmony" }, { id: "bass", label: "Bass" },
-];
 const RANGE_COLORS = ["#a99cff","#74d8ff","#ffbc65","#c8fa78","#ff849b","#75e2c2"];
 const OPENING_SOURCE_ID = SOURCE_FILES.find((source) => !source.imported)!.id;
 const INITIAL_RELATIONSHIP_STATUSES = Object.fromEntries(RELATIONSHIPS.filter((relationship) => relationship.status).map((relationship) => [relationship.id,relationship.status!])) as Record<string,RelationshipStatus>;
@@ -89,10 +94,62 @@ function rangeForIndex(source:SourceFile,index:number):EditableRange {
 
 const initialSourceRanges = () => Object.fromEntries(SOURCE_FILES.map((source) => [source.id,Array.from({ length:fragmentCountForSensitivity(source.sensitivity) },(_,index) => rangeForIndex(source,index))]));
 
+/**
+ * The domain has an `"Unclassified"` role for freshly imported audio; the UI's
+ * role list does not. Every fragment written by `finalizeImport` carries it, so
+ * this translation is the common case, not an edge case — the previous
+ * `?? "Texture"` fallback never fired because `"Unclassified"` is truthy, and an
+ * unrepresentable role reached components that switch on the six real ones.
+ */
+function displayRole(role: DomainMusicalRole | undefined): MusicalRole {
+  return role === undefined || role === "Unclassified" ? "Texture" : role;
+}
+
 /** Rebuilds an in-memory Fragment from a source.json fragment record, so persisted segmentation shows up in the Library after a reload. */
-function fragmentFromDocument(fragmentDoc: any, index: number, source: SourceFile): Fragment {
+/**
+ * The measured fields worth showing a person, straight off the document.
+ *
+ * `seconds` is what the measurements cover, which is the shorter of the audio and
+ * the analysis window — onset density is meaningless against the wrong denominator,
+ * and it must match what `rhythmSimilarity` divided by or the panel would disagree
+ * with the affinities it explains.
+ */
+function measuredSummaryFrom(
+  analysis: MeasuredAnalysis | undefined,
+  seconds: number,
+): MeasuredSummary | undefined {
+  if (!analysis) return undefined;
+
+  const measuredSeconds = Math.min(seconds, FEATURE_MAX_SECONDS);
+  const origin = analysis.provenance?.origin;
+  return {
+    bpm: analysis.bpm ?? null,
+    bpmConfidence: analysis.bpmConfidence ?? null,
+    key: analysis.key ?? null,
+    scale: analysis.scale ?? null,
+    keyStrength: analysis.keyStrength ?? null,
+    centroidHz: analysis.centroidHz ?? null,
+    onsetsPerSecond: analysis.onsets && measuredSeconds > 0
+      ? analysis.onsets.length / measuredSeconds
+      : null,
+    flatness: analysis.flatness ?? null,
+    lufs: analysis.lufs ?? null,
+    loudnessRange: analysis.loudnessRange ?? null,
+    dynamicComplexity: analysis.dynamicComplexity ?? null,
+    intensity: analysis.intensity ?? null,
+    leadingSilence: analysis.leadingSilence ?? null,
+    trailingSilence: analysis.trailingSilence ?? null,
+    chroma: analysis.chroma?.length ? analysis.chroma : null,
+    origin: origin === "measured" || origin === "edited" ? origin : null,
+    extractor: analysis.provenance?.extractor ?? null,
+    measuredAt: analysis.provenance?.at ?? null,
+  };
+}
+
+function fragmentFromDocument(fragmentDoc: FragmentDocument, index: number, source: SourceFile): Fragment {
   return {
     id: fragmentDoc.id,
+    measured: measuredSummaryFrom(fragmentDoc.analysis, fragmentDoc.end - fragmentDoc.start),
     name: fragmentDoc.name || defaultFragmentName(source, index),
     sourceId: source.id,
     source: source.name,
@@ -105,8 +162,8 @@ function fragmentFromDocument(fragmentDoc: any, index: number, source: SourceFil
     alternateKeys: [],
     bpm: fragmentDoc.analysis?.bpm ?? source.bpm ?? 0,
     uploadedAt: fragmentDoc.createdAt ?? source.uploadedAt,
-    role: (fragmentDoc.primaryRole as MusicalRole) ?? "Texture",
-    roles: fragmentDoc.roles?.length ? fragmentDoc.roles : ["Texture"],
+    role: displayRole(fragmentDoc.primaryRole),
+    roles: fragmentDoc.roles?.length ? fragmentDoc.roles.map(displayRole) : ["Texture"],
     brightness: 0,
     waveform: slicePeaks(source.waveform, fragmentDoc.start, fragmentDoc.end, source.duration),
     beats: 0,
@@ -150,65 +207,55 @@ function isLibraryRelationship(relationship: Relationship) {
   return isLibraryFragmentId(relationship.source) && isLibraryFragmentId(relationship.target);
 }
 
-function sourceFileFromDocument(document: any, audioUrl?: string): SourceFile {
-  let analysis = document.analysis;
-  if (analysisNeedsInvention(analysis)) {
-    analysis = inventAnalysis(document.id);
+/**
+ * A pending import has `duration`/`format` still `null`; `SourceFile` cannot
+ * express that, so callers must only pass finalized documents. The main process
+ * filters unfinalized sources out of `listSources`, and this throws rather than
+ * substituting a zero duration that would render as a real, empty recording.
+ */
+function sourceFileFromDocument(document: SourceRecord, audioUrl?: string): SourceFile {
+  if (document.duration === null) {
+    throw new Error(`source ${document.id} is not finalized: duration is null`);
   }
+  const duration = document.duration;
+  const analysis = document.analysis;
   return {
     id: document.id,
     name: document.originalName,
     date: new Date(document.importedAt).toLocaleDateString("en-US", { month:"short",day:"2-digit",year:"numeric" }),
-    duration: document.duration,
-    format: document.format,
+    duration,
+    format: document.format ?? "—",
     device: "Managed library",
-    fragmentIds: document.fragments.map((fragment: any) => fragment.id),
+    fragmentIds: document.fragments.map((fragment) => fragment.id),
     waveform: document.waveform?.peaks ?? [],
-    sensitivity: MESSY_PHONE_PROFILE.sensitivity,
+    // Persisted, not assumed: every real source used to report the prototype
+    // profile's sensitivity and claim to be a Voice memo / Jam.
+    sensitivity: document.sensitivity,
     start: 0,
-    end: document.duration,
-    sourceTypes: ["Voice memo","Jam"],
-    analysisProfile: MESSY_PHONE_PROFILE,
+    end: duration,
+    sourceTypes: document.sourceTypes,
+    measured: measuredSummaryFrom(document.analysis, duration),
     imported: true,
     audioUrl: audioUrl ?? document.audioUrl,
     audioCacheKey: document.id,
-    bpm: analysis?.bpm ?? null,
-    key: analysis?.key ?? null,
-    scale: analysis?.scale ?? null,
+    bpm: analysis.bpm,
+    key: analysis.key,
+    scale: analysis.scale,
     uploadedAt: document.importedAt,
   };
 }
 
-function rangesFromDocument(document: any): EditableRange[] {
-  return document.fragments.map((fragment: any, index: number) => ({
+/** The override fields the fragmentation workbench writes, and so the ones a discard undoes. */
+const WORKBENCH_OVERRIDE_KEYS = ["name","start","end","duration","analysisRevision"] as const;
+
+function rangesFromDocument(document: SourceDocument): EditableRange[] {
+  return document.fragments.map((fragment, index) => ({
     id: `${fragment.id}-range`,
     fragmentId: fragment.id,
     start: fragment.start,
     end: fragment.end,
     color: RANGE_COLORS[index % RANGE_COLORS.length],
   }));
-}
-
-function scoreRelationship(relationship: Relationship, weights: SearchWeights, context: SearchContext, mode: RangeMode) {
-  const multipliers: Record<SearchContext, SearchWeights> = {
-    whole:{ rhythm:1, harmony:1, melody:1, timbre:1 },
-    melody:{ rhythm:.28, harmony:.72, melody:2.5, timbre:.55 },
-    rhythm:{ rhythm:2.8, harmony:.22, melody:.18, timbre:.72 },
-    harmony:{ rhythm:.42, harmony:2.6, melody:.66, timbre:.5 },
-    bass:{ rhythm:1.8, harmony:1.45, melody:.24, timbre:1.25 },
-  };
-  const adjusted: SearchWeights = {
-    rhythm: weights.rhythm * multipliers[context].rhythm,
-    harmony: weights.harmony * multipliers[context].harmony,
-    melody: weights.melody * multipliers[context].melody,
-    timbre: weights.timbre * multipliers[context].timbre,
-  };
-  const weighted = relationship.metrics.rhythm * adjusted.rhythm + relationship.metrics.harmony * adjusted.harmony + relationship.metrics.melody * adjusted.melody + relationship.metrics.timbre * adjusted.timbre;
-  const fixed = relationship.metrics.tempo * 12 + relationship.metrics.pitch * 10 + relationship.metrics.brightness * 8;
-  const totalWeight = adjusted.rhythm + adjusted.harmony + adjusted.melody + adjusted.timbre + 30;
-  const similarity = (weighted + fixed) / totalWeight;
-  const penalty = relationship.transformationCost * (mode === "experimental" ? .46 : 1);
-  return Math.round(Math.max(0, Math.min(99, (similarity * .9 + relationship.base * .1 - penalty) * 100)));
 }
 
 export default function FragmentsApp() {
@@ -218,10 +265,12 @@ export default function FragmentsApp() {
   const [libraryFilters,setLibraryFilters] = useState<LibraryFilters>(createLibraryFilters);
   const [filterOpen,setFilterOpen] = useState(false);
   const [sort, setSort] = useState<LibrarySort>({ column:"uploaded", direction:"desc" });
-  const [context, setContext] = useState<SearchContext>("whole");
-  const [rangeMode, setRangeMode] = useState<RangeMode>("reasonable");
-  const [weights, setWeights] = useState<SearchWeights>({ ...DEFAULT_WEIGHTS });
-  const [tolerances,setTolerances] = useState<MatchTolerances>({ ...DEFAULT_TOLERANCES });
+  // Read-only: no control mutates these any more, so affinity scoring runs on
+  // fixed inputs. Task 6 moves them into lib/affinity/ where they belong.
+  const context: SearchContext = "whole";
+  const rangeMode: RangeMode = "reasonable";
+  const weights: SearchWeights = DEFAULT_WEIGHTS;
+  const tolerances: MatchTolerances = DEFAULT_TOLERANCES;
   const [archived, setArchived] = useState<Set<string>>(new Set());
   const [duplicateExclusions, setDuplicateExclusions] = useState<Set<string>>(new Set());
   const [duplicateGroup, setDuplicateGroup] = useState<string | null>(null);
@@ -246,6 +295,16 @@ export default function FragmentsApp() {
   const [importedFragments,setImportedFragments] = useState<Fragment[]>([]);
   const [importedRelationships,setImportedRelationships] = useState<Relationship[]>([]);
   const [savedFragmentIds,setSavedFragmentIds] = useState<Set<string>>(new Set());
+  /**
+   * Sources the user has edited in this session without saving. `hasUnsavedRanges` already
+   * sees boundary changes by comparing, so this is not how the save button learns it has
+   * work to do — it is what separates "you have unsaved work here" from "this source was
+   * never in sync", which is the difference between warning on close and nagging. It also
+   * carries the one edit ranges cannot show: a rename.
+   */
+  const [unsavedEditSourceIds,setUnsavedEditSourceIds] = useState<Set<string>>(new Set());
+  /** Set when closing would drop edits, so the close is confirmed rather than silent. */
+  const [closeConfirmOpen,setCloseConfirmOpen] = useState(false);
   const [combineCandidates,setCombineCandidates] = useState<CombineCandidate[] | null>(null);
   const [correctionRelationship,setCorrectionRelationship] = useState<CombineCandidate | null>(null);
   const [correctionPhase,setCorrectionPhase] = useState<CorrectionPhase>("edit");
@@ -258,6 +317,8 @@ export default function FragmentsApp() {
   const [mapSelectedId,setMapSelectedId] = useState<string | null>(null);
   const [hoveredMapId,setHoveredMapId] = useState<string | null>(null);
   const [infoFragmentId, setInfoFragmentId] = useState<string | null>(null);
+  /** Whether this host can change the library on disk. False in the web preview. */
+  const [canWriteFiles, setCanWriteFiles] = useState(false);
   const returnScroll = useRef(0);
   const returnStack = useRef<ReturnSnapshot[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -274,53 +335,23 @@ export default function FragmentsApp() {
   }, [filterOpen]);
 
   useEffect(() => {
-    const bridge = (window as any).fragments;
+    const bridge = getFragmentsBridge();
     if (!bridge) return;
-    void bridge.listSources().then(async (documents:any[]) => {
-      const backfill: Array<{ id: string; analysis: ReturnType<typeof inventAnalysis> }> = [];
-      const persisted = documents.map((document) => {
-        let analysis = document.analysis;
-        if (analysisNeedsInvention(analysis)) {
-          analysis = inventAnalysis(document.id);
-          backfill.push({ id: document.id, analysis });
-        }
-        return {
-        id: document.id,
-        name: document.originalName,
-        date: new Date(document.importedAt).toLocaleDateString("en-US", { month:"short",day:"2-digit",year:"numeric" }),
-        duration: document.duration,
-        format: document.format,
-        device: "Managed library",
-        fragmentIds: document.fragments.map((fragment:any) => fragment.id),
-        waveform: document.waveform?.peaks ?? [],
-        sensitivity: MESSY_PHONE_PROFILE.sensitivity,
-        start: 0,
-        end: document.duration,
-        sourceTypes: ["Voice memo","Jam"],
-        analysisProfile: MESSY_PHONE_PROFILE,
-        imported: true,
-        audioUrl: document.audioUrl,
-        audioCacheKey: document.id,
-        bpm: analysis?.bpm ?? null,
-        key: analysis?.key ?? null,
-        scale: analysis?.scale ?? null,
-        uploadedAt: document.importedAt,
-      }}) as SourceFile[];
+    // Read once here rather than at every render: the host cannot change while the
+    // app is open, and components that offer a destructive action need to know
+    // whether this host can carry it out before they offer it.
+    setCanWriteFiles(bridge.capabilities.persist);
+    void bridge.listSources().then((documents) => {
+      const persisted = documents.map((document) => sourceFileFromDocument(document));
       setSources((current) => [...current.filter((source) => !persisted.some((item) => item.id === source.id)),...persisted]);
       setSourceRanges((current) => ({
         ...current,
-        ...Object.fromEntries(documents.map((document) => [document.id,document.fragments.map((fragment:any,index:number) => ({
-          id: `${fragment.id}-range`,
-          fragmentId: fragment.id,
-          start: fragment.start,
-          end: fragment.end,
-          color: RANGE_COLORS[index % RANGE_COLORS.length],
-        }))])),
+        ...Object.fromEntries(documents.map((document) => [document.id, rangesFromDocument(document)])),
       }));
       const persistedFragments = documents.flatMap((document) => {
         const source = persisted.find((item) => item.id === document.id);
         if (!source) return [];
-        return document.fragments.map((fragmentDoc:any,index:number) => fragmentFromDocument(fragmentDoc,index,source));
+        return document.fragments.map((fragmentDoc,index) => fragmentFromDocument(fragmentDoc,index,source));
       });
       setImportedFragments((current) => [
         ...current.filter((fragment) => !documents.some((document) => document.id === fragment.sourceId)),
@@ -328,14 +359,7 @@ export default function FragmentsApp() {
       ]);
       const persistedRelationships = documents.flatMap((document) => document.relationships ?? []);
       setImportedRelationships(persistedRelationships);
-      for (const item of backfill) {
-        try {
-          await bridge.updateSourceAnalysis(item.id, item.analysis);
-        } catch (error) {
-          console.warn("Could not persist invented analysis:", error);
-        }
-      }
-    }).catch((error:any) => console.error("Could not load managed library:", error));
+    }).catch((error:unknown) => console.error("Could not load managed library:", error));
   }, []);
 
   const activeFragments = useMemo(() => [
@@ -349,6 +373,10 @@ export default function FragmentsApp() {
   const selected = activeFragmentById(selectedFragmentId ?? "f02");
   const selectedSource = sources.find((source) => source.id === selectedSourceId)!;
   const selectedRanges = sourceRanges[selectedSourceId] ?? [];
+  /** Whether this source's slices differ from the library, and so whether "Save all fragments" has work to do. */
+  const editorUnsaved = hasUnsavedRanges(selectedRanges, activeFragments) || unsavedEditSourceIds.has(selectedSourceId);
+  const markSourceEdited = (sourceId:string) => setUnsavedEditSourceIds((current) => current.has(sourceId) ? current : new Set([...current,sourceId]));
+  const clearSourceEdited = (sourceId:string) => setUnsavedEditSourceIds((current) => { if (!current.has(sourceId)) return current; const next=new Set(current); next.delete(sourceId); return next; });
 
   const clearPreviewListeners = () => {
     previewCleanupRef.current?.();
@@ -489,16 +517,18 @@ export default function FragmentsApp() {
     return () => { window.removeEventListener("pointermove", resize); window.removeEventListener("pointerup", finish); };
   }, [resizingConnections]);
 
-  const rankedConnectionsFor = (sourceId:string,limit=6):ScoredRelationship[] => {
+  // Returns every eligible match, ranked. There used to be a limit of 6 here,
+  // which silently hid matches that had passed the tolerance filters — the count
+  // on the card and the rows in the panel disagreed.
+  const rankedConnectionsFor = (sourceId:string):ScoredRelationship[] => {
     const sourceFragment=activeFragmentById(sourceId);
     const seen=new Set<string>();
     return allRelationships.filter((relationship) => relationship.source === sourceId || relationship.target === sourceId)
-      .map((relationship) => {
-        const correctedHero=relationship.id === "r01" && Boolean(fragmentOverrides.f02?.analysisRevision);
-        const effectiveRelationship=correctedHero && relationship.transform ? { ...relationship,transform:{ ...relationship.transform,bpm:2,labels:["−3 st","+2 BPM"] } } : relationship;
-        const score=correctedHero ? 76 : relationship.id === "r01" && sourceId === "f01" && context === "whole" && rangeMode === "reasonable" && Object.keys(DEFAULT_WEIGHTS).every((key) => weights[key as keyof SearchWeights] === DEFAULT_WEIGHTS[key as keyof SearchWeights]) ? 94 : scoreRelationship(effectiveRelationship,weights,context,rangeMode);
-        return { ...effectiveRelationship,score,otherId:otherIdFor(effectiveRelationship,sourceId) };
-      })
+      .map((relationship) => ({
+        ...relationship,
+        score:scoreRelationship(relationship,weights,context,rangeMode),
+        otherId:otherIdFor(relationship,sourceId),
+      }))
       .filter((relationship) => {
         const target=activeFragments.find((fragment) => fragment.id === relationship.otherId);
         if (!target || seen.has(target.id) || archived.has(target.id)) return false;
@@ -510,7 +540,9 @@ export default function FragmentsApp() {
           const transformedBpm=target.bpm + (relationship.transform?.bpm ?? 0);
           if (Math.abs(transformedBpm - sourceFragment.bpm) / Math.max(1,sourceFragment.bpm) * 100 > tolerances.tempoWindow) return false;
           const pitchFloor=tolerances.keyFlexibility === "exact" ? .96 : tolerances.keyFlexibility === "related" ? .78 : .62;
-          if (relationship.metrics.pitch < pitchFloor) return false;
+          // An unmeasured pitch relationship cannot fail a pitch filter. Treating
+          // null as 0 would silently hide every match whose key was not measurable.
+          if (relationship.metrics.pitch !== null && relationship.metrics.pitch < pitchFloor) return false;
           const barDelta=Math.abs(target.bars - sourceFragment.bars);
           if (tolerances.lengthTolerance === "same" && barDelta !== 0) return false;
           if (tolerances.lengthTolerance === "one" && barDelta > 1) return false;
@@ -518,16 +550,14 @@ export default function FragmentsApp() {
         }
         seen.add(target.id);return true;
       })
-      .sort((a,b) => b.score - a.score)
-      .slice(0,limit);
+      .sort((a,b) => b.score - a.score);
   };
 
   const linkSummaryFor = (fragmentId:string) => {
-    const eligible=rankedConnectionsFor(fragmentId,allRelationships.length);
+    const eligible=rankedConnectionsFor(fragmentId);
     return { total:eligible.length,manual:eligible.filter((relationship) => manualRelationshipIds.has(relationship.id)).length };
   };
 
-  const relatedTakeCountFor=(fragment:Fragment) => fragment.duplicateGroup && !duplicateExclusions.has(fragment.id) ? activeFragments.filter((item) => item.duplicateGroup === fragment.duplicateGroup && item.id !== fragment.id && !archived.has(item.id) && !duplicateExclusions.has(item.id)).length : 0;
   const filterableFragments=useMemo(() => activeFragments.filter((fragment) => !archived.has(fragment.id)),[activeFragments,archived]);
 
   const updateSourceSensitivity = (value:number) => {
@@ -537,6 +567,7 @@ export default function FragmentsApp() {
   const addManualFragment = () => {
     const index=selectedRanges.length;
     const next={ ...rangeForIndex(selectedSource,index),fragmentId:undefined,id:`${selectedSource.id}-manual-${Date.now()}` };
+    markSourceEdited(selectedSource.id);
     setSourceRanges((current) => ({ ...current,[selectedSource.id]:[...(current[selectedSource.id] ?? []),next] }));
     notify(`Fragment ${index + 1} added. Adjust its range above.`);
   };
@@ -606,10 +637,18 @@ export default function FragmentsApp() {
   };
 
   const saveSourceAnalysis = async (sourceId: string, analysis: SourceAnalysisValues) => {
-    const bridge = (window as any).fragments;
-    if (bridge?.updateSourceAnalysis) {
+    const bridge = getFragmentsBridge();
+    if (bridge?.capabilities.persist) {
       try {
-        await bridge.updateSourceAnalysis(sourceId, { ...analysis, keyStrength: null });
+        // Marked "edited" so a later batch pass will not overwrite the correction.
+        // keyStrength is cleared deliberately: a hand-typed key has no measured
+        // confidence, and keeping the old number would attribute the machine's
+        // certainty to the user's choice.
+        await bridge.updateSourceAnalysis(sourceId, {
+          ...analysis,
+          keyStrength: null,
+          provenance: { origin: "edited", extractor: null, at: new Date().toISOString() },
+        });
       } catch (error) {
         console.error("Could not persist source analysis:", error);
         notify("Could not save metadata to disk.");
@@ -676,11 +715,6 @@ export default function FragmentsApp() {
     const others = activeFragments.filter((fragment) => fragment.duplicateGroup === group && fragment.id !== id && !duplicateExclusions.has(fragment.id)).map((fragment) => fragment.id);
     setArchived((current) => new Set([...current, ...others])); setSelectedId(id); setDuplicateGroup(null); notify("Kept this take for matching and archived the rest.");
   };
-  const resetDemo = () => {
-    stopAllAudio(); setView("library"); setSelectedId("f02"); setQuery("");setLibraryFilters(createLibraryFilters());setFilterOpen(false);setInfoFragmentId(null);setSort({ column:"date", direction:"desc" });
-    setContext("whole"); setRangeMode("reasonable"); setWeights({ ...DEFAULT_WEIGHTS }); setTolerances({ ...DEFAULT_TOLERANCES });setArchived(new Set()); setDuplicateExclusions(new Set());
-    returnStack.current=[];setDuplicateGroup(null);setConnectionsOpen(false);setAdvancedOpen(false);setConnectionsWidth(520);setSources(SOURCE_FILES.filter((source) => !source.imported).map((source) => ({ ...source })));setSourceRanges(initialSourceRanges());setSelectedSourceId(OPENING_SOURCE_ID);setSourceQuery("");setSourceSort({ column:"date",direction:"desc" });setSourceEditorOpen(false);setSourceEditorModal(false);setSourcePanelMode("fragmentation");setImportOpen(false);setImportComplete(false);setFragmentOverrides({});setCombineCandidates(null);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);setExportRelationship(null);setRelationshipStatuses({ ...INITIAL_RELATIONSHIP_STATUSES });setManualRelationshipIds(new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));setMapSelectedId(null);setHoveredMapId(null);notify("Demo restored to 24 fragments before import.");
-  };
   const pushReturn = (kind:ReturnSnapshot["kind"]) => returnStack.current.push({ kind,view,selectedId,selectedSourceId,connectionsOpen,advancedOpen,scrollY:window.scrollY });
   const restoreReturn = (kind:ReturnSnapshot["kind"]) => {
     const snapshot=returnStack.current.at(-1);
@@ -690,27 +724,17 @@ export default function FragmentsApp() {
   const openFragment = (id:string) => { stopAllAudio(); setSelectedId(id); setFilterOpen(false); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
   const highlightLibraryFragment = (id: string) => { setSelectedId(id); };
   const highlightLibrarySource = (source: SourceFile) => { setSelectedId(`source:${source.id}`); };
-  const selectLibrarySource = (source: SourceFile) => {
-    stopAllAudio();
-    setSelectedId(`source:${source.id}`);
-    setFilterOpen(false);
-    setConnectionsOpen(true);
-    setAdvancedOpen(false);
-    setView("library");
-  };
-  const removeSource = (sourceId: string) => {
-    const source = sources.find((item) => item.id === sourceId);
-    if (!source) return;
-
+  /**
+   * Drops a source and its fragments out of the session. Says nothing about disk —
+   * both removal paths need exactly this cleanup, and they differ only in what they
+   * do to the folder and what they tell the user.
+   */
+  const forgetSource = (sourceId: string) => {
     stopAllAudio();
     const removedFragmentIds = activeFragments
       .filter((fragment) => fragment.sourceId === sourceId)
       .map((fragment) => fragment.id);
     const remainingSources = sources.filter((item) => item.id !== sourceId);
-    const bridge = (window as any).fragments;
-    if (bridge?.archiveSource && source.imported) {
-      void bridge.archiveSource(sourceId).catch((error: any) => console.warn("Could not archive source:", error));
-    }
 
     setArchived((current) => new Set([...current, ...removedFragmentIds]));
     setImportedFragments((current) => current.filter((fragment) => fragment.sourceId !== sourceId));
@@ -737,8 +761,50 @@ export default function FragmentsApp() {
       );
       setSelectedId(nextFragment?.id ?? "f02");
     }
+  };
 
+  /** Soft delete: the folder stays, so re-importing the same file brings it back. */
+  const removeSource = (sourceId: string) => {
+    const source = sources.find((item) => item.id === sourceId);
+    if (!source) return;
+
+    const bridge = getFragmentsBridge();
+    if (bridge?.capabilities.persist && source.imported) {
+      void bridge.archiveSource(sourceId).catch((error: unknown) => console.warn("Could not archive source:", error));
+    }
+
+    forgetSource(sourceId);
     notify(`Removed ${source.name} from your library. Import a file with the same name to restore your slices.`);
+  };
+
+  /**
+   * Hard delete: the folder goes.
+   *
+   * Unlike archiving, this waits for the disk before touching the session. A failed
+   * archive is harmless — the source is out of the library either way and the file
+   * is still there — but a failed delete that had already removed the row would
+   * leave a folder on disk with no way back to it in the app.
+   */
+  const deleteSourceFromDisk = async (sourceId: string) => {
+    const source = sources.find((item) => item.id === sourceId);
+    if (!source) return;
+
+    const bridge = getFragmentsBridge();
+    if (!bridge?.capabilities.persist) {
+      notify("Deleting files needs the desktop app. The web preview can only read your library.");
+      return;
+    }
+
+    try {
+      await bridge.deleteSource(sourceId);
+    } catch (error) {
+      console.warn("Could not delete source:", error);
+      notify(`Could not delete ${source.name}. Its folder is still on disk.`);
+      return;
+    }
+
+    forgetSource(sourceId);
+    notify(`Deleted ${source.name} and its slices from disk.`);
   };
   const editSourceForLibrarySource = (sourceId: string) => {
     pushReturn("source-edit");
@@ -752,10 +818,17 @@ export default function FragmentsApp() {
   };
   const sourceForId = (sourceId: string) => sources.find((source) => source.id === sourceId);
   const closeConnections = () => { stopAllAudio();setConnectionsOpen(false);setAdvancedOpen(false); };
-  const closeSourceEditor = () => {
-    if (correctionRelationship) { setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);return; }
+  const finishCloseSourceEditor = () => {
     if (restoreReturn("source-edit")) return;
     stopAllAudio();setSourceEditorOpen(false);setSourceEditorModal(false);setInfoFragmentId(null);
+  };
+  const closeSourceEditor = () => {
+    if (correctionRelationship) { setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);return; }
+    // "Save all fragments" is the only thing that writes, so closing with edits in hand has
+    // to ask. The question is only worth asking about edits made here: a source that was
+    // already out of sync with disk when it opened has nothing of the user's to lose.
+    if (sourcePanelMode === "fragmentation" && unsavedEditSourceIds.has(selectedSourceId)) { setCloseConfirmOpen(true);return; }
+    finishCloseSourceEditor();
   };
   const openSourceEditor = (sourceId: string, mode: SourcePanelMode, modal: boolean) => {
     stopAllAudio();
@@ -769,10 +842,13 @@ export default function FragmentsApp() {
     const id = imported.persistedId ?? `source-import-${Date.now()}`;
 
     if (imported.restored && imported.persistedDocument) {
-      const document: any = { ...imported.persistedDocument, audioUrl: imported.persistedAudioUrl };
+      const document: SourceRecord = {
+        ...imported.persistedDocument,
+        audioUrl: imported.persistedAudioUrl ?? imported.persistedDocument.audioUrl,
+      };
       const source = sourceFileFromDocument(document, imported.persistedAudioUrl);
       const ranges = rangesFromDocument(document);
-      const fragments = document.fragments.map((fragmentDoc: any, index: number) =>
+      const fragments = document.fragments.map((fragmentDoc, index) =>
         fragmentFromDocument(fragmentDoc, index, source));
 
       retainCachedAudio(imported.cacheKey);
@@ -826,11 +902,10 @@ export default function FragmentsApp() {
       device: "Local upload",
       fragmentIds: [],
       waveform: imported.peaks,
-      sensitivity: MESSY_PHONE_PROFILE.sensitivity,
+      sensitivity: DEFAULT_SENSITIVITY,
       start: 0,
       end: imported.duration,
       sourceTypes: imported.sourceTypes,
-      analysisProfile: MESSY_PHONE_PROFILE,
       imported: true,
       audioUrl: imported.persistedAudioUrl ?? imported.objectUrl,
       audioCacheKey: imported.cacheKey,
@@ -892,9 +967,9 @@ export default function FragmentsApp() {
     stopAllAudio();setSelectedSourceId(source.id);setCombineDraftRanges((sourceRanges[source.id] ?? []).map((range) => ({ ...range })));setCombineDraftSensitivity(source.sensitivity);setCorrectionOriginal({ duration:candidate.duration,key:candidate.key,bpm:candidate.bpm,bars:candidate.bars,beats:candidate.beats,confidence:candidate.confidence,analysisRevision:candidate.analysisRevision });setCorrectionPhase("edit");setCorrectionRelationship(relationship);setSourcePanelMode("fragmentation");setSourceEditorOpen(true);
   };
   const persistFragmentsForSource = (sourceId:string,fragments:Fragment[]) => {
-    const bridge=(window as any).fragments;
-    if (!bridge?.updateFragments) return;
-    void bridge.updateFragments(sourceId,fragments.map(fragmentToDocument)).catch((error:any) => console.warn("Could not persist fragments:",error));
+    const bridge=getFragmentsBridge();
+    if (!bridge?.capabilities.persist) return;
+    void bridge.updateFragments(sourceId,fragments.map(fragmentToDocument)).catch((error:unknown) => console.warn("Could not persist fragments:",error));
   };
 
   /** Turns a not-yet-real "Add fragment" range into a permanent Fragment with a stable id. */
@@ -932,27 +1007,70 @@ export default function FragmentsApp() {
         ? { ...source,fragmentIds:Array.from(new Set([...source.fragmentIds,...created.map((fragment) => fragment.id)])) }
         : source));
     }
-    if (created.length) setSavedFragmentIds((current) => new Set([...current,...created.map((fragment) => fragment.id)]));
-
     const survivingFragments = activeFragments
       .filter((fragment) => fragment.sourceId === selectedSource.id)
       .map((fragment) => ({ ...fragment,...patches[fragment.id] }));
-    persistFragmentsForSource(selectedSource.id,[...survivingFragments,...created]);
+    const written=[...survivingFragments,...created];
+    persistFragmentsForSource(selectedSource.id,written);
+    // Everything this source has is now on disk, so nothing about it is pending.
+    setSavedFragmentIds((current) => new Set([...current,...written.map((fragment) => fragment.id)]));
+    clearSourceEdited(selectedSource.id);
 
-    notify(created.length ? `Boundaries saved; ${created.length} new fragment${created.length > 1 ? "s" : ""} added to the library.` : "Boundaries saved; library references updated.");
+    notify(created.length
+      ? `${written.length} fragment${written.length > 1 ? "s" : ""} saved; ${created.length} new in the library.`
+      : `${written.length} fragment${written.length > 1 ? "s" : ""} saved.`);
   };
 
-  /** Commits a range's promotion into a real fragment: updates state, source.fragmentIds, and disk. */
+  /**
+   * Puts a source back to what the library holds. Disk is authoritative, so it is re-read
+   * rather than un-applied: there is no edit history to keep and nothing to drift. A source
+   * with no document — the prototype dataset, or a host that cannot read — has no disk state
+   * to return to, so its deterministic seed ranges are rebuilt instead.
+   *
+   * Only the fields the workbench writes are dropped. Role and tags come from the detail
+   * panel, which is not what the user is discarding.
+   */
+  const discardSourceEdits = async (source:SourceFile) => {
+    clearSourceEdited(source.id);
+    const bridge=getFragmentsBridge();
+    const documents=bridge
+      ? await bridge.listSources().catch((error:unknown) => { console.warn("Could not re-read the library:",error);return [] as SourceRecord[]; })
+      : [];
+    const document=documents.find((item) => item.id === source.id);
+    if (!document) {
+      setSourceRanges((current) => ({ ...current,[source.id]:Array.from({ length:fragmentCountForSensitivity(source.sensitivity) },(_,index) => rangeForIndex(source,index)) }));
+      return;
+    }
+    const restored=document.fragments.map((fragmentDoc,index) => fragmentFromDocument(fragmentDoc,index,source));
+    setSourceRanges((current) => ({ ...current,[source.id]:rangesFromDocument(document) }));
+    setImportedFragments((current) => [...current.filter((fragment) => fragment.sourceId !== source.id),...restored]);
+    setSources((current) => current.map((item) => item.id === source.id ? { ...item,fragmentIds:restored.map((fragment) => fragment.id) } : item));
+    setSavedFragmentIds((current) => new Set([...current,...restored.map((fragment) => fragment.id)]));
+    setFragmentOverrides((current) => {
+      const next={ ...current };
+      for (const fragment of restored) {
+        const override=next[fragment.id];
+        if (!override) continue;
+        const kept={ ...override };
+        for (const key of WORKBENCH_OVERRIDE_KEYS) delete kept[key];
+        if (Object.keys(kept).length) next[fragment.id]=kept; else delete next[fragment.id];
+      }
+      return next;
+    });
+  };
+
+  /**
+   * Commits a range's promotion into a real fragment in memory only. Nothing reaches disk
+   * here: "Save all fragments" is the one commit point, so a rename must leave the source
+   * reported as unsaved rather than quietly writing a slice the user has not approved.
+   */
   const commitPromotedRange = (nextRange:EditableRange,fragment:Fragment,source:SourceFile) => {
     setImportedFragments((current) => [...current,fragment]);
     setSourceRanges((current) => ({ ...current,[source.id]:(current[source.id] ?? []).map((item) => item.id === nextRange.id ? nextRange : item) }));
     setSources((current) => current.map((item) => item.id === source.id
       ? { ...item,fragmentIds:Array.from(new Set([...item.fragmentIds,fragment.id])) }
       : item));
-    setSavedFragmentIds((current) => new Set([...current,fragment.id]));
-    const siblings=[...activeFragments.filter((item) => item.sourceId === source.id),fragment];
-    persistFragmentsForSource(source.id,siblings);
-    notify(`${fragment.name} saved.`);
+    markSourceEdited(source.id);
   };
 
   /** Finds the range backing a Library card's fragment id, whether it's already real (`fragmentId`) or still a draft (`range.id`). */
@@ -976,27 +1094,16 @@ export default function FragmentsApp() {
   const renameFragment = (fragment:Fragment,name:string) => {
     setFragmentOverrides((current) => ({ ...current,[fragment.id]:{ ...current[fragment.id],name } }));
     setSavedFragmentIds((current) => { if (!current.has(fragment.id)) return current; const next=new Set(current); next.delete(fragment.id); return next; });
+    markSourceEdited(fragment.sourceId);
   };
 
   /** Persists a single fragment's current state (name, bounds, etc.) to its source.json and flips its card to "Saved". */
   const saveFragment = (fragment:Fragment) => {
     setSavedFragmentIds((current) => new Set([...current,fragment.id]));
+    clearSourceEdited(fragment.sourceId);
     const siblings = activeFragments.filter((item) => item.sourceId === fragment.sourceId);
     persistFragmentsForSource(fragment.sourceId,siblings);
     notify(`${fragment.name} saved.`);
-  };
-
-  /** Save button for a fragment card: promotes a draft range on first use, otherwise just re-persists it. */
-  const saveFragmentOrRange = (id:string) => {
-    const range=rangeForFragmentCardId(id);
-    if (!range) return;
-    if (range.fragmentId) {
-      saveFragment(activeFragmentById(range.fragmentId));
-      return;
-    }
-    const index=selectedRanges.indexOf(range);
-    const { range:nextRange,fragment } = promoteRangeToFragment(range,index,selectedSource);
-    commitPromotedRange(nextRange,fragment,selectedSource);
   };
 
   /** Removes a fragment slice from the workbench and library. */
@@ -1053,21 +1160,17 @@ export default function FragmentsApp() {
   const mapPoints=useMemo(() => new Map(activeFragments.map((fragment) => [fragment.id,musicalMapPoint(fragment)])),[activeFragments]);
   const mapTakeEdges=useMemo(() => { const firstByGroup=new Map<string,string>();const edges:{ source:string;target:string }[]=[];activeFragments.forEach((fragment) => { if (!fragment.duplicateGroup || archived.has(fragment.id) || duplicateExclusions.has(fragment.id)) return;const first=firstByGroup.get(fragment.duplicateGroup);if (first) edges.push({ source:first,target:fragment.id });else firstByGroup.set(fragment.duplicateGroup,fragment.id); });return edges; },[activeFragments,archived,duplicateExclusions]);
   const mapRelationshipScores=new Map<string,number>();
-  mapFragments.filter((fragment) => !archived.has(fragment.id)).forEach((fragment) => rankedConnectionsFor(fragment.id,allRelationships.length).forEach((relationship) => mapRelationshipScores.set(relationship.id,Math.max(mapRelationshipScores.get(relationship.id) ?? 0,relationship.score))));
+  mapFragments.filter((fragment) => !archived.has(fragment.id)).forEach((fragment) => rankedConnectionsFor(fragment.id).forEach((relationship) => mapRelationshipScores.set(relationship.id,Math.max(mapRelationshipScores.get(relationship.id) ?? 0,relationship.score))));
   const mapRelationships=allRelationships.filter((relationship) => mapRelationshipScores.has(relationship.id) && !archived.has(relationship.source) && !archived.has(relationship.target) && relationshipStatuses[relationship.id] !== "rejected");
   const mapDegreeFor=(id:string) => mapRelationships.filter((relationship) => relationship.source === id || relationship.target === id);
   const mapFragment=mapSelectedId && !archived.has(mapSelectedId) ? activeFragments.find((fragment) => fragment.id === mapSelectedId) ?? null : null;
   const focusMapInspector=() => window.setTimeout(() => mapInspectorCloseRef.current?.focus({ preventScroll:true }),0);
   const closeMapInspector=() => { const id=mapSelectedId;stopAllAudio();setMapSelectedId(null);if (id) window.setTimeout(() => document.querySelector<HTMLButtonElement>(`[data-map-node="${id}"]`)?.focus({ preventScroll:true }),0); };
-  const selectAndRevealMapNode=(id:string,moveFocus=false) => {
-    stopAllAudio();setSelectedId(id);setMapSelectedId(id);
-    if (moveFocus) focusMapInspector();
-  };
   const editorRanges=correctionRelationship ? (combineDraftRanges ?? []) : selectedRanges;
   const editorSensitivity=correctionRelationship ? (combineDraftSensitivity ?? selectedSource.sensitivity) : selectedSource.sensitivity;
   const correctedRange=correctionRelationship ? editorRanges.find((range) => range.fragmentId === correctionRelationship.otherId) : null;
   const correctionFooter=correctionRelationship && correctionPhase === "recompute" ? <div className="recompute workbench-result"><i/><strong>Recomputing metadata and active match…</strong><span>Revision {(correctionOriginal?.analysisRevision ?? 1) + 1}</span></div> : correctionRelationship && correctionPhase === "prompt" && correctionOriginal ? <div className="correction-result workbench-result"><div className="metadata-diff"><span>Field</span><span>Before</span><span>After</span>{[["Duration",correctionOriginal.duration,formatSeconds((correctedRange?.end ?? 0) - (correctedRange?.start ?? 0))],["Key",correctionOriginal.key,"C minor"],["BPM",correctionOriginal.bpm,"90"],["Bars",correctionOriginal.bars,"3"],["Beats",correctionOriginal.beats,"17"],["Confidence",`${Math.round(correctionOriginal.confidence * 100)}%`,`93%`],["Match",`${correctionRelationship.score}%`,`76%`]].map((row) => row.map((cell,index) => <span className={index === 2 ? "changed" : ""} key={`${row[0]}-${index}`}>{cell}</span>))}</div><div className="link-prompt"><span className="relationship-badge manual">criteria changed</span><h3>This fragment no longer matches the original search. Keep it linked to this comparison?</h3><p>The boundary correction is saved either way. A manual link preserves your musical judgment.</p><div><button onClick={rejectCorrectionLink}>Reject and show next</button><button className="primary-button" onClick={keepCorrectionLink}>Yes, keep linked</button></div></div></div> : null;
-  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => correctionRelationship ? setCombineDraftRanges(ranges) : setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges }))} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} onRenameFragment={correctionRelationship ? undefined : renameFragmentOrRange} onSaveFragment={correctionRelationship ? undefined : saveFragmentOrRange} onDeleteFragment={correctionRelationship ? undefined : deleteFragmentOrRange} savedFragmentIds={savedFragmentIds} saveLabel={correctionRelationship ? "Save & recompute" : "Save boundaries"} footerContent={correctionFooter}/> : null;
+  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => { if (correctionRelationship) { setCombineDraftRanges(ranges);return; } markSourceEdited(selectedSource.id);setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges })); }} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} onRenameFragment={correctionRelationship ? undefined : renameFragmentOrRange} onDeleteFragment={correctionRelationship ? undefined : deleteFragmentOrRange} unsavedChanges={correctionRelationship ? undefined : editorUnsaved} saveLabel={correctionRelationship ? "Save & recompute" : "Save all fragments"} footerContent={correctionFooter}/> : null;
   const detailFragment = infoFragmentId ? activeFragments.find((fragment) => fragment.id === infoFragmentId) ?? null : null;
   const detailPanel=sourceEditorOpen && sourcePanelMode === "detail" ? <SourceDetailPanel
     source={selectedSource}
@@ -1211,6 +1314,8 @@ export default function FragmentsApp() {
         onPreviewFragment={previewSingle}
         onPreviewSource={previewSource}
         onRemoveSource={removeSource}
+        onDeleteSource={(sourceId) => void deleteSourceFromDisk(sourceId)}
+        canDeleteFiles={canWriteFiles}
         getFragmentById={fragmentById}
         editorPanel={sourcePanelMode === "detail" ? detailPanel : fragmentationPanel}
       />}
@@ -1262,6 +1367,43 @@ export default function FragmentsApp() {
         <div className="panel-titlebar"><h1>Archive</h1></div>
         {archived.size === 0 ? <div className="empty-state"><span>◌</span><h2>Nothing archived yet</h2><p>When you tidy alternate takes, they remain safely recoverable here.</p><button onClick={() => navigate("library")}>Return to library</button></div> : <div className="archive-list">{activeFragments.filter((fragment) => archived.has(fragment.id)).map((fragment) => <div className="archive-row" key={fragment.id}><Waveform values={fragment.waveform}/><span><b>{fragment.name}</b><small>{sourceNameFor(fragment)} · {fragment.dateLabel}</small></span><em>{fragment.role}</em><button onClick={() => restoreFragment(fragment.id)}>↟ Restore to matching</button></div>)}</div>}
       </section>}
+
+      <Dialog open={closeConfirmOpen} onOpenChange={(open) => { if (!open) setCloseConfirmOpen(false); }}>
+        <DialogContent showCloseButton={false} className="workbench-close-confirm sm:max-w-md">
+          <DialogHeader>
+            <ModalTitlebar
+              className="mb-0"
+              eyebrow="Unsaved fragments"
+              title={<DialogTitle className="modal-titlebar-title">{selectedSource.name}</DialogTitle>}
+            />
+            <DialogDescription className="mt-2">
+              You have changed the slices for{" "}
+              <strong className="font-medium text-foreground">{selectedSource.name}</strong> without
+              saving. Saving writes all {selectedRanges.length} fragments to its{" "}
+              <code>source.json</code>; discarding returns them to what the library already holds.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setCloseConfirmOpen(false)}>
+              Keep editing
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => { setCloseConfirmOpen(false);void discardSourceEdits(selectedSource);finishCloseSourceEditor(); }}
+            >
+              Discard changes
+            </Button>
+            <Button
+              type="button"
+              variant="lime"
+              onClick={() => { setCloseConfirmOpen(false);saveSourceBoundaries();finishCloseSourceEditor(); }}
+            >
+              Save all fragments
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <DuplicateTakesDialog
         open={Boolean(duplicateGroup)}

@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from "@/lib/ui/dialog";
 import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
-import { Fragment } from "@/app/prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
 
 type DuplicateTakesDialogProps = {
   open: boolean;

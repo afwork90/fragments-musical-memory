@@ -11,7 +11,9 @@ import {
   TableRow,
 } from "@/lib/ui/table";
 import { cn } from "@/lib/utils";
-import { Fragment, Relationship, SourceFile } from "../../prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { Relationship } from "@/lib/view/relationship";
+import type { SourceFile } from "@/lib/view/source-file";
 import { CONNECTIONS_COLUMNS } from "./connections-columns";
 
 export type ScoredConnection = Relationship & { score: number; otherId: string };
@@ -113,7 +115,7 @@ export function ConnectionsTable({
                     <span className="ml-1 text-muted-foreground/70">+{target.alternateKeys.length}</span>
                   )}
                 </TableCell>
-                <TableCell className="px-2 py-2">{target.bpm}</TableCell>
+                <TableCell className="px-2 py-2">{target.bpm > 0 ? target.bpm : "—"}</TableCell>
                 <TableCell className="px-2 py-2">{target.role}</TableCell>
                 <TableCell className="px-2 py-2">
                   <div className="flex flex-wrap gap-1">

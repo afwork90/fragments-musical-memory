@@ -1,6 +1,7 @@
-import { formatMusicalKey } from "@/lib/audio/source-metadata";
+import { formatMusicalKey, fragmentKeyLabels } from "@/lib/audio/source-metadata";
 import { LibraryFilters } from "../../library-filter-popover";
-import { Fragment, SourceFile } from "../../prototype-data";
+import type { Fragment } from "@/lib/view/fragment";
+import type { SourceFile } from "@/lib/view/source-file";
 import {
   LibraryLinkSummary,
   LibraryListContext,
@@ -35,7 +36,7 @@ function matchesQuery(item: LibraryItem, query: string, ctx: LibraryListContext)
 
   const fragment = item.fragment;
   const source = ctx.sourceForId(fragment.sourceId);
-  const keyLabel = formatMusicalKey(source?.key, source?.scale) ?? fragment.key;
+  const [keyLabel = ""] = fragmentKeyLabels(fragment, source);
   return `${fragment.name} ${ctx.sourceNameFor(fragment)} ${keyLabel} ${fragment.roles.join(" ")} ${fragment.userTags.join(" ")}`
     .toLowerCase()
     .includes(normalized);
@@ -55,8 +56,8 @@ function compareItems(a: LibraryItem, b: LibraryItem, sort: LibrarySort, ctx: Li
     item.kind === "source" ? item.source.duration : item.fragment.end - item.fragment.start;
   const key = (item: LibraryItem) => {
     if (item.kind === "source") return formatMusicalKey(item.source.key, item.source.scale) ?? "";
-    const source = ctx.sourceForId(item.fragment.sourceId);
-    return formatMusicalKey(source?.key, source?.scale) ?? item.fragment.key;
+    const [label = ""] = fragmentKeyLabels(item.fragment, ctx.sourceForId(item.fragment.sourceId));
+    return label;
   };
   const tempo = (item: LibraryItem) => {
     if (item.kind === "source") return item.source.bpm ?? 0;
