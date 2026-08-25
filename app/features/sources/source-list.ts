@@ -42,7 +42,6 @@ export function sortSources(sources: SourceFile[], sort: SourceSort) {
     if (sort.column === "date") comparison = Date.parse(a.date) - Date.parse(b.date);
     if (sort.column === "duration") comparison = a.duration - b.duration;
     if (sort.column === "type") comparison = a.sourceTypes.join(" ").localeCompare(b.sourceTypes.join(" "));
-    if (sort.column === "profile") comparison = a.analysisProfile.name.localeCompare(b.analysisProfile.name);
     if (sort.column === "format") comparison = a.format.localeCompare(b.format);
     if (sort.column === "fragments") comparison = a.fragmentIds.length - b.fragmentIds.length;
 

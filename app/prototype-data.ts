@@ -18,7 +18,7 @@ import prototypeWaveforms from "./prototype-waveforms.json";
 import { parseMusicalKeyLabel } from "@/lib/audio/source-metadata";
 import type { Fragment } from "@/lib/view/fragment";
 import type { Relationship, Transform } from "@/lib/view/relationship";
-import type { AnalysisProfile, SourceFile } from "@/lib/view/source-file";
+import type { SourceFile } from "@/lib/view/source-file";
 import type { SourceType } from "@/lib/view/vocabulary";
 
 const FRAGMENT_WAVEFORMS = prototypeWaveforms.fragments as Record<string, number[]>;
@@ -138,8 +138,6 @@ export const RELATIONSHIPS: Relationship[] = [
   rel("r33","f10","f17",.83,{rhythm:.94,harmony:.80,timbre:.90,tempo:.92,pitch:.82,brightness:.87},.05,"Slowing the tapped rhythm exposes the same compact phrase length.",{bpm:-12,labels:["−12 BPM"],asset:"/audio/f17.wav"}),
 ];
 
-const DEFAULT_PROFILE:AnalysisProfile = { name:"General musical sketch",sensitivity:52,expectedLength:"8–28 sec",detectors:["Silence","Transient","Spectral change"],tempoStrategy:"Flexible pulse",keyStrategy:"Primary + alternate interpretations",confidenceThreshold:.68 };
-export const MESSY_PHONE_PROFILE:AnalysisProfile = { name:"Messy phone jam",sensitivity:68,expectedLength:"6–24 sec",detectors:["Transient","Silence","Spectral change"],tempoStrategy:"Adaptive, allow drift",keyStrategy:"Primary + relative-key alternatives",confidenceThreshold:.62 };
 
 export const SOURCE_FILES: SourceFile[] = uniqueSourceNames.map((name,index) => {
   const fragments=FRAGMENTS.filter((fragment) => fragment.source === name);
@@ -154,7 +152,7 @@ export const SOURCE_FILES: SourceFile[] = uniqueSourceNames.map((name,index) => 
     device:imported || name.includes("Voice") ? "iPhone microphone" : name.includes("Tascam") ? "Tascam DR-05" : "Room recorder",
     fragmentIds:fragments.map((fragment) => fragment.id),waveform:composeSourceWaveform(fragments,duration),sensitivity:imported ? 68 : 38 + (index * 9) % 34,
     start:Math.min(...fragments.map((fragment) => fragment.start)),end:Math.max(...fragments.map((fragment) => fragment.end)),
-    sourceTypes:sourceTypesFor(name),analysisProfile:imported ? MESSY_PHONE_PROFILE : { ...DEFAULT_PROFILE },imported,
+    sourceTypes:sourceTypesFor(name),imported,
     bpm:lead?.bpm ?? null,
     key:parsedKey.key,
     scale:parsedKey.scale,

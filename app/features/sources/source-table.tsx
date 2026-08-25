@@ -163,15 +163,6 @@ function SourceTableCell({
           {source.sourceTypes.join(" · ")}
         </TableCell>
       );
-    case "profile":
-      return (
-        <TableCell
-          className={sourceTableCellClass("max-w-[140px] truncate")}
-          title={`${source.analysisProfile.detectors.join(", ")} · ${source.analysisProfile.tempoStrategy}`}
-        >
-          {source.analysisProfile.name}
-        </TableCell>
-      );
     case "format":
       return (
         <TableCell className={sourceTableCellClass()} title={source.format}>

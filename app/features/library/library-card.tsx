@@ -1,7 +1,7 @@
 "use client";
 
-import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Pencil, Play, Square, Trash2 } from "lucide-react";
+import { DragEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Check, Hand, Pencil, Play, Square, Trash2 } from "lucide-react";
 import { ScrubbableWaveform } from "@/lib/audio/scrubbable-waveform";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
@@ -41,6 +41,40 @@ type LibraryCardProps = {
   onDelete?: () => void;
   isSaved?: boolean;
 };
+
+/**
+ * Dragging a card out to the desktop or a DAW.
+ *
+ * Deliberately its own target rather than the waveform. The waveform's click places
+ * the playhead, so making the whole strip draggable put two gestures on one control
+ * and advertised only the one you could not perform by clicking — the tooltip said
+ * "drag me" while a click did something else entirely.
+ */
+function DragHandle({
+  disabled,
+  label,
+  onDragStart,
+}: {
+  disabled: boolean;
+  label: string;
+  onDragStart: (event: DragEvent<HTMLElement>) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="library-card-drag-handle"
+      draggable={!disabled}
+      disabled={disabled}
+      onDragStart={onDragStart}
+      // The card below would otherwise take a click that was only ever a missed grab.
+      onClick={(event) => event.stopPropagation()}
+      title={disabled ? undefined : "Drag onto your desktop or into a DAW"}
+      aria-label={label}
+    >
+      <Hand className="size-4" aria-hidden />
+    </button>
+  );
+}
 
 function MetaItem({ label, value }: { label: string; value: string }) {
   return (
@@ -366,7 +400,7 @@ function SourceLibraryCard({
         onOpenInfo={onOpenInfo}
         meta={(
           <>
-            <MetaItem label="Recorded" value={source.date} />
+            <MetaItem label="Imported" value={source.date} />
             <MetaItem label="Length" value={formatSeconds(source.duration)} />
             <MetaItem label="Key" value={keyLabel ?? "—"} />
             <MetaItem label="BPM" value={bpm != null ? String(bpm) : "—"} />
@@ -387,15 +421,7 @@ function SourceLibraryCard({
           {isPreviewing ? <Square className="size-4 fill-current" /> : <Play className="size-4 fill-current" />}
         </Button>
         {waveActions}
-        <div
-          className={cn("library-card-wave-slot", canPlay && "cursor-grab active:cursor-grabbing")}
-          draggable={canPlay}
-          onDragStart={(event) => {
-            if (!canPlay) return;
-            startDesktopDrag(event, { sourceId: source.id }, { audioUrl: resolveSourceAudioUrl(source, fragmentAudioFor) ?? "", fileName: `${source.name}.wav` });
-          }}
-          title={canPlay ? "Drag onto your desktop or into a DAW" : undefined}
-        >
+        <div className="library-card-wave-slot">
           <ScrubbableWaveform
             values={peaks}
             active={isPreviewing}
@@ -403,6 +429,13 @@ function SourceLibraryCard({
             onSeek={canPlay ? onSeek : undefined}
           />
         </div>
+        <DragHandle
+          disabled={!canPlay}
+          label={`Drag ${source.name} out`}
+          onDragStart={(event) => {
+            startDesktopDrag(event, { sourceId: source.id }, { audioUrl: resolveSourceAudioUrl(source, fragmentAudioFor) ?? "", fileName: `${source.name}.wav` });
+          }}
+        />
       </div>
     </article>
   );
@@ -500,7 +533,7 @@ function FragmentLibraryCard({
         isSaved={isSaved}
         meta={(
           <>
-            <MetaItem label="Recorded" value={fragment.dateLabel} />
+            <MetaItem label="Imported" value={fragment.dateLabel} />
             <MetaItem label="Length" value={formatSeconds(fragment.end - fragment.start)} />
             <MetaItem label="Key" value={keyLabel ?? "—"} />
             <MetaItem label="BPM" value={fragment.bpm > 0 ? String(fragment.bpm) : "—"} />
@@ -524,15 +557,7 @@ function FragmentLibraryCard({
           {isPreviewing ? <Square className="size-4 fill-current" /> : <Play className="size-4 fill-current" />}
         </Button>
         {waveActions}
-        <div
-          className={cn("library-card-wave-slot", canPlay && "cursor-grab active:cursor-grabbing")}
-          draggable={canPlay}
-          onDragStart={(event) => {
-            if (!canPlay || !dragAudioUrl) return;
-            startDesktopDrag(event, { sourceId: fragment.sourceId }, { audioUrl: dragAudioUrl, fileName: `${fragment.name}.wav` });
-          }}
-          title={canPlay ? "Drag onto your desktop or into a DAW" : undefined}
-        >
+        <div className="library-card-wave-slot">
           <ScrubbableWaveform
             values={peaks}
             active={isPreviewing}
@@ -540,6 +565,14 @@ function FragmentLibraryCard({
             onSeek={canPlay ? onSeek : undefined}
           />
         </div>
+        <DragHandle
+          disabled={!canPlay || !dragAudioUrl}
+          label={`Drag ${fragment.name} out`}
+          onDragStart={(event) => {
+            if (!dragAudioUrl) return;
+            startDesktopDrag(event, { sourceId: fragment.sourceId }, { audioUrl: dragAudioUrl, fileName: `${fragment.name}.wav` });
+          }}
+        />
       </div>
     </article>
   );

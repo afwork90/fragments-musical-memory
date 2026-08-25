@@ -1,17 +1,7 @@
 // A source recording as the UI renders it.
 
+import type { MeasuredSummary } from "./analysis";
 import type { SourceType } from "./vocabulary";
-
-/** The settings that decide how a source gets sliced and analysed. */
-export type AnalysisProfile = {
-  name: string;
-  sensitivity: number;
-  expectedLength: string;
-  detectors: string[];
-  tempoStrategy: string;
-  keyStrategy: string;
-  confidenceThreshold: number;
-};
 
 export type SourceFile = {
   id: string;
@@ -26,7 +16,6 @@ export type SourceFile = {
   start: number;
   end: number;
   sourceTypes: SourceType[];
-  analysisProfile: AnalysisProfile;
   /** True once the source has been copied into the managed library. */
   imported?: boolean;
   audioUrl?: string;
@@ -36,4 +25,6 @@ export type SourceFile = {
   key?: string | null;
   scale?: string | null;
   uploadedAt?: string;
+  /** What analysis measured for the whole recording. Absent if never measured. */
+  measured?: MeasuredSummary;
 };

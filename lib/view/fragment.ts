@@ -5,6 +5,7 @@
 // minor" rather than a key plus a scale. `lib/domain/source-document.ts` holds the
 // disk form; `fragments-app.tsx` converts between them.
 
+import type { MeasuredSummary } from "./analysis";
 import type { MusicalRole, SourceType } from "./vocabulary";
 
 export type Fragment = {
@@ -41,4 +42,10 @@ export type Fragment = {
   userTags: string[];
   /** Bumped whenever the user corrects the analysis, so caches can be busted. */
   analysisRevision: number;
+  /**
+   * What analysis measured for this fragment specifically, absent for fragments that
+   * were never measured. Not the same as the source's: each fragment is measured from
+   * its own slice, so a quiet intro and a chorus of one recording differ.
+   */
+  measured?: MeasuredSummary;
 };

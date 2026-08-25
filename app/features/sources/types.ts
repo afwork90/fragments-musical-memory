@@ -6,7 +6,6 @@ export type SourceSortColumn =
   | "date"
   | "duration"
   | "type"
-  | "profile"
   | "format"
   | "tempo"
   | "key"

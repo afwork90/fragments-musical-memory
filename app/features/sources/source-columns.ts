@@ -3,10 +3,9 @@ import { SourceColumnDef, SourceSort, SourceSortColumn } from "./types";
 export const SOURCE_COLUMNS: SourceColumnDef[] = [
   { id: "name", label: "Source" },
   { id: "signal", label: "Signal" },
-  { id: "date", label: "Recorded" },
+  { id: "date", label: "Imported" },
   { id: "duration", label: "Length" },
   // { id: "type", label: "Type" },
-  // { id: "profile", label: "Profile" },
   // { id: "format", label: "Format" },
   { id: "tempo", label: "Tempo" },
   { id: "key", label: "Key" },

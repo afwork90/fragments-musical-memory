@@ -4,7 +4,6 @@ import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
   FRAGMENTS,
   IMPORTED_FRAGMENT_IDS,
-  MESSY_PHONE_PROFILE,
   RELATIONSHIPS,
   SOURCE_FILES,
 } from "./prototype-data";
@@ -49,8 +48,10 @@ import {
 import { SourceAnalysisValues } from "./features/sources/source-detail-panel";
 import { LibraryCard } from "./features/library/library-card";
 import { MAP_WORLD, musicalMapPoint } from "./map-layout.mjs";
+import { DEFAULT_SENSITIVITY } from "@/lib/domain/source-document";
 import type { FragmentDocument, SourceDocument } from "@/lib/domain/source-document";
-import type { MusicalRole as DomainMusicalRole } from "@/lib/domain/source-document";
+import type { MeasuredAnalysis, MusicalRole as DomainMusicalRole } from "@/lib/domain/source-document";
+import type { MeasuredSummary } from "@/lib/view/analysis";
 import type { SourceRecord } from "@/lib/ipc/contract";
 import { getFragmentsBridge } from "@/lib/web/bridge";
 
@@ -94,9 +95,32 @@ function displayRole(role: DomainMusicalRole | undefined): MusicalRole {
 }
 
 /** Rebuilds an in-memory Fragment from a source.json fragment record, so persisted segmentation shows up in the Library after a reload. */
+/** The measured fields worth showing a person, straight off the document. */
+function measuredSummaryFrom(analysis: MeasuredAnalysis | undefined): MeasuredSummary | undefined {
+  if (!analysis) return undefined;
+
+  const origin = analysis.provenance?.origin;
+  return {
+    bpm: analysis.bpm ?? null,
+    bpmConfidence: analysis.bpmConfidence ?? null,
+    key: analysis.key ?? null,
+    scale: analysis.scale ?? null,
+    keyStrength: analysis.keyStrength ?? null,
+    centroidHz: analysis.centroidHz ?? null,
+    onsetCount: analysis.onsets ? analysis.onsets.length : null,
+    featureSampleRate: analysis.featureSampleRate ?? null,
+    origin: origin === "measured" || origin === "edited" ? origin : null,
+    extractor: analysis.provenance?.extractor ?? null,
+    measuredAt: analysis.provenance?.at ?? null,
+    hasTimbre: Boolean(analysis.timbre?.length),
+    hasChroma: Boolean(analysis.chroma?.length),
+  };
+}
+
 function fragmentFromDocument(fragmentDoc: FragmentDocument, index: number, source: SourceFile): Fragment {
   return {
     id: fragmentDoc.id,
+    measured: measuredSummaryFrom(fragmentDoc.analysis),
     name: fragmentDoc.name || defaultFragmentName(source, index),
     sourceId: source.id,
     source: source.name,
@@ -181,7 +205,7 @@ function sourceFileFromDocument(document: SourceRecord, audioUrl?: string): Sour
     start: 0,
     end: duration,
     sourceTypes: document.sourceTypes,
-    analysisProfile: MESSY_PHONE_PROFILE,
+    measured: measuredSummaryFrom(document.analysis),
     imported: true,
     audioUrl: audioUrl ?? document.audioUrl,
     audioCacheKey: document.id,
@@ -778,11 +802,10 @@ export default function FragmentsApp() {
       device: "Local upload",
       fragmentIds: [],
       waveform: imported.peaks,
-      sensitivity: MESSY_PHONE_PROFILE.sensitivity,
+      sensitivity: DEFAULT_SENSITIVITY,
       start: 0,
       end: imported.duration,
       sourceTypes: imported.sourceTypes,
-      analysisProfile: MESSY_PHONE_PROFILE,
       imported: true,
       audioUrl: imported.persistedAudioUrl ?? imported.objectUrl,
       audioCacheKey: imported.cacheKey,

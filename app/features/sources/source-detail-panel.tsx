@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Play, Square } from "lucide-react";
 import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
+import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { formatMusicalKey, resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
 import { Button } from "@/lib/ui/button";
 import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
@@ -10,11 +11,19 @@ import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import { useSourceWaveform } from "@/lib/audio/use-source-waveform";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
 import { formatSeconds } from "@/lib/format";
+import type { MeasuredSummary } from "@/lib/view/analysis";
 import type { Fragment } from "@/lib/view/fragment";
 import type { SourceFile } from "@/lib/view/source-file";
 import type { MusicalRole } from "@/lib/view/vocabulary";
 import { LIBRARY_ROLES } from "../library/library-columns";
 import { cn } from "@/lib/utils";
+
+/**
+ * Mirrors `MIN_BPM_CONFIDENCE` in `lib/analysis/features.ts`. Not imported from
+ * there: this component would then pull the essentia-facing module into the
+ * renderer bundle for one number.
+ */
+const TRUSTED_BPM_CONFIDENCE = 1;
 
 export type SourceAnalysisValues = {
   bpm: number | null;
@@ -67,7 +76,18 @@ export function SourceDetailPanel({
 }: SourceDetailPanelProps) {
   const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
   const sidecar = useSourceWaveform(source.id);
-  const values = cached?.peaks ?? sidecar ?? source.waveform;
+  const wholeSource = cached?.peaks ?? sidecar;
+  // A fragment's panel must show the fragment. Showing the whole recording made
+  // every fragment of one source look identical, which is exactly the information
+  // the panel exists to give.
+  const values = useMemo(() => {
+    if (fragment) {
+      return wholeSource
+        ? slicePeaks(wholeSource, fragment.start, fragment.end, source.duration)
+        : fragment.waveform;
+    }
+    return wholeSource ?? source.waveform;
+  }, [fragment, wholeSource, source.waveform, source.duration]);
   const { bpm: resolvedBpm, key: resolvedKey, scale: resolvedScale, keyStrength } = resolvedSourceAnalysis(source, cached);
   const keyLabel = formatMusicalKey(resolvedKey, resolvedScale);
   const roleOptions = LIBRARY_ROLES.filter((role): role is MusicalRole => role !== "All");
@@ -301,15 +321,85 @@ export function SourceDetailPanel({
         ) : null}
 
         <div>
-          <MetadataRow label="Recorded" value={source.date} />
-          <MetadataRow label="Duration" value={formatSeconds(source.duration)} />
+          {fragment ? (
+            <>
+              <MetadataRow label="Source" value={source.name} />
+              <MetadataRow label="Position" value={`${formatSeconds(fragment.start)} – ${formatSeconds(fragment.end)}`} />
+              <MetadataRow label="Duration" value={formatSeconds(fragment.end - fragment.start)} />
+            </>
+          ) : (
+            <>
+              <MetadataRow label="Duration" value={formatSeconds(source.duration)} />
+              <MetadataRow label="Fragments" value={String(fragmentCount)} />
+            </>
+          )}
           <MetadataRow label="Format" value={source.format} />
-          <MetadataRow label="Device" value={source.device} />
           <MetadataRow label="Type" value={source.sourceTypes.join(" · ") || "—"} />
-          <MetadataRow label="Profile" value={source.analysisProfile.name} />
-          <MetadataRow label="Fragments" value={String(fragmentCount)} />
+          {/* `date` is derived from importedAt, so it is when this arrived in the
+              library, not when it was recorded — which nothing on disk records. */}
+          <MetadataRow label="Imported" value={source.date} />
         </div>
+
+        <MeasuredBlock measured={fragment ? fragment.measured : source.measured} />
       </div>
     </aside>
+  );
+}
+
+/**
+ * The measurements, or an honest statement that there are none.
+ *
+ * Every value can be absent, and absent renders as "—". A tempo is shown with its
+ * confidence because essentia returns a plausible BPM at confidence 0 for short or
+ * unrhythmic audio, and a bare "139 BPM" would present that as settled.
+ */
+function MeasuredBlock({ measured }: { measured?: MeasuredSummary }) {
+  if (!measured) {
+    return (
+      <div className="space-y-1 rounded-lg border border-border bg-card/40 p-4">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Measured</span>
+        <p className="text-[11px] text-muted-foreground">
+          Not analysed yet. Run <code>npm run analyze -- --write</code>.
+        </p>
+      </div>
+    );
+  }
+
+  const tempo = measured.bpm === null
+    ? "—"
+    : measured.bpmConfidence === null
+      ? `${measured.bpm} BPM`
+      : measured.bpmConfidence >= TRUSTED_BPM_CONFIDENCE
+        ? `${measured.bpm} BPM · confidence ${measured.bpmConfidence.toFixed(2)}`
+        : `${measured.bpm} BPM · confidence ${measured.bpmConfidence.toFixed(2)}, too low to trust`;
+
+  const key = measured.key
+    ? `${formatMusicalKey(measured.key, measured.scale) ?? measured.key}${measured.keyStrength != null ? ` · ${measured.keyStrength}% strength` : ""}`
+    : "—";
+
+  return (
+    <div className="space-y-1 rounded-lg border border-border bg-card/40 p-4">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Measured</span>
+      <div>
+        <MetadataRow label="Tempo" value={tempo} />
+        <MetadataRow label="Key" value={key} />
+        <MetadataRow
+          label="Brightness"
+          value={measured.centroidHz === null ? "—" : `${Math.round(measured.centroidHz)} Hz centroid`}
+        />
+        <MetadataRow label="Onsets" value={measured.onsetCount === null ? "—" : String(measured.onsetCount)} />
+        <MetadataRow
+          label="Timbre"
+          value={measured.hasTimbre ? "MFCC measured" : "—"}
+        />
+        <MetadataRow
+          label="Chroma"
+          value={measured.hasChroma ? "12 bins measured" : "—"}
+        />
+        {measured.featureSampleRate != null && (
+          <MetadataRow label="Feature rate" value={`${measured.featureSampleRate} Hz`} />
+        )}
+      </div>
+    </div>
   );
 }

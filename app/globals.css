@@ -340,6 +340,10 @@ h3.library-card-title[contenteditable="true"] { cursor:text; outline:1px solid v
 .library-card-wave-slot .waveform-frame { height:100%; width:100%; }
 .library-card-play { border:1px solid #2f2c34; border-radius:8px; background:#0d0c10; flex-shrink:0; align-self:center; }
 .library-card-play:hover { background:#17161c; }
+.library-card-drag-handle { display:flex; align-items:center; justify-content:center; width:24px; flex-shrink:0; align-self:center; border:none; background:none; color:#5d5a66; cursor:grab; border-radius:6px; }
+.library-card-drag-handle:hover:not(:disabled) { color:var(--card-action); background:#17161c; }
+.library-card-drag-handle:active:not(:disabled) { cursor:grabbing; }
+.library-card-drag-handle:disabled { opacity:.3; cursor:default; }
 .waveform-frame { display:block; overflow:hidden; padding:0; line-height:0; border:1px solid #2a2830; border-radius:var(--waveform-frame-radius); background:#09080b; }
 .waveform-frame > svg,.waveform-frame .continuous-wave { display:block; width:100%; height:100%; min-height:0; }
 .waveform-frame-fill { display:flex; flex:1; min-width:0; min-height:0; height:100%; }
