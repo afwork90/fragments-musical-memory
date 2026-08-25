@@ -422,6 +422,25 @@ applied them, and the one pulse reinterpretation that is real is already folded 
 `tempoRatio` (the row then reads 140 → 144 against an anchor at 72, which the note
 explains).
 
+## Playing audio
+
+Playback state is keyed on `PreviewScope.id`, never on a fragment id.
+`buildFragmentPreviewScope` returns the fragment's own id, `buildSourcePreviewScope`
+returns `source:<id>`, so one piece of state can say what is playing whether that is a
+slice or a whole recording. The workbench header button played `displayFragments[0]`
+for months because the state could not express "the recording" — which is invisible on
+any source whose single fragment spans the take, and four of the library's sources are
+like that.
+
+A `/audio/` URL is one of the demo dataset's per-fragment files, so it is *already* a
+slice and nothing clips into it; `sourceSupportsSlicing` refuses. Seeking a
+twenty-second file to 2:14 fails quietly and leaves playback at 0, which is heard as the
+source's first fragment — the same symptom, from three different causes, three times so
+far.
+
+That machinery is inlined in three components now (`app/fragments-app.tsx`, the
+workbench, the affinities modal). If you need a fourth, extract the hook first.
+
 ## Rendering audio
 
 `lib/audio/render-match.ts` is the only thing in the app that writes audio, and

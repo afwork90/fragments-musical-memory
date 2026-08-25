@@ -3,7 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Play, Square } from "lucide-react";
 import { MIN_BPM_CONFIDENCE } from "@/lib/analysis/features";
+import { ChromaSparkline } from "@/lib/audio/chroma-sparkline";
 import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
+import {
+  MEASURED_HINTS,
+  brightnessLabel,
+  dynamicsLabel,
+  intensityLabel,
+} from "@/lib/audio/measured-labels";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { formatMusicalKey, resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
 import { Button } from "@/lib/ui/button";
@@ -64,43 +71,6 @@ function MetadataRow({
         {value}
       </span>
     </div>
-  );
-}
-
-/** The 12 chroma bins, in the order essentia emits them: bin 0 is A. */
-const PITCH_CLASS_NAMES = ["A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"];
-
-/**
- * The chroma vector as twelve bars.
- *
- * Unlabelled on purpose: at this size the numbers would be unreadable and the
- * shape is the point — which pitch classes a fragment leans on, and whether it
- * leans at all. Heights are relative to the strongest bin, so this shows the
- * balance between pitch classes and not how loud the fragment was.
- */
-function ChromaSparkline({ chroma }: { chroma: number[] }) {
-  const peak = Math.max(...chroma);
-  if (!(peak > 0)) return null;
-
-  const strongest = PITCH_CLASS_NAMES[chroma.indexOf(peak)] ?? "—";
-
-  return (
-    <span
-      className="chroma-sparkline"
-      role="img"
-      aria-label={`Pitch class balance, strongest ${strongest}`}
-      title={chroma
-        .map((value, index) => `${PITCH_CLASS_NAMES[index]} ${Math.round((value / peak) * 100)}%`)
-        .join("  ")}
-    >
-      {chroma.map((value, index) => (
-        <span
-          key={PITCH_CLASS_NAMES[index]}
-          className="chroma-sparkline-bar"
-          style={{ height: `${(value / peak) * 100}%` }}
-        />
-      ))}
-    </span>
   );
 }
 
@@ -455,8 +425,8 @@ function MeasuredBlock({ measured }: { measured?: MeasuredSummary }) {
         />
         <MetadataRow
           label="Brightness"
-          hint="Spectral centroid: where the energy sits."
-          value={measured.centroidHz === null ? "—" : `${Math.round(measured.centroidHz)} Hz`}
+          hint={MEASURED_HINTS.brightness}
+          value={brightnessLabel(measured.centroidHz)}
         />
         <MetadataRow
           label="Texture"
@@ -466,15 +436,19 @@ function MeasuredBlock({ measured }: { measured?: MeasuredSummary }) {
         <MetadataRow label="Loudness" hint="Integrated loudness over the analysed audio." value={loudness} />
         <MetadataRow
           label="Dynamics"
-          hint="Dynamic complexity: how much the level moves. A steady loop is low; a performance that breathes is high."
-          value={measured.dynamicComplexity === null ? "—" : `${measured.dynamicComplexity.toFixed(1)} dB`}
+          hint={MEASURED_HINTS.dynamics}
+          value={dynamicsLabel(measured.dynamicComplexity)}
         />
-        <MetadataRow label="Intensity" value={intensityLabel(measured.intensity)} />
+        <MetadataRow
+          label="Intensity"
+          hint={MEASURED_HINTS.intensity}
+          value={intensityLabel(measured.intensity)}
+        />
         <MetadataRow label="Silence" hint="Silence at the head and tail, worth trimming." value={silence} />
         <div className="flex items-center justify-between gap-4 border-b border-border/50 py-2 last:border-b-0">
           <span
             className="shrink-0 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground"
-            title="Which pitch classes the fragment leans on, octaves collapsed. Hover for the balance."
+            title={MEASURED_HINTS.chroma}
           >
             Chroma
           </span>
@@ -485,11 +459,4 @@ function MeasuredBlock({ measured }: { measured?: MeasuredSummary }) {
       </div>
     </div>
   );
-}
-
-/** Essentia's intensity is -1, 0 or 1; the numbers mean nothing to a reader. */
-function intensityLabel(intensity: number | null) {
-  if (intensity === null) return "—";
-  if (intensity < 0) return "Relaxed";
-  return intensity > 0 ? "Aggressive" : "Moderate";
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { INTENSITY_LABELS } from "@/lib/audio/measured-labels";
 import type { MusicalRole } from "@/lib/view/vocabulary";
 import {
   LibraryFilters,
@@ -116,7 +117,7 @@ export function LibraryFilterPanel({
     onChange({ ...filters, [key]: value });
   };
 
-  const toggleMulti = (key: "key" | "tags" | "role", value: string) => {
+  const toggleMulti = (key: "key" | "tags" | "role" | "intensity", value: string) => {
     const current = filters[key] as string[];
     replace(
       key,
@@ -180,6 +181,34 @@ export function LibraryFilterPanel({
           onChange={(links) => replace("links", links)}
           minPlaceholder="0"
           maxPlaceholder="10"
+        />
+        {/* The measured characteristics. Anything not measured for one of these
+            drops out while its filter is set, because an unknown value is not an
+            answer to a question about a measurement. */}
+        {/* Placeholders sit inside the spread the library actually occupies —
+            500–1050 Hz and 0.9–7.1 dB across the current recordings — so they read
+            as a hint rather than as a range nothing lives in. */}
+        <RangeFields
+          label="Brightness"
+          unit="Hz"
+          filter={filters.brightness}
+          onChange={(brightness) => replace("brightness", brightness)}
+          minPlaceholder="500"
+          maxPlaceholder="1200"
+        />
+        <RangeFields
+          label="Dynamics"
+          unit="dB"
+          filter={filters.dynamics}
+          onChange={(dynamics) => replace("dynamics", dynamics)}
+          minPlaceholder="0"
+          maxPlaceholder="8"
+        />
+        <PillGroup
+          label="Intensity"
+          options={INTENSITY_LABELS}
+          selected={filters.intensity}
+          onToggle={(value) => toggleMulti("intensity", value)}
         />
       </div>
 

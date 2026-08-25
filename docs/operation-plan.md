@@ -558,6 +558,10 @@ safe to leave alone:
 Residual harm, accepted knowingly: prototype fragments still appear in the same list as real ones,
 and the opening state is still fake. Retire it once affinities can produce transforms.
 
+**That condition is now met — see 9.21.** `lib/affinity/transform.ts` computes tempo ratios and
+semitone shifts from measurements, and the console reads them, so the demo's pre-baked
+"here is what −3 semitones sounds like" is no longer the only version of that moment.
+
 ### 9.8 The demo overrides are out of the scoring path
 
 `rankedConnectionsFor` contained two hardcoded results: score 94 when the relationship was `r01`, the
@@ -988,16 +992,71 @@ override is gone: a `/audio/` asset is already a slice, so nothing clips into it
 fragment's own file plays instead. Library slices and pending-import blobs are unchanged,
 verified against the function rather than argued from it.
 
-**The fragments modal, deferred.** Not a plumbing bug at all — the header button is
-`onClick={() => preview(headerFragment)}` over `const headerFragment = displayFragments[0]`,
-so it plays fragment 1 by construction. The intent is legible one line up: its guard is
-`canPlaySource = Boolean(resolveSourceAudioUrl(source))`, computed from the *source's* URL,
-and `buildSourcePreviewScope` sits unused in the same module. Decided: it plays the whole
-recording, since every lane already has its own play button.
+**The fragments modal, fixed after the boundary-handle work landed.** Not a plumbing bug at
+all — the header button was `onClick={() => preview(headerFragment)}` over
+`const headerFragment = displayFragments[0]`, so it played fragment 1 by construction. The
+intent was legible one line up: its guard was computed from the *source's* URL, and
+`buildSourcePreviewScope` sat unused in the same module.
 
-Not done yet because `preview()` keys `previewingId`, the timeline playhead, and the
-per-lane stop state on a fragment id, so a source-wide scope needs an id that is not a
-fragment's — `buildSourcePreviewScope` already returns `source:<id>` for exactly this.
-Around twenty lines, all in `app/fragmentation-workbench.tsx`, which is being rewritten
-for boundary handles by another agent in the same working tree. Waiting for that commit
-rather than racing it.
+Playing something that is not a fragment took one change: `startPreview` keys the playing
+state on `scope.id` instead of a fragment id. That is what those ids are for — `source:<id>`
+for the recording, the fragment's own id for a lane — and it is now the rule in all three
+places that preview audio (`fragments-app`, the workbench, the affinities modal). The
+recording also plays once rather than looping, and the playhead sweeps the full timeline
+for it.
+
+**The candidate list, third instance of the same shape.** In the affinities modal the play
+button on a candidate card called `chooseCandidate`, so it promoted the fragment to the B
+slot and made no sound, with `isPreviewing={false}` guaranteeing no feedback either.
+Browsing thirty affinities by ear is what that list is for. A candidate now auditions as
+recorded, in its own small transport, deliberately outside A/B: the crossfade and the
+transform belong to the B slot, and a freshly picked candidate has no render yet, so
+"adapted" playback there could only mean untransformed playback with extra steps.
+
+Worth noting for whoever is next: that makes **three inlined copies** of the same preview
+machinery — element, scope, rAF progress, clip-end stop, seek. It is a hook waiting to be
+extracted (`useFragmentPreview`), deliberately not extracted mid-flight while two agents
+were in these files.
+
+### 9.21 Retiring the seed dataset: what it actually takes
+
+This is the next task, and 9.7's reason for deferring it no longer holds. Read 9.7 first,
+then this.
+
+**It is not host-conditional, and never was.** The belief that the demo data existed for
+the web build is wrong: `app/fragments-app.tsx` imports `FRAGMENTS` and `SOURCE_FILES` at
+module scope and seeds them into state, and the `listSources()` effect *merges* the real
+library beside them rather than replacing them. Both hosts show the union, which is why
+the demo fragments appear in Electron. The assets are real files under `public/audio/`, so
+they ship inside the packaged app. The only place the host is consulted is
+`bridge.capabilities.persist`, and it decides what actions are offered, never what the
+library contains.
+
+**The app assumes those fragments exist.** This is the part that makes it a task rather
+than an import deletion:
+
+- `const [sources, setSources] = useState(SOURCE_FILES.filter(...))` — demo sources are the
+  initial state.
+- `activeFragments` is `[...FRAGMENTS, ...importedFragments]`.
+- `activeFragmentById(selectedFragmentId ?? "f02")` — the default selection is a demo id,
+  and `fragmentById` ends in a non-null assertion.
+- `OPENING_SOURCE_ID = SOURCE_FILES.find((source) => !source.imported)!.id` — throws on an
+  empty dataset.
+- `selectedSource` is asserted non-null from a `.find`.
+
+So the first move is an empty library that opens without crashing: nothing selected,
+nothing open, empty states that say something true. Everything else follows from that.
+
+**Demo-only features that go with it**, each currently entangled in the same file:
+`duplicateGroup` (the related-takes affordance and the duplicates dialog), the pre-baked
+`transform.asset` files and `transform.labels`, the export sheet's use of them, and
+`public/audio/f*.wav`. Renders replace the assets: `lib/audio/render-match.ts` writes the
+real thing.
+
+**The Map needs nothing.** It reads the measured centroid now, and is a placeholder due for
+replacement anyway.
+
+**Two known display anti-patterns die with the dataset**, both recorded in 9.20: a demo
+source's `audioUrl` is its lead fragment's file (`audioUrl: lead?.audio`), so "play the
+source" plays fragment 1 wherever it is offered, and `resolveSourceAudioUrl`'s fallback
+does the same thing by a different route. Neither is worth fixing separately.
