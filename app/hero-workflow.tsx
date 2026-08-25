@@ -452,11 +452,19 @@ export function CombineWorkspace({
   const [mute, setMute] = useState({ a: false, b: false });
   const [crossfade, setCrossfade] = useState(50);
   const [transformOpen, setTransformOpen] = useState(false);
+  // Auditioning a fragment in the candidate list is its own small transport, separate
+  // from A/B: it plays one thing, as recorded, at full gain — the crossfade and the
+  // transform belong to whatever is in the B slot.
+  const [auditionId, setAuditionId] = useState<string | null>(null);
+  const [auditionProgress, setAuditionProgress] = useState<number | null>(null);
   const audios = useRef<HTMLAudioElement[]>([]);
   const scopesByAudio = useRef(new Map<HTMLAudioElement, PreviewScope>());
   const trackCleanups = useRef<Array<() => void>>([]);
   const timers = useRef<number[]>([]);
   const progressRaf = useRef(0);
+  const auditionAudio = useRef<HTMLAudioElement | null>(null);
+  const auditionScope = useRef<PreviewScope | null>(null);
+  const auditionRaf = useRef(0);
   const volumes = volumesForCrossfade(crossfade);
 
   const stop = useCallback(() => {
@@ -519,6 +527,76 @@ export function CombineWorkspace({
     (sourceId: string) => sources.find((source) => source.id === sourceId),
     [sources],
   );
+
+  const stopAudition = useCallback(() => {
+    cancelAnimationFrame(auditionRaf.current);
+    if (auditionAudio.current) {
+      auditionAudio.current.pause();
+      auditionAudio.current = null;
+    }
+    auditionScope.current = null;
+    setAuditionId(null);
+    setAuditionProgress(null);
+  }, []);
+
+  const auditionCandidate = useCallback((fragment: Fragment) => {
+    if (auditionId === fragment.id) {
+      stopAudition();
+      return;
+    }
+    // One thing plays at a time: an audition interrupts the A/B transport and the
+    // transport interrupts an audition.
+    stop();
+    stopAudition();
+    const scope = playbackScopeForFragment(fragment, sourceForId(fragment.sourceId));
+    if (!scope) return;
+
+    const audio = new Audio(resolveAudioUrl(scope.url));
+    audio.volume = CROSSFADE_GAIN;
+    auditionAudio.current = audio;
+    auditionScope.current = scope;
+    setAuditionId(fragment.id);
+
+    const syncStart = () => {
+      if (auditionAudio.current === audio && scope.clip) applyPreviewTime(audio, scope, 0);
+    };
+    if (audio.readyState >= 1) syncStart();
+    else {
+      audio.addEventListener("loadedmetadata", syncStart, { once: true });
+      audio.addEventListener("canplay", syncStart, { once: true });
+    }
+
+    playMediaElement(audio, () => stopAudition());
+  }, [auditionId, sourceForId, stop, stopAudition]);
+
+  const seekAudition = useCallback((fragment: Fragment, ratio: number) => {
+    const audio = auditionAudio.current;
+    const scope = auditionScope.current;
+    if (!audio || !scope || auditionId !== fragment.id) return;
+    if (applyPreviewTime(audio, scope, ratio)) setAuditionProgress(ratio);
+  }, [auditionId]);
+
+  useEffect(() => {
+    if (!auditionId) return undefined;
+
+    const tick = () => {
+      const audio = auditionAudio.current;
+      const scope = auditionScope.current;
+      if (audio && scope && !audio.paused && Number.isFinite(audio.duration) && audio.duration > 0) {
+        if (scope.clip && audio.currentTime >= scope.clip.end - 0.02) {
+          stopAudition();
+          return;
+        }
+        setAuditionProgress(progressForAudio(scope, audio.currentTime, audio.duration));
+      }
+      auditionRaf.current = requestAnimationFrame(tick);
+    };
+
+    auditionRaf.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(auditionRaf.current);
+  }, [auditionId, stopAudition]);
+
+  useEffect(() => () => stopAudition(), [stopAudition]);
 
   // What the console is asking for right now, which is also what plays and what a
   // drag hands over: one set of numbers, so the three cannot disagree.
@@ -594,6 +672,7 @@ export function CombineWorkspace({
   const play = async (mode: PlayMode) => {
     if (!relationship || !candidate) return;
     stop();
+    stopAudition();
     setPlaying(mode);
     onAuditioned(relationship);
 
@@ -670,6 +749,7 @@ export function CombineWorkspace({
   const chooseCandidate = (id: string) => {
     if (id === relationship.id) return;
     stop();
+    stopAudition();
     const next = candidates.find((item) => item.id === id);
     const nextFragment = fragments.find((item) => item.id === next?.otherId);
     if (next && nextFragment) {
@@ -864,12 +944,13 @@ export function CombineWorkspace({
                     <LibraryCard
                       item={{ kind: "fragment", id: fragment.id, fragment }}
                       isSelected={isActive}
-                      isPreviewing={false}
-                      previewProgress={null}
+                      isPreviewing={auditionId === fragment.id}
+                      previewProgress={auditionId === fragment.id ? auditionProgress : null}
                       showActions={false}
                       {...stubHandlers}
                       onSelect={() => chooseCandidate(item.id)}
-                      onPreview={() => chooseCandidate(item.id)}
+                      onPreview={() => auditionCandidate(fragment)}
+                      onSeek={(ratio) => seekAudition(fragment, ratio)}
                     />
                     <div className="affinities-candidate-item-meta">
                       <b>{item.score}% fit</b>
