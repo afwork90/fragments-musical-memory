@@ -104,6 +104,19 @@ nothing** — it is compiled for Electron and bundled into the renderer, so no
 alongside it are main-process only. Inside `lib/`, use extensionless relative
 imports; inside `electron/`, keep the `.js` suffix.
 
+**The preload is bundled, and it has to be.** The window is created with
+`sandbox: true`, and a sandboxed preload does not get Node's module resolver — its
+`require` serves `electron` and a few built-ins, so a relative specifier fails with
+`module not found: ../lib/ipc/contract.js`. The failure is nearly invisible: one line
+in the Electron log, the window opens regardless, `window.fragments` is never
+defined, and `getFragmentsBridge()` falls back to the HTTP bridge meant for the
+browser. Under `dev:all` that bridge loads the real library from the dev server, so
+the app looks completely normal while every write silently does nothing — which is
+how it went unnoticed from the Task 3 refactor until a delete button refused to
+appear. `electron/bundle-preload.mjs` runs after `tsc` in `build:electron` and emits
+one self-contained file; `tests/unit/preload-bundle.test.mjs` asserts nothing else
+crept into it. Do not "fix" a preload import error by turning the sandbox off.
+
 Renderer/main traffic goes through `lib/ipc/contract.ts`. Adding a call means
 adding it to `FragmentsBridge`, wiring it in `electron/preload.ts` (typed as
 `FragmentsBridge`, so a mismatch is a compile error), handling the channel in
