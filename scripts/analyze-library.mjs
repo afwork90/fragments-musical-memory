@@ -221,6 +221,14 @@ for (const source of sources) {
     console.log(`   key    ${keyText}${previous.key ? `   was ${previous.key} ${previous.scale ?? ""}`.trimEnd() : ""}`);
     console.log(`   onsets ${features.onsets ? features.onsets.length : "—"}`);
     console.log(`   timbre ${features.timbre ? `${features.timbre.length} MFCC means` : "—"}   chroma ${features.chroma ? `${features.chroma.length} bins` : "—"}   centroid ${features.centroidHz ?? "—"}Hz`);
+    const intensityLabel = features.intensity === null
+      ? "—"
+      : features.intensity < 0 ? "relaxed" : features.intensity > 0 ? "aggressive" : "moderate";
+    const trim = features.leadingSilence === null
+      ? "—"
+      : `${features.leadingSilence}s / ${features.trailingSilence}s`;
+    console.log(`   level  ${features.lufs ?? "—"} LUFS   range ${features.loudnessRange ?? "—"}   dynamics ${features.dynamicComplexity ?? "—"}dB   rms ${features.rms ?? "—"}`);
+    console.log(`   colour flatness ${features.flatness ?? "—"}   ${intensityLabel}   silence ${trim}`);
     console.log(`   wave   ${(waveform.byteLength / 1024).toFixed(0)}KB at ${PEAKS_PER_SECOND}/s${write ? " (written)" : ""}`);
 
     // Fragments are measured from their own slices, before the source-level

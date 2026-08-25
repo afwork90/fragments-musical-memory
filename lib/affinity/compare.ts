@@ -48,6 +48,21 @@ const BRIGHTNESS_OCTAVES = 2;
 /** Onset density: an eightfold difference scores zero. */
 const RHYTHM_OCTAVES = 3;
 
+/** Dynamic complexity is in dB; this much apart scores zero. */
+const DYNAMICS_TOLERANCE = 6;
+
+/**
+ * How far apart two flatness readings may be before scoring zero.
+ *
+ * Not 1, even though flatness is already 0..1. Real recordings occupy a narrow band
+ * of it — measured across the library they run about 0.16 to 0.30 — so a raw
+ * difference would put every pair above 0.86 and the axis would behave like a
+ * constant bonus. That is precisely the defect the old hand-written metrics had,
+ * where timbre and brightness were 0.70 on all 791 rows. Scaling to the range the
+ * data actually occupies is what makes it discriminate.
+ */
+const FLATNESS_TOLERANCE = 0.15;
+
 const PITCH_CLASSES: Record<string, number> = {
   C: 0, "B#": 0,
   "C#": 1, Db: 1,
@@ -185,6 +200,32 @@ export function rhythmSimilarity(a: ComparableFragment, b: ComparableFragment): 
   return octaveSimilarity(densityA, densityB, RHYTHM_OCTAVES);
 }
 
+/**
+ * Similarity of spectral flatness: how alike two fragments are on the tonal to
+ * noise-like scale, scaled to the range real audio occupies — see
+ * `FLATNESS_TOLERANCE`.
+ */
+export function flatnessSimilarity(a: MeasuredAnalysis, b: MeasuredAnalysis): number | null {
+  if (a.flatness === null || a.flatness === undefined) return null;
+  if (b.flatness === null || b.flatness === undefined) return null;
+
+  return clamp(1 - Math.abs(a.flatness - b.flatness) / FLATNESS_TOLERANCE);
+}
+
+/**
+ * Similarity of dynamic behaviour, from dynamic complexity in dB.
+ *
+ * This is deliberately not loudness. Loudness describes what gain something was
+ * recorded at; dynamic complexity describes whether a performance breathes, which
+ * is a property of the playing.
+ */
+export function dynamicsSimilarity(a: MeasuredAnalysis, b: MeasuredAnalysis): number | null {
+  if (a.dynamicComplexity === null || a.dynamicComplexity === undefined) return null;
+  if (b.dynamicComplexity === null || b.dynamicComplexity === undefined) return null;
+
+  return clamp(1 - Math.abs(a.dynamicComplexity - b.dynamicComplexity) / DYNAMICS_TOLERANCE);
+}
+
 /** Every axis at once. */
 export function compareFragments(a: ComparableFragment, b: ComparableFragment): RelationshipMetrics {
   return {
@@ -194,6 +235,8 @@ export function compareFragments(a: ComparableFragment, b: ComparableFragment): 
     timbre: timbreSimilarity(a.analysis, b.analysis),
     brightness: brightnessSimilarity(a.analysis, b.analysis),
     rhythm: rhythmSimilarity(a, b),
+    flatness: flatnessSimilarity(a.analysis, b.analysis),
+    dynamics: dynamicsSimilarity(a.analysis, b.analysis),
   };
 }
 

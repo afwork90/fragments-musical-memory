@@ -36,6 +36,8 @@ export type Relationship = {
     tempo: number | null;
     pitch: number | null;
     brightness: number | null;
+    flatness: number | null;
+    dynamics: number | null;
   };
   transformationCost: number;
   reason: string;

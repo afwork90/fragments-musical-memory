@@ -21,6 +21,8 @@ function relationship(metrics = {}, extra = {}) {
       tempo: 0.5,
       pitch: 0.5,
       brightness: 0.5,
+      flatness: 0.5,
+      dynamics: 0.5,
       ...metrics,
     },
     ...extra,
@@ -53,7 +55,7 @@ test("a strong axis still counts when a weak one is merely absent", () => {
 
 test("nothing measured is null, not zero", () => {
   const nothing = similarityOf(
-    relationship({ rhythm: null, harmony: null, timbre: null, tempo: null, pitch: null, brightness: null }),
+    relationship({ rhythm: null, harmony: null, timbre: null, tempo: null, pitch: null, brightness: null, flatness: null, dynamics: null }),
     WEIGHTS,
     "whole",
   );
@@ -71,7 +73,7 @@ test("context emphasis reweights the steerable axes", () => {
 
 test("scores are whole numbers inside 0..99", () => {
   const perfect = scoreRelationship(
-    relationship({ rhythm: 1, harmony: 1, timbre: 1, tempo: 1, pitch: 1, brightness: 1 }, { base: 1 }),
+    relationship({ rhythm: 1, harmony: 1, timbre: 1, tempo: 1, pitch: 1, brightness: 1, flatness: 1, dynamics: 1 }, { base: 1 }),
     WEIGHTS,
     "whole",
     "reasonable",
@@ -80,7 +82,7 @@ test("scores are whole numbers inside 0..99", () => {
   assert.ok(perfect <= 99 && perfect > 90);
 
   const floored = scoreRelationship(
-    relationship({ rhythm: 0, harmony: 0, timbre: 0, tempo: 0, pitch: 0, brightness: 0 }, { base: 0, transformationCost: 5 }),
+    relationship({ rhythm: 0, harmony: 0, timbre: 0, tempo: 0, pitch: 0, brightness: 0, flatness: 0, dynamics: 0 }, { base: 0, transformationCost: 5 }),
     WEIGHTS,
     "whole",
     "reasonable",
@@ -90,7 +92,7 @@ test("scores are whole numbers inside 0..99", () => {
 
 test("a relationship with nothing measured scores zero rather than throwing", () => {
   const blind = relationship(
-    { rhythm: null, harmony: null, timbre: null, tempo: null, pitch: null, brightness: null },
+    { rhythm: null, harmony: null, timbre: null, tempo: null, pitch: null, brightness: null, flatness: null, dynamics: null },
     { base: 0 },
   );
   assert.equal(scoreRelationship(blind, WEIGHTS, "whole", "reasonable"), 0);

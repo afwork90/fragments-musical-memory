@@ -100,7 +100,12 @@ export const FRAGMENTS: Fragment[] = rawFragments.map((fragment, index) => {
   };
 });
 
-const rel = (id:string, source:string, target:string, base:number, metrics:Relationship["metrics"], transformationCost:number, reason:string, transform?:Transform, experimental=false):Relationship => ({ id, source, target, base, metrics, transformationCost, reason, transform, experimental });
+// Axes the prototype data never had are null, not filled in. These demo numbers
+// were invented in the first place; inventing two more per row to satisfy a wider
+// type would be the same mistake in a newer schema.
+type PrototypeMetrics = Omit<Relationship["metrics"], "flatness" | "dynamics">;
+
+const rel = (id:string, source:string, target:string, base:number, metrics:PrototypeMetrics, transformationCost:number, reason:string, transform?:Transform, experimental=false):Relationship => ({ id, source, target, base, metrics:{ ...metrics, flatness:null, dynamics:null }, transformationCost, reason, transform, experimental });
 
 export const RELATIONSHIPS: Relationship[] = [
   rel("r01","f01","f02",.94,{rhythm:.82,harmony:.97,timbre:.68,tempo:.89,pitch:.99,brightness:.76},.025,"Melody contour and harmonic movement align after a small pitch shift.",{pitch:-3,bpm:4,labels:["−3 st","+4 BPM"],asset:"/audio/f02_match.wav"}),

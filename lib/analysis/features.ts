@@ -113,6 +113,26 @@ export type EssentiaAlgorithms = {
     windowSize: number,
   ): { hpcp: SizedVector };
   SpectralCentroidTime(array: unknown, sampleRate: number): { centroid: number };
+  /**
+   * Takes two channels. Ours is mono, so the same signal goes to both — see
+   * `measureLoudness`. Works at 22050Hz, unlike `LoudnessVickers` and `ReplayGain`,
+   * which abort at anything but 44100.
+   */
+  LoudnessEBUR128(
+    leftSignal: unknown,
+    rightSignal: unknown,
+    hopSize: number,
+    sampleRate: number,
+    startAtZero: boolean,
+  ): { integratedLoudness: number; loudnessRange: number };
+  DynamicComplexity(
+    signal: unknown,
+    frameSize: number,
+    sampleRate: number,
+  ): { dynamicComplexity: number; loudness: number };
+  RMS(array: unknown): { rms: number };
+  Flatness(array: unknown): { flatness: number };
+  Intensity(signal: unknown, sampleRate: number): { intensity: number };
 };
 
 type SizedVector = { size(): number };
@@ -172,7 +192,44 @@ export type ExtractedFeatures = Pick<
   | "centroidHz"
   | "onsets"
   | "featureSampleRate"
+  | "lufs"
+  | "loudnessRange"
+  | "dynamicComplexity"
+  | "rms"
+  | "flatness"
+  | "intensity"
+  | "leadingSilence"
+  | "trailingSilence"
 >;
+
+/**
+ * Below this magnitude a sample counts as silence when trimming, about -60dBFS.
+ *
+ * Trimming is done here rather than with essentia's `StartStopSilence`, whose
+ * bindings return an empty object — no `start`, no `stop`. Scanning for the first
+ * and last sample above a threshold is a few lines and does exactly what it says.
+ */
+const SILENCE_FLOOR = 0.001;
+
+/** Leading and trailing silence in seconds. */
+function measureSilence(signal: Float32Array, sampleRate: number) {
+  let first = -1;
+  for (let i = 0; i < signal.length; i++) {
+    if (Math.abs(signal[i]) > SILENCE_FLOOR) { first = i; break; }
+  }
+
+  // Entirely silent: there is no leading or trailing edge to report, and calling
+  // the whole thing "leading silence" would be a stranger claim than saying nothing.
+  if (first === -1) return { leadingSilence: null, trailingSilence: null };
+
+  let last = signal.length - 1;
+  while (last > first && Math.abs(signal[last]) <= SILENCE_FLOOR) last--;
+
+  return {
+    leadingSilence: round(first / sampleRate, 3),
+    trailingSilence: round((signal.length - 1 - last) / sampleRate, 3),
+  };
+}
 
 function round(value: number, places: number) {
   const factor = 10 ** places;
@@ -204,9 +261,63 @@ export function extractFeatures(essentia: EssentiaHost, signal: Float32Array): E
     centroidHz: null,
     onsets: null,
     featureSampleRate: sampleRate,
+    lufs: null,
+    loudnessRange: null,
+    dynamicComplexity: null,
+    rms: null,
+    flatness: null,
+    intensity: null,
+    leadingSilence: null,
+    trailingSilence: null,
   };
 
   if (signal.length < FRAME_SIZE) return features;
+
+  const silence = measureSilence(signal, sampleRate);
+  features.leadingSilence = silence.leadingSilence;
+  features.trailingSilence = silence.trailingSilence;
+
+  try {
+    // Mono into both channels. EBUR128 sums channel energy, so this reads roughly
+    // 3dB hotter than a true mono meter would. It is consistent across every
+    // fragment, which is what comparison needs; it is not what a mastering meter
+    // would show. Carrying real stereo through decode is what would fix that.
+    const loudness = algorithms.LoudnessEBUR128(
+      essentia.arrayToVector(signal), essentia.arrayToVector(signal), 0.1, sampleRate, false,
+    );
+    if (Number.isFinite(loudness.integratedLoudness)) {
+      features.lufs = round(loudness.integratedLoudness, 2);
+    }
+    if (Number.isFinite(loudness.loudnessRange)) {
+      features.loudnessRange = round(loudness.loudnessRange, 2);
+    }
+  } catch {
+    // Leave loudness null.
+  }
+
+  try {
+    const dynamics = algorithms.DynamicComplexity(essentia.arrayToVector(signal), 0.2, sampleRate);
+    if (Number.isFinite(dynamics.dynamicComplexity)) {
+      features.dynamicComplexity = round(dynamics.dynamicComplexity, 3);
+    }
+  } catch {
+    // Leave dynamicComplexity null.
+  }
+
+  try {
+    const rms = algorithms.RMS(essentia.arrayToVector(signal));
+    if (Number.isFinite(rms.rms)) features.rms = round(rms.rms, 5);
+  } catch {
+    // Leave rms null.
+  }
+
+  try {
+    // -1 relaxed, 0 moderate, 1 aggressive.
+    const intensity = algorithms.Intensity(essentia.arrayToVector(signal), sampleRate);
+    if (Number.isFinite(intensity.intensity)) features.intensity = Math.round(intensity.intensity);
+  } catch {
+    // Leave intensity null.
+  }
 
   // RhythmExtractor2013, not PercivalBpmEstimator: on the one library recording
   // with a known tempo, Percival returned 198.8 against a true 100, and reported
@@ -249,6 +360,7 @@ export function extractFeatures(essentia: EssentiaHost, signal: Float32Array): E
     features.timbre = framed.timbre;
     features.chroma = framed.chroma;
     features.centroidHz = framed.centroidHz;
+    features.flatness = framed.flatness;
   } catch {
     // Leave the frame-based features null.
   }
@@ -268,6 +380,7 @@ function extractFrameFeatures(essentia: EssentiaHost, signal: Float32Array, samp
   const mfccTotals = new Float64Array(MFCC_COEFFICIENTS);
   const chromaTotals = new Float64Array(CHROMA_BINS);
   let centroidTotal = 0;
+  let flatnessTotal = 0;
   let frames = 0;
 
   for (let start = 0; start + FRAME_SIZE <= signal.length; start += HOP_SIZE) {
@@ -289,14 +402,18 @@ function extractFrameFeatures(essentia: EssentiaHost, signal: Float32Array, samp
     for (let i = 0; i < CHROMA_BINS && i < chroma.length; i++) chromaTotals[i] += chroma[i];
 
     centroidTotal += algorithms.SpectralCentroidTime(frame, sampleRate).centroid;
+    // 0 is a pure tone, 1 is white noise. Cheap here because the spectrum already
+    // exists; a separate pass would double the framing cost for one number.
+    flatnessTotal += algorithms.Flatness(spectrum).flatness;
     frames++;
   }
 
-  if (frames === 0) return { timbre: null, chroma: null, centroidHz: null };
+  if (frames === 0) return { timbre: null, chroma: null, centroidHz: null, flatness: null };
 
   return {
     timbre: Array.from(mfccTotals, (total) => round(total / frames, 3)),
     chroma: Array.from(chromaTotals, (total) => round(total / frames, 4)),
     centroidHz: round(centroidTotal / frames, 1),
+    flatness: round(flatnessTotal / frames, 4),
   };
 }

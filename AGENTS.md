@@ -166,6 +166,14 @@ analysis whose `provenance.origin` is `"edited"` unless given `--force`.
 decodes every format; without it, WAV only, and it says so per file rather than
 guessing. Do not make it required — the app must work without it.
 
+Measured on 90 seconds at 22050Hz, the whole pass is about 7.5 seconds, and it is
+worth knowing where that goes before adding a descriptor: the framewise loop
+(MFCC, HPCP, centroid, flatness) 2.9s, `RhythmExtractor2013` 2.3s,
+`SuperFluxExtractor` 1.0s, `LoudnessEBUR128` 0.7s, `Intensity` 0.4s,
+`KeyExtractor` 0.14s, `DynamicComplexity` 0.04s, `RMS` 0.01s. Anything that needs a
+spectrum belongs **inside** the existing loop, where the spectrum already exists —
+flatness there is a few milliseconds, and 0.4s as a separate pass.
+
 Never hand essentia an unbounded signal. `windowForFeatures` caps at
 `FEATURE_MAX_SECONDS` (90) and both hosts use it, so they cannot report different
 numbers for the same file. It returns a **copy**, not a `subarray`: a view keeps its
@@ -192,6 +200,19 @@ Essentia's own type declarations are misleading in ways that only fail at runtim
   across unrelated files.
 - **Check `bpmConfidence` before trusting a BPM.** Short or unrhythmic audio
   characteristically returns a plausible tempo at confidence 0.
+- **`LoudnessVickers` and `ReplayGain` abort at anything but 44100Hz,** so they are
+  unusable here: the pipeline resamples to 22050. `LoudnessEBUR128` works, and takes
+  two channels — ours is mono into both, which reads about 3dB hot but is consistent
+  across every fragment, which is what comparison needs.
+- **`StartStopSilence` returns an empty object** — no `start`, no `stop`. Trimming is
+  hand-rolled in `features.ts` for that reason.
+- **`GapsDetector` finds nothing.** It is documented as framewise with state carried
+  across calls via `configure()`/`reset()`, which the JS bindings do not expose, so
+  every call starts over and no gap ever spans frames: zero gaps on every recording
+  in the library. A hand-rolled envelope count is not the answer either — it swung
+  from 0 to 17 gaps on one recording across a 10dB span of threshold, which makes it
+  a knob, not a measurement. Leading and trailing silence is the part that holds
+  still, and that is what is measured and shown.
 
 ## Waveforms
 
@@ -267,6 +288,19 @@ cosine **skipping coefficient 0** because it tracks loudness rather than timbre,
 centroid and onset density in **octaves** because both are heard ratiometrically,
 key on the circle of fifths, tempo allowing **half and double time** because that is
 the same pulse and essentia octave-errors in exactly that way.
+
+**Not everything measured is an axis, and that is deliberate.** Spectral flatness and
+dynamic complexity are axes: one is where a sound sits between tonal and noise-like,
+the other is whether a performance breathes, and both are properties of the playing.
+Loudness, intensity, and silence are measured and shown but **not** scored — loudness
+is the gain something was recorded at, which a fader fixes, so ranking fragments as
+related because they were recorded at the same level is a claim about the session and
+not about the music.
+
+An axis has to be scaled to the range the data occupies or it is a constant bonus
+dressed up as evidence. Flatness is already 0..1, but real recordings only use about
+0.16 to 0.30 of it, so a raw difference put every pair above 0.86; `FLATNESS_TOLERANCE`
+is what makes it discriminate. Check the spread before adding an axis.
 
 **Fragments must be measured individually.** `FragmentDocument.analysis` exists for
 this. If fragments inherit their source's features, every fragment of one recording

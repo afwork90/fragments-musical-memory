@@ -20,7 +20,7 @@ import type { SearchWeights } from "../view/search";
  * `pitch` and `brightness` are not steerable and carry these fixed weights, which
  * are the same numbers the previous inline scorer used.
  */
-const FIXED_WEIGHTS = { tempo: 12, pitch: 10, brightness: 8 } as const;
+const FIXED_WEIGHTS = { tempo: 12, pitch: 10, brightness: 8, flatness: 8, dynamics: 8 } as const;
 
 /**
  * Per-context emphasis. There is no melody axis to emphasise, so "melody" leans on
@@ -53,6 +53,8 @@ export function similarityOf(
     [relationship.metrics.tempo, FIXED_WEIGHTS.tempo],
     [relationship.metrics.pitch, FIXED_WEIGHTS.pitch],
     [relationship.metrics.brightness, FIXED_WEIGHTS.brightness],
+    [relationship.metrics.flatness, FIXED_WEIGHTS.flatness],
+    [relationship.metrics.dynamics, FIXED_WEIGHTS.dynamics],
   ];
 
   let total = 0;

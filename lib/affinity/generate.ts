@@ -24,6 +24,8 @@ const GENERATION_WEIGHTS: Record<keyof RelationshipMetrics, number> = {
   timbre: 2,
   tempo: 2,
   rhythm: 1.5,
+  dynamics: 1.5,
+  flatness: 1,
   brightness: 1,
 };
 
@@ -98,6 +100,8 @@ const AXIS_PHRASES: Record<keyof RelationshipMetrics, string> = {
   timbre: "a similar timbre",
   rhythm: "comparable rhythmic activity",
   brightness: "a similar brightness",
+  flatness: "a similar tonal-to-noise balance",
+  dynamics: "comparable dynamics",
 };
 
 /**

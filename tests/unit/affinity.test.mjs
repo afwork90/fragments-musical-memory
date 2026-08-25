@@ -28,6 +28,8 @@ function analysis(fields = {}) {
     chroma: [1, 0, 0.2, 0, 0.6, 0, 0, 0.8, 0, 0, 0.1, 0],
     timbre: [-700, 40, -12, 8, -4, 3, -2, 1, -1, 0.5, -0.3, 0.2, -0.1],
     centroidHz: 900,
+    flatness: 0.2,
+    dynamicComplexity: 3,
     onsets: [0, 0.5, 1, 1.5],
     featureSampleRate: 22050,
     ...fields,
@@ -131,6 +133,7 @@ test("identical audio compares as identical on every axis", () => {
 test("generation refuses to judge a pair on a single axis", () => {
   const onlyBrightness = {
     rhythm: null, harmony: null, timbre: null, tempo: null, pitch: null, brightness: 1,
+    flatness: null, dynamics: null,
   };
   assert.equal(generationSimilarity(onlyBrightness), null);
 
@@ -139,7 +142,7 @@ test("generation refuses to judge a pair on a single axis", () => {
 });
 
 test("transformation cost counts only what a user would have to change", () => {
-  const free = { rhythm: 0, harmony: 0, timbre: 0, tempo: 1, pitch: 1, brightness: 0 };
+  const free = { rhythm: 0, harmony: 0, timbre: 0, tempo: 1, pitch: 1, brightness: 0, flatness: 0, dynamics: 0 };
   assert.equal(transformationCostFor(free), 0);
 
   // A timbre mismatch is the point of a match, not a cost.

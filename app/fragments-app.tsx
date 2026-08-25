@@ -30,6 +30,7 @@ import { LibraryFilters, createLibraryFilters } from "./library-filter-popover";
 import { formatSeconds } from "@/lib/format";
 import { bindSourceAudio, getCachedAudio, retainCachedAudio, updateCachedAnalysis } from "@/lib/audio/audio-service";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
+import { FEATURE_MAX_SECONDS } from "@/lib/analysis/features";
 import {
   PreviewScope,
   buildFragmentPreviewScope,
@@ -95,10 +96,21 @@ function displayRole(role: DomainMusicalRole | undefined): MusicalRole {
 }
 
 /** Rebuilds an in-memory Fragment from a source.json fragment record, so persisted segmentation shows up in the Library after a reload. */
-/** The measured fields worth showing a person, straight off the document. */
-function measuredSummaryFrom(analysis: MeasuredAnalysis | undefined): MeasuredSummary | undefined {
+/**
+ * The measured fields worth showing a person, straight off the document.
+ *
+ * `seconds` is what the measurements cover, which is the shorter of the audio and
+ * the analysis window — onset density is meaningless against the wrong denominator,
+ * and it must match what `rhythmSimilarity` divided by or the panel would disagree
+ * with the affinities it explains.
+ */
+function measuredSummaryFrom(
+  analysis: MeasuredAnalysis | undefined,
+  seconds: number,
+): MeasuredSummary | undefined {
   if (!analysis) return undefined;
 
+  const measuredSeconds = Math.min(seconds, FEATURE_MAX_SECONDS);
   const origin = analysis.provenance?.origin;
   return {
     bpm: analysis.bpm ?? null,
@@ -107,20 +119,27 @@ function measuredSummaryFrom(analysis: MeasuredAnalysis | undefined): MeasuredSu
     scale: analysis.scale ?? null,
     keyStrength: analysis.keyStrength ?? null,
     centroidHz: analysis.centroidHz ?? null,
-    onsetCount: analysis.onsets ? analysis.onsets.length : null,
-    featureSampleRate: analysis.featureSampleRate ?? null,
+    onsetsPerSecond: analysis.onsets && measuredSeconds > 0
+      ? analysis.onsets.length / measuredSeconds
+      : null,
+    flatness: analysis.flatness ?? null,
+    lufs: analysis.lufs ?? null,
+    loudnessRange: analysis.loudnessRange ?? null,
+    dynamicComplexity: analysis.dynamicComplexity ?? null,
+    intensity: analysis.intensity ?? null,
+    leadingSilence: analysis.leadingSilence ?? null,
+    trailingSilence: analysis.trailingSilence ?? null,
+    chroma: analysis.chroma?.length ? analysis.chroma : null,
     origin: origin === "measured" || origin === "edited" ? origin : null,
     extractor: analysis.provenance?.extractor ?? null,
     measuredAt: analysis.provenance?.at ?? null,
-    hasTimbre: Boolean(analysis.timbre?.length),
-    hasChroma: Boolean(analysis.chroma?.length),
   };
 }
 
 function fragmentFromDocument(fragmentDoc: FragmentDocument, index: number, source: SourceFile): Fragment {
   return {
     id: fragmentDoc.id,
-    measured: measuredSummaryFrom(fragmentDoc.analysis),
+    measured: measuredSummaryFrom(fragmentDoc.analysis, fragmentDoc.end - fragmentDoc.start),
     name: fragmentDoc.name || defaultFragmentName(source, index),
     sourceId: source.id,
     source: source.name,
@@ -205,7 +224,7 @@ function sourceFileFromDocument(document: SourceRecord, audioUrl?: string): Sour
     start: 0,
     end: duration,
     sourceTypes: document.sourceTypes,
-    measured: measuredSummaryFrom(document.analysis),
+    measured: measuredSummaryFrom(document.analysis, duration),
     imported: true,
     audioUrl: audioUrl ?? document.audioUrl,
     audioCacheKey: document.id,

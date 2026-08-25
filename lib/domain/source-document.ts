@@ -106,6 +106,47 @@ export type MeasuredAnalysis = {
    * recording it is what makes a mixed-format library safe to compare across.
    */
   featureSampleRate?: number | null;
+
+  /**
+   * Integrated loudness, EBU R128, in LUFS.
+   *
+   * Measured from the mono signal fed to both channels, so it reads roughly 3dB
+   * hotter than a true mono meter — EBUR128 sums channel energy. Consistent across
+   * every fragment, which is what comparison needs, but not the number a mastering
+   * meter would show. `LoudnessVickers` and `ReplayGain` would each give a dB
+   * figure directly and both abort at anything but 44100Hz.
+   */
+  lufs?: number | null;
+
+  /** EBU R128 loudness range: how far the loudness travels over the fragment. */
+  loudnessRange?: number | null;
+
+  /**
+   * How much the loudness varies, in dB. A compressed master sits near zero; a
+   * live take with quiet and loud passages sits high. An affinity axis, because it
+   * describes performance rather than recording level.
+   */
+  dynamicComplexity?: number | null;
+
+  /** Root mean square amplitude, 0 to 1. Recording level, not musical character. */
+  rms?: number | null;
+
+  /**
+   * Mean spectral flatness, 0 to 1: a pure tone approaches 0, white noise
+   * approaches 1. An affinity axis — it separates a cymbal from a sustained note
+   * independently of pitch or brightness.
+   */
+  flatness?: number | null;
+
+  /** Essentia's verdict: -1 relaxed, 0 moderate, 1 aggressive. */
+  intensity?: number | null;
+
+  /**
+   * Silence at each end, in seconds, both `null` when the audio is silent
+   * throughout. The basis for trimming a fragment to what it actually contains.
+   */
+  leadingSilence?: number | null;
+  trailingSilence?: number | null;
 };
 
 export type WaveformData = {
@@ -162,9 +203,15 @@ export type RelationshipMetrics = {
   tempo: number | null;
   pitch: number | null;
   brightness: number | null;
+  /** From spectral flatness: noise-like against tonal. */
+  flatness: number | null;
+  /** From dynamic complexity: how alike the two are in dynamic behaviour. */
+  dynamics: number | null;
 };
 
-export const METRIC_AXES = ["rhythm", "harmony", "timbre", "tempo", "pitch", "brightness"] as const;
+export const METRIC_AXES = [
+  "rhythm", "harmony", "timbre", "tempo", "pitch", "brightness", "flatness", "dynamics",
+] as const;
 
 export type MetricAxis = (typeof METRIC_AXES)[number];
 
