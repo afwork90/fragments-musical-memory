@@ -9,6 +9,9 @@ export type MusicalRole = "Melody" | "Rhythm" | "Harmony" | "Bass" | "Voice" | "
 
 export type SearchContext = "whole" | "melody" | "rhythm" | "harmony" | "bass";
 
+/** How much transformation a match may need before it stops counting. */
+export type RangeMode = "reasonable" | "experimental";
+
 export type SourceType = "Voice memo" | "Jam" | "Practice" | "Studio" | "Field recording" | "Archive";
 
 export type RelationshipOrigin = "algorithmic" | "manual" | "auditioned" | "rejected" | "preferred";

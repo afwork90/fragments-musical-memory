@@ -11,9 +11,10 @@ import {
 import type { Fragment } from "@/lib/view/fragment";
 import type { Relationship } from "@/lib/view/relationship";
 import type { SourceFile } from "@/lib/view/source-file";
+import { scoreRelationship } from "@/lib/affinity/score";
 import { DEFAULT_TOLERANCES, DEFAULT_WEIGHTS } from "@/lib/view/search";
 import type { MatchTolerances, SearchWeights } from "@/lib/view/search";
-import type { MusicalRole, RelationshipStatus, SearchContext } from "@/lib/view/vocabulary";
+import type { MusicalRole, RangeMode, RelationshipStatus, SearchContext } from "@/lib/view/vocabulary";
 import { Waveform } from "@/lib/audio/waveform";
 import { DuplicateTakesDialog } from "./features/library/duplicate-takes-dialog";
 import { ConnectionsTable } from "./features/library/connections-table";
@@ -54,7 +55,6 @@ import type { SourceRecord } from "@/lib/ipc/contract";
 import { getFragmentsBridge } from "@/lib/web/bridge";
 
 type View = "library" | "source" | "map" | "archive";
-type RangeMode = "reasonable" | "experimental";
 type ScoredRelationship = Relationship & { score: number; otherId: string };
 type ReturnSnapshot = { kind:"source-edit";view:View;selectedId:string;selectedSourceId:string;connectionsOpen:boolean;advancedOpen:boolean;scrollY:number };
 type CorrectionPhase = "edit" | "recompute" | "prompt";
@@ -200,28 +200,6 @@ function rangesFromDocument(document: SourceDocument): EditableRange[] {
     end: fragment.end,
     color: RANGE_COLORS[index % RANGE_COLORS.length],
   }));
-}
-
-function scoreRelationship(relationship: Relationship, weights: SearchWeights, context: SearchContext, mode: RangeMode) {
-  const multipliers: Record<SearchContext, SearchWeights> = {
-    whole:{ rhythm:1, harmony:1, melody:1, timbre:1 },
-    melody:{ rhythm:.28, harmony:.72, melody:2.5, timbre:.55 },
-    rhythm:{ rhythm:2.8, harmony:.22, melody:.18, timbre:.72 },
-    harmony:{ rhythm:.42, harmony:2.6, melody:.66, timbre:.5 },
-    bass:{ rhythm:1.8, harmony:1.45, melody:.24, timbre:1.25 },
-  };
-  const adjusted: SearchWeights = {
-    rhythm: weights.rhythm * multipliers[context].rhythm,
-    harmony: weights.harmony * multipliers[context].harmony,
-    melody: weights.melody * multipliers[context].melody,
-    timbre: weights.timbre * multipliers[context].timbre,
-  };
-  const weighted = relationship.metrics.rhythm * adjusted.rhythm + relationship.metrics.harmony * adjusted.harmony + relationship.metrics.melody * adjusted.melody + relationship.metrics.timbre * adjusted.timbre;
-  const fixed = relationship.metrics.tempo * 12 + relationship.metrics.pitch * 10 + relationship.metrics.brightness * 8;
-  const totalWeight = adjusted.rhythm + adjusted.harmony + adjusted.melody + adjusted.timbre + 30;
-  const similarity = (weighted + fixed) / totalWeight;
-  const penalty = relationship.transformationCost * (mode === "experimental" ? .46 : 1);
-  return Math.round(Math.max(0, Math.min(99, (similarity * .9 + relationship.base * .1 - penalty) * 100)));
 }
 
 export default function FragmentsApp() {
@@ -486,7 +464,9 @@ export default function FragmentsApp() {
           const transformedBpm=target.bpm + (relationship.transform?.bpm ?? 0);
           if (Math.abs(transformedBpm - sourceFragment.bpm) / Math.max(1,sourceFragment.bpm) * 100 > tolerances.tempoWindow) return false;
           const pitchFloor=tolerances.keyFlexibility === "exact" ? .96 : tolerances.keyFlexibility === "related" ? .78 : .62;
-          if (relationship.metrics.pitch < pitchFloor) return false;
+          // An unmeasured pitch relationship cannot fail a pitch filter. Treating
+          // null as 0 would silently hide every match whose key was not measurable.
+          if (relationship.metrics.pitch !== null && relationship.metrics.pitch < pitchFloor) return false;
           const barDelta=Math.abs(target.bars - sourceFragment.bars);
           if (tolerances.lengthTolerance === "same" && barDelta !== 0) return false;
           if (tolerances.lengthTolerance === "one" && barDelta > 1) return false;

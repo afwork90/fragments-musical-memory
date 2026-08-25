@@ -140,15 +140,33 @@ export type RelationshipOrigin =
   | "rejected"
   | "preferred";
 
+/**
+ * How alike two fragments are on each axis, 0 to 1, or `null` for "not measured".
+ *
+ * Every axis is nullable because measurability varies per fragment, not per axis.
+ * `tempo` is the clearest case: essentia returns a plausible BPM at
+ * `bpmConfidence` 0 for unrhythmic audio, so for such a fragment the tempo
+ * relationship is genuinely unknown. Scoring that 0 would assert "completely
+ * different tempo", which is false; scoring it high would be invented. Absent is
+ * the only honest answer, and `scoreRelationship` renormalises over the axes that
+ * are present.
+ *
+ * There is no `melody` axis. Nothing in `lib/analysis/` extracts pitch contour, so
+ * the field could only ever have held a fabricated number. Add it back when
+ * something measures it.
+ */
 export type RelationshipMetrics = {
-  rhythm: number;
-  harmony: number;
-  melody: number;
-  timbre: number;
-  tempo: number;
-  pitch: number;
-  brightness: number;
+  rhythm: number | null;
+  harmony: number | null;
+  timbre: number | null;
+  tempo: number | null;
+  pitch: number | null;
+  brightness: number | null;
 };
+
+export const METRIC_AXES = ["rhythm", "harmony", "timbre", "tempo", "pitch", "brightness"] as const;
+
+export type MetricAxis = (typeof METRIC_AXES)[number];
 
 /**
  * An affinity between two fragments. Every field is required because every field
@@ -300,7 +318,27 @@ export function validateRelationships(value: unknown): asserts value is Relation
         throw new Error(`each relationship must have a non-empty ${field}`);
       }
     }
+    if (relationship.source === relationship.target) {
+      throw new Error("a relationship must join two different fragments");
+    }
+    if (relationship.metrics !== undefined) {
+      if (!isPlainObject(relationship.metrics)) throw new Error("relationship metrics must be an object");
+      for (const axis of METRIC_AXES) {
+        const score = (relationship.metrics as Record<string, unknown>)[axis];
+        if (score === undefined || score === null) continue;
+        // A similarity outside 0..1 means the writer's arithmetic is wrong, and it
+        // would silently distort every ranking it takes part in.
+        if (!isFiniteNumber(score) || score < 0 || score > 1) {
+          throw new Error(`relationship metric ${axis} must be null or between 0 and 1`);
+        }
+      }
+    }
   }
+}
+
+/** The axes that were actually measured, in a stable order. */
+export function measuredAxes(metrics: RelationshipMetrics): MetricAxis[] {
+  return METRIC_AXES.filter((axis) => metrics[axis] !== null && metrics[axis] !== undefined);
 }
 
 /**

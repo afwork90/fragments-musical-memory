@@ -19,21 +19,23 @@ export type Relationship = {
   target: string;
   base: number;
   /**
-   * Every axis is required here because that is what the 791 relationships on
-   * disk contain. It does not reflect what is measurable: in the current data
-   * `rhythm` merely repeats `tempo`, `pitch` repeats `harmony`, and `timbre` and
-   * `brightness` are the constant 0.70 for every row. Honest generation will
-   * compute some axes and not others, so these must become individually optional
-   * — with "absent" rendering differently from "scored zero".
+   * Similarity per axis, 0 to 1, or `null` for "not measured" — which must render
+   * differently from "scored zero".
+   *
+   * Mirrors `RelationshipMetrics` on disk, including the absence of a `melody`
+   * axis: nothing extracts pitch contour, so it could only have held a fabricated
+   * number. The axes that remain each come from a real measurement — `tempo` from
+   * BPM once `bpmConfidence` clears the bar, `harmony` from chroma, `timbre` from
+   * MFCC means, `brightness` from the spectral centroid, `rhythm` from onset
+   * density, `pitch` from key and scale.
    */
   metrics: {
-    rhythm: number;
-    harmony: number;
-    melody: number;
-    timbre: number;
-    tempo: number;
-    pitch: number;
-    brightness: number;
+    rhythm: number | null;
+    harmony: number | null;
+    timbre: number | null;
+    tempo: number | null;
+    pitch: number | null;
+    brightness: number | null;
   };
   transformationCost: number;
   reason: string;
