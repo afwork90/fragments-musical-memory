@@ -860,3 +860,54 @@ similarity.
 Still outstanding: the prototype fragments and relationships are still merged into the library.
 Removing them is not an import deletion — `selectedId` initialises to the hardcoded `"f02"` and
 `activeFragmentById` falls back to the prototype lookup, so it needs real empty-state handling.
+
+### 9.17 Tempo and pitch matching: three problems, only one of them DSP
+
+"Make the target BPM-match the source" turned out to rest on two things nobody had noticed.
+
+**The transform was fiction.** `Transform` existed only on the view type, populated by hand in
+`app/prototype-data.ts` (`{pitch:-3, bpm:4, labels:["−3 st","+4 BPM"], asset:"/audio/f02_match.wav"}`).
+`RelationshipDocument` has no transform field, the generator emits only a scalar `transformationCost`,
+and the Adapt console's five controls moved no audio at all — "Transformed" swapped in a pre-baked WAV
+that exists for prototype fragments only. So for every real affinity the console showed defaults.
+
+**Dragging a fragment handed over the whole recording.** `{ sourceId: fragment.sourceId }` is all the
+main process received, so it resolved `sources/<id>/original.<ext>` and staged that — not the slice,
+let alone a matched one. Also named after the source id, which is a uuid.
+
+**And only 4 of 39 relationships have a measured tempo on both sides**, because 12 of 26 fragments come
+back at `bpmConfidence` 0. "Match the tempo" is unanswerable for most pairs, so `matchTransform`
+returns `null` per axis and the console says so, in the same spirit as the nullable metric axes in 9.16.
+
+The DSP itself was the easy part, and mostly free:
+
+- **Essentia has no time stretch or pitch shift.** `Resample`/`ResampleFFT` are varispeed; the
+  spectral-model pairs would need framewise state the JS bindings do not expose.
+- **Chromium's `preservesPitch` defaults to true**, so `playbackRate` on the existing `<audio>` element
+  is a good pitch-preserving stretcher, in realtime, with no dependency. That covers auditioning a
+  tempo match entirely — no render, no cache. It has no offline counterpart, which is what splits the
+  design: pitch shifts and exported files go through `soundtouchjs`, everything else through the rate.
+- `paulstretch.js` was the wrong tool: it is built for 8×-and-beyond smearing as an effect, where these
+  matches are a few percent.
+- SoundTouch only runs `process()` on a full 16384-frame input buffer and exposes no flush, so a
+  two-second tone came out at 26724 of 42000 frames until silence was fed in to push it through. Its
+  own `WebAudioBufferSource` also reads past the end of a channel, writing NaN into the output.
+
+Renders are cached at `sources/<id>/renders/<name>.wav`, named after the slice and the transform with a
+`RENDER_VERSION` suffix, capped at 16 per source, and produced in the renderer because `decodeAudioData`
+is the only decoder that reads every format — the same argument as the waveform sidecars. A missing
+render falls back to the untransformed slice, so nothing blocks on one.
+
+**A round trip through the new WAV encoder found a real bug in the decoder**: `readSample` shifted the
+low byte of every 24-bit sample away, a 0.8% error present since the file was written. The existing
+test missed it because its fixtures used values whose low bytes were zero.
+
+**The stretch bound is a quality limit, not a similarity one.** Reusing
+`TEMPO_TOLERANCE` for it was tried first, on the reasoning that the console should never
+propose a tempo relationship the scorer denies. It left the library with **zero** tempo
+matches, which exposed the flaw: the axis asks whether two fragments are already at the
+same tempo, while a match exists to close that gap, so gating one on the other is
+circular. `MAX_STRETCH` is 1.25 instead — where a stretch stops sounding like the same
+performance. Of the two pairs in the library with a trustworthy tempo at both ends, 101
+against 120 BPM (19%) is offered and 101 against 140 (39%) is not. 16 of 34 relationships
+offer a pitch shift, so the key path has data behind it either way.

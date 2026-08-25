@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -580,5 +580,64 @@ test("a waveform id cannot escape its source directory", async () => {
     const service = createLibraryService(libraryRoot);
     await assert.rejects(() => service.readWaveform("../../etc/passwd"), /identifier|traversal/);
     await assert.rejects(() => service.writeWaveform("..", new Uint8Array(1)), /identifier|traversal/);
+  });
+});
+
+test("a render round-trips, and a missing one is not an error", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const service = createLibraryService(libraryRoot);
+    const filePath = await makeFixtureFile(fixturesDir, "take.wav", "audio");
+    const pending = await service.beginImport(filePath);
+    const name = "frag_0-2000_t1050_p0_v1.wav";
+
+    // Nothing rendered yet: the renderer makes it rather than reporting a failure.
+    assert.equal(await service.readRender(pending.id, name), null);
+
+    await service.writeRender(pending.id, name, new Uint8Array([1, 2, 3]));
+    const reread = await createLibraryService(libraryRoot).readRender(pending.id, name);
+    assert.deepEqual(Array.from(reread), [1, 2, 3]);
+  });
+});
+
+test("renders are deleted with the source that owns them", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const service = createLibraryService(libraryRoot);
+    const filePath = await makeFixtureFile(fixturesDir, "take.wav", "audio");
+    const created = await service.beginImport(filePath);
+
+    await service.writeRender(created.id, "a_0-1000_t1000_p0_v1.wav", new Uint8Array([1]));
+    await service.deleteSource(created.id);
+
+    // Derived data with no fragment to trace it back to is just a file taking space.
+    assert.equal(await stat(path.join(libraryRoot, "sources", created.id)).catch(() => null), null);
+  });
+});
+
+test("a source keeps a bounded number of renders", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const service = createLibraryService(libraryRoot);
+    const filePath = await makeFixtureFile(fixturesDir, "take.wav", "audio");
+    const pending = await service.beginImport(filePath);
+
+    // Every distinct target BPM is a file, so a session at the tempo field would
+    // otherwise leave a hundred of them.
+    for (let index = 0; index < 24; index++) {
+      await service.writeRender(pending.id, `f_0-1000_t${1000 + index}_p0_v1.wav`, new Uint8Array([index]));
+    }
+
+    const kept = await readdir(path.join(libraryRoot, "sources", pending.id, "renders"));
+    assert.equal(kept.length, 16);
+    // The most recent survive: the last write must still be readable.
+    assert.ok(kept.includes("f_0-1000_t1023_p0_v1.wav"));
+  });
+});
+
+test("a render name cannot escape the renders directory", async () => {
+  await withTempDirs(async ({ libraryRoot }) => {
+    const service = createLibraryService(libraryRoot);
+    const id = "11111111-1111-4111-8111-111111111111";
+    await assert.rejects(() => service.readRender(id, "../../source.json"), /separators|traversal/);
+    await assert.rejects(() => service.writeRender(id, "..", new Uint8Array(1)), /relative path/);
+    await assert.rejects(() => service.readRender("../elsewhere", "a.wav"), /identifier|traversal/);
   });
 });

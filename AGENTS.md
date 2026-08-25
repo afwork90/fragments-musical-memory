@@ -150,9 +150,11 @@ reading a new extractor feature means declaring it there first.
 `node:*`, no DOM, extensionless relative imports.
 
 - `wav.ts` decodes linear PCM (16/24/32-bit, any channel count) to a mono
-  `Float32Array`. It takes bytes, so every host can use it. It walks the chunk
-  list rather than assuming a 44-byte header — real recordings carry `bext` and
-  `junk` chunks before `data`.
+ `Float32Array`. It takes bytes, so every host can use it. It walks the chunk
+ list rather than assuming a 44-byte header — real recordings carry `bext` and
+ `junk` chunks before `data`. Its 24-bit path shifted the low byte away for
+ months, a quiet 0.8% error that nothing caught because the only test used values
+ whose low bytes were zero; a round trip through `wav-encode.ts` found it.
 - `resample.ts` brings everything to `FEATURE_SAMPLE_RATE` (22050).
   **This is mandatory, not tidiness.** Mel filterbanks and chroma bins are defined
   in terms of the sample rate, so identical audio at 48kHz and 22.05kHz yields
@@ -348,6 +350,80 @@ npm run affinities -- --write   # persist
 Note that a generated relationship joins two library fragment ids, so
 `isLibraryRelationship` treats it as curated and the tolerance sliders do **not**
 filter it further. The generation threshold is the only filter it passes.
+
+## Matching a candidate to an anchor
+
+`lib/affinity/transform.ts` turns two measured fragments into the change that would
+let one sit with the other: a tempo ratio, a semitone shift, both nullable. It is
+the only place those numbers come from. Before it existed the transform console
+showed hand-written values from `app/prototype-data.ts` and moved no audio at all.
+
+- **Essentia cannot stretch or shift.** Its JS surface has `Resample` and
+ `ResampleFFT`, which move pitch and duration together, and the spectral-model
+ analysis/synthesis pairs (`SprModelAnal`/`Synth`, `HpsModelAnal`). There is no
+ `PitchShift` and no `TimeStretch`. Building one on the sinusoidal model needs
+ framewise state across calls, which these bindings do not expose — the same
+ limitation that made `GapsDetector` useless.
+- **Tempo matching in playback is free.** Playback is an `<audio>` element, and
+ Chromium's `preservesPitch` defaults to true, so `playbackRate` time-stretches at
+ good quality with no library and nothing cached. This is why auditioning a tempo
+ match needs no render. It has no equivalent offline:
+ `AudioBufferSourceNode.playbackRate` is varispeed, with no `preservesPitch`, so
+ an `OfflineAudioContext` cannot reuse that stretcher.
+- **Half and double time are folded out before stretching**, matching
+ `TEMPO_RATIOS` in `compare.ts`, so a 70 against a 147 is a 5% nudge and not a
+ doubling. What remains is capped by `MAX_STRETCH` (1.25) and refused beyond it: 40
+ against 120 is 3:1, where the closest doubling still needs a 1.5× stretch.
+ **That cap is not `TEMPO_TOLERANCE`**, and reusing it was a mistake worth not
+ repeating — the axis asks whether two fragments are already at the same tempo,
+ while a match exists to bring them there, so gating the match on the axis is
+ circular and left the library with zero matches. The cap is a quality limit:
+ where a stretch stops sounding like the same performance. The library has two
+ pairs with a trustworthy tempo at both ends, 19% and 39% apart, and it admits the
+ first.
+- **Pitch is computed but off by default.** Shifting a candidate to the anchor's key
+ changes the harmonic relationship the pair was ranked on, so the console shows the
+ semitones and a button, not a default. The shift is the shortest chromatic path
+ (±6), not the circle-of-fifths distance `pitchSimilarity` scores: a fifth is a
+ *near* relationship, but moving seven semitones is a bigger move than five down.
+ A mode clash is reported, because no shift fixes it.
+
+## Rendering audio
+
+`lib/audio/render-match.ts` is the only thing in the app that writes audio, and
+`lib/analysis/wav-encode.ts` the only thing that encodes it (24-bit, so a file
+headed for a DAW is not quantised on the way out). Renders live in
+`sources/<id>/renders/`, so they are archived and deleted with the source they came
+from, and are capped per source because every distinct target BPM is a file.
+
+The filename **is** the cache key — fragment, slice in milliseconds, ratio, shift,
+and `RENDER_VERSION`. Bump that constant when the DSP changes; mtimes cannot
+invalidate a render whose inputs are unchanged.
+
+Rendering happens in the renderer, for the same reason waveforms do: `decodeAudioData`
+is the only decoder in the stack that reads every format the app accepts. **A missing
+render is normal** — pruned, or never written because the host cannot persist — and
+callers fall back to the untransformed slice. The web preview renders in memory and
+keeps nothing, which is enough for playback.
+
+`soundtouchjs` does the stretching and shifting (LGPL-2.1, worth knowing if this
+ever ships commercially; `paulstretch.js` is the wrong tool — it is built for
+8×-and-beyond smearing, an effect, where these matches are a few percent). Verified
+against tones: a 5% stretch holds 440Hz at 439.4, a shift lands within a few cents,
+onsets stay aligned within 4ms, and two seconds of audio takes about 10ms. Two traps:
+
+- **It only processes a full input buffer** (16384 frames) and exposes no flush, so
+ a source that simply runs out loses its last three quarters of a second — a
+ two-second tone came back at 26724 of 42000 frames. The fix is to keep feeding
+ silence and trim the output to the length the ratio implies.
+- **Its own `WebAudioBufferSource` reads past the end of a channel** without
+ checking, which writes `undefined` into a `Float32Array` — a NaN, straight into
+ the encoder. Hence the hand-written source in `render-match.ts`.
+
+Dragging a fragment used to hand the OS the **whole recording**, because a source id
+is all the main process had to resolve. `DragTarget.renderFile` is what fixes that:
+the render is the slice. A name that no longer exists falls back to the source, so a
+drag always delivers something.
 
 ## Slice ownership
 

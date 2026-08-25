@@ -12,6 +12,7 @@ import { resolveSourceAudioUrl, buildFragmentPreviewScope } from "@/lib/audio/so
 import { Button } from "@/lib/ui/button";
 import { cn } from "@/lib/utils";
 import { formatSeconds } from "@/lib/format";
+import type { DragTarget } from "@/lib/ipc/contract";
 import type { Fragment } from "@/lib/view/fragment";
 import type { SourceFile } from "@/lib/view/source-file";
 import { LibraryLinkSummary } from "./library-list";
@@ -40,6 +41,22 @@ type LibraryCardProps = {
   onSave?: () => void;
   onDelete?: () => void;
   isSaved?: boolean;
+  dragPayload?: DragPayload;
+};
+
+/**
+ * What a drag out of this card hands over, when it is not simply the managed source
+ * file.
+ *
+ * The affinities workspace supplies the rendered match here, so what a DAW receives
+ * is what was being auditioned — the slice, at the matched tempo, in the matched
+ * key.
+ */
+export type DragPayload = {
+  target: DragTarget;
+  /** For the browser, which cannot hand over a path. A blob URL is fine. */
+  audioUrl?: string;
+  fileName?: string;
 };
 
 /**
@@ -299,6 +316,7 @@ export function LibraryCard({
   onSave,
   onDelete,
   isSaved,
+  dragPayload,
 }: LibraryCardProps) {
   if (item.kind === "source") {
     return (
@@ -343,6 +361,7 @@ export function LibraryCard({
       onSave={onSave}
       onDelete={onDelete}
       isSaved={isSaved}
+      dragPayload={dragPayload}
     />
   );
 }
@@ -433,7 +452,7 @@ function SourceLibraryCard({
           disabled={!canPlay}
           label={`Drag ${source.name} out`}
           onDragStart={(event) => {
-            startDesktopDrag(event, { sourceId: source.id }, { audioUrl: resolveSourceAudioUrl(source, fragmentAudioFor) ?? "", fileName: `${source.name}.wav` });
+            startDesktopDrag(event, { sourceId: source.id, label: source.name }, { audioUrl: resolveSourceAudioUrl(source, fragmentAudioFor) ?? "", fileName: `${source.name}.wav` });
           }}
         />
       </div>
@@ -463,6 +482,7 @@ function FragmentLibraryCard({
   onSave,
   onDelete,
   isSaved,
+  dragPayload,
 }: {
   fragment: Fragment;
   isSelected: boolean;
@@ -485,6 +505,7 @@ function FragmentLibraryCard({
   onSave?: () => void;
   onDelete?: () => void;
   isSaved?: boolean;
+  dragPayload?: DragPayload;
 }) {
   const source = sourceForId(fragment.sourceId);
   const links = linkSummaryFor(fragment.id);
@@ -507,7 +528,14 @@ function FragmentLibraryCard({
     return wholeSource ?? fragment.waveform;
   }, [wholeSource, fragment.waveform, slice, waveformValues]);
   const canPlay = Boolean(source && buildFragmentPreviewScope(fragment, source, fragmentAudioFor));
-  const dragAudioUrl = source ? resolveSourceAudioUrl(source, fragmentAudioFor) ?? "" : "";
+  // Without an override the drag hands over the whole managed recording, which is
+  // all the main process can resolve from a source id alone. `label` is what keeps
+  // the dropped file from being named after a uuid.
+  const dragTarget = dragPayload?.target ?? { sourceId: fragment.sourceId, label: fragment.name };
+  const dragAudioUrl =
+    dragPayload?.audioUrl
+    ?? (source ? resolveSourceAudioUrl(source, fragmentAudioFor) ?? "" : "");
+  const dragFileName = dragPayload?.fileName ?? `${fragment.name}.wav`;
 
   return (
     <article
@@ -570,7 +598,7 @@ function FragmentLibraryCard({
           label={`Drag ${fragment.name} out`}
           onDragStart={(event) => {
             if (!dragAudioUrl) return;
-            startDesktopDrag(event, { sourceId: fragment.sourceId }, { audioUrl: dragAudioUrl, fileName: `${fragment.name}.wav` });
+            startDesktopDrag(event, dragTarget, { audioUrl: dragAudioUrl, fileName: dragFileName });
           }}
         />
       </div>

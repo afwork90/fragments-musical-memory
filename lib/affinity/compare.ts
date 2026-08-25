@@ -32,7 +32,14 @@ export type ComparableFragment = {
  */
 export const MIN_KEY_STRENGTH = 50;
 
-/** How far apart two tempi may be, as a fraction, before they score zero. */
+/**
+ * How far apart two tempi may be, as a fraction, before they score zero.
+ *
+ * Not the bound `transform.ts` matches with, and deliberately so: this asks whether
+ * two fragments are *already* at the same tempo, while a match exists to bring them
+ * there. Requiring them to be within 12% before offering to close the gap would be
+ * circular.
+ */
 const TEMPO_TOLERANCE = 0.12;
 
 /**
@@ -63,6 +70,13 @@ const DYNAMICS_TOLERANCE = 6;
  */
 const FLATNESS_TOLERANCE = 0.15;
 
+/** Semitone above C for a key name, or `null` when it is missing or unrecognised. */
+export function pitchClassOf(key: string | null | undefined): number | null {
+  if (!key) return null;
+  const pitchClass = PITCH_CLASSES[key];
+  return pitchClass === undefined ? null : pitchClass;
+}
+
 const PITCH_CLASSES: Record<string, number> = {
   C: 0, "B#": 0,
   "C#": 1, Db: 1,
@@ -90,9 +104,9 @@ export function pitchSimilarity(a: MeasuredAnalysis, b: MeasuredAnalysis): numbe
   if (!a.key || !b.key) return null;
   if ((a.keyStrength ?? 0) < MIN_KEY_STRENGTH || (b.keyStrength ?? 0) < MIN_KEY_STRENGTH) return null;
 
-  const rootA = PITCH_CLASSES[a.key];
-  const rootB = PITCH_CLASSES[b.key];
-  if (rootA === undefined || rootB === undefined) return null;
+  const rootA = pitchClassOf(a.key);
+  const rootB = pitchClassOf(b.key);
+  if (rootA === null || rootB === null) return null;
 
   const sameScale = a.scale === b.scale;
   if (rootA === rootB && sameScale) return 1;

@@ -112,6 +112,35 @@ export function libraryDevServer(): Plugin {
         }
       });
 
+      server.middlewares.use(WEB_LIBRARY_ROUTES.render, async (request, response) => {
+        // Vite strips the mount prefix, so `url` is `/<sourceId>/<fileName>`.
+        const [rawId, rawFile] = (request.url ?? "").replace(/^\/+/, "").split("?")[0].split("/");
+        const id = decodeURIComponent(rawId ?? "");
+        const fileName = decodeURIComponent(rawFile ?? "");
+        if (!id || !fileName) {
+          response.statusCode = 400;
+          response.end("missing source id or render name");
+          return;
+        }
+
+        try {
+          const bytes = await library.readRender(id, fileName);
+          if (!bytes) {
+            response.statusCode = 404;
+            response.end("no render");
+            return;
+          }
+          response.setHeader("Content-Type", "audio/wav");
+          response.setHeader("Cache-Control", "no-store");
+          response.setHeader("Content-Length", String(bytes.byteLength));
+          response.end(Buffer.from(bytes));
+        } catch (error) {
+          server.config.logger.error(`[fragments] reading a render failed: ${String(error)}`);
+          response.statusCode = 500;
+          response.end("could not read the render");
+        }
+      });
+
       server.middlewares.use(WEB_LIBRARY_ROUTES.audio, async (request, response) => {
         // Vite strips the mount prefix, so `url` is `/<sourceId>`.
         const id = decodeURIComponent((request.url ?? "").replace(/^\/+/, "").split("?")[0]);

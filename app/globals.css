@@ -842,6 +842,17 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .affinities-adapt-active { background:var(--card-action); color:var(--card-action-foreground); border-color:var(--card-action); }
 .console-head-actions { display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
 
+/* What the transform console explains: why a control is disabled, what the
+   measurements imply, and whether the audio being heard is rendered or stretched
+   on the fly. */
+.console-note { margin:0; padding:8px 0 0; color:#77737f; font-size:10px; line-height:1.5; }
+.console-note-action { display:block; margin-top:6px; border:1px solid #3b3741; border-radius:4px; background:#111015; color:#a7a3ad; padding:5px 8px; font-size:10px; }
+.console-note-action:hover { border-color:#a99cff66; color:#d2cdef; }
+.console-recommendation small { display:block; margin-top:5px; color:#77737f; font:9px var(--font-geist-mono); }
+/* Violet rather than the amber of the transform chips: those say what would happen,
+   this says what is happening. */
+.candidate-stats i.candidate-stat-live { border-color:#a99cff66; color:var(--violet); }
+
 .affinities-workspace .playback-modes { gap:8px; margin:14px 0 4px; }
 .affinities-workspace .playback-modes button { min-height:42px; padding:12px 10px; font-size:14px; font-weight:600; letter-spacing:-.01em; }
 .affinities-workspace .transform-console .console-head button,

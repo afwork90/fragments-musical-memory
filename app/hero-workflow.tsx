@@ -9,7 +9,12 @@ import {
   applyPreviewTime,
   buildFragmentPreviewScope,
   progressForAudio,
+  resolveSourceAudioUrl,
 } from "@/lib/audio/source-playback";
+import { useMatchRender } from "@/lib/audio/use-match-render";
+import type { MatchRenderRequest } from "@/lib/audio/render-match";
+import { describeMatch, isAudibleTransform, matchTransform } from "@/lib/affinity/transform";
+import type { MatchTiming, MatchTransform } from "@/lib/affinity/transform";
 import { LibraryCard } from "@/app/features/library/library-card";
 import { LibraryLinkSummary } from "@/app/features/library/library-list";
 import { Button } from "@/lib/ui/button";
@@ -32,7 +37,7 @@ export type CombineCandidate = Relationship & { score: number; otherId: string }
 type TransformDraft = {
   semitones: number;
   bpm: number;
-  timing: "normal" | "half-time" | "double-time";
+  timing: MatchTiming;
   beatOffset: number;
   repeat: number;
   transformed: boolean;
@@ -47,15 +52,27 @@ function playbackScopeForFragment(fragment: Fragment, source: SourceFile | undef
   return buildFragmentPreviewScope(fragment, source);
 }
 
+/**
+ * Where the candidate's audio comes from, which is the one place the three ways of
+ * transforming it meet.
+ *
+ * A rendered match is a whole file — already the slice, already stretched and
+ * shifted — so it plays with no clip and at rate 1. Everything else plays the slice
+ * out of the source, and a tempo-only change rides on `playbackRate`, which needs
+ * no render at all.
+ */
 function candidatePlaybackScope(
   candidate: Fragment,
   source: SourceFile | undefined,
   transformed: boolean,
-  transformAsset?: string,
+  rendered: string | null,
+  prebakedAsset?: string,
 ): PreviewScope | null {
-  if (transformed && transformAsset) {
-    return { id: candidate.id, url: transformAsset };
-  }
+  if (transformed && rendered) return { id: candidate.id, url: rendered };
+  // The prototype dataset ships pre-baked "matched" files for its own fragments.
+  // Nothing measures them, so there is no transform to compute and nothing to
+  // render; playing the asset is the only thing on offer.
+  if (transformed && prebakedAsset) return { id: candidate.id, url: prebakedAsset };
   return playbackScopeForFragment(candidate, source);
 }
 
@@ -209,15 +226,72 @@ export function ExportSheet({
   );
 }
 
-function recommendationFor(relationship: CombineCandidate, fragment: Fragment): TransformDraft {
+/**
+ * What the measurements say should happen to the candidate, or `null` when either
+ * fragment was never measured — the prototype dataset, which carries a hand-written
+ * transform instead.
+ */
+function matchFor(anchor: Fragment, candidate: Fragment | undefined): MatchTransform | null {
+  if (!anchor.measured || !candidate?.measured) return null;
+  return matchTransform(anchor.measured, candidate.measured);
+}
+
+/**
+ * The console's starting point.
+ *
+ * Tempo is matched on arrival because it is the change the affinity was scored on
+ * and it costs nothing to undo. Pitch is not: shifting a fragment to the anchor's
+ * key changes the harmonic relationship the pair was ranked for, so the semitones
+ * are computed, shown, and left at zero until someone asks for them.
+ */
+function recommendationFor(
+  match: MatchTransform | null,
+  relationship: CombineCandidate,
+  fragment: Fragment,
+): TransformDraft {
+  if (!match) {
+    return {
+      semitones: relationship.transform?.pitch ?? 0,
+      bpm: fragment.bpm + (relationship.transform?.bpm ?? 0),
+      timing: relationship.transform?.timing ?? "normal",
+      beatOffset: relationship.transform?.beatOffset ?? 0,
+      repeat: relationship.transform?.repeat ?? 1,
+      transformed: true,
+    };
+  }
+
   return {
-    semitones: relationship.transform?.pitch ?? 0,
-    bpm: fragment.bpm + (relationship.transform?.bpm ?? 0),
-    timing: relationship.transform?.timing ?? "normal",
-    beatOffset: relationship.transform?.beatOffset ?? 0,
-    repeat: relationship.transform?.repeat ?? 1,
+    semitones: match.semitones ?? 0,
+    bpm: Math.round(match.matchedBpm ?? match.fromBpm ?? fragment.bpm),
+    timing: match.timing,
+    beatOffset: 0,
+    repeat: 1,
     transformed: true,
   };
+}
+
+/** The draft the console opens with: the recommendation, minus the pitch shift. */
+function openingDraft(
+  match: MatchTransform | null,
+  relationship: CombineCandidate,
+  fragment: Fragment,
+): TransformDraft {
+  const recommended = recommendationFor(match, relationship, fragment);
+  return match ? { ...recommended, semitones: 0 } : recommended;
+}
+
+/**
+ * How much faster the candidate has to play, from whatever target the console
+ * holds. Clamped because the target is a free-text BPM: 40 against a candidate at
+ * 200 is a fifth of the speed, which is not a match by any reading.
+ */
+const MAX_MANUAL_STRETCH = 2;
+
+function tempoRatioFor(match: MatchTransform | null, targetBpm: number): number {
+  if (!match?.fromBpm || !(targetBpm > 0)) return 1;
+  const ratio = targetBpm / match.fromBpm;
+  if (!Number.isFinite(ratio) || ratio <= 0) return 1;
+  return Math.min(MAX_MANUAL_STRETCH, Math.max(1 / MAX_MANUAL_STRETCH, ratio));
 }
 
 export function CombineWorkspace({
@@ -243,11 +317,14 @@ export function CombineWorkspace({
   const [activeId, setActiveId] = useState(candidates[0]?.id ?? "");
   const relationship = candidates.find((item) => item.id === activeId) ?? candidates[0];
   const candidate = fragments.find((item) => item.id === relationship?.otherId);
+  const match = useMemo(() => (candidate ? matchFor(anchor, candidate) : null), [anchor, candidate]);
   const recommendation = useMemo<TransformDraft>(
-    () => (relationship && candidate ? recommendationFor(relationship, candidate) : { semitones: 0, bpm: 90, timing: "normal", beatOffset: 0, repeat: 1, transformed: true }),
-    [relationship, candidate],
+    () => (relationship && candidate ? recommendationFor(match, relationship, candidate) : { semitones: 0, bpm: 90, timing: "normal", beatOffset: 0, repeat: 1, transformed: true }),
+    [match, relationship, candidate],
   );
-  const [transform, setTransform] = useState<TransformDraft>(recommendation);
+  const [transform, setTransform] = useState<TransformDraft>(
+    () => (relationship && candidate ? openingDraft(match, relationship, candidate) : recommendation),
+  );
   const [playing, setPlaying] = useState<PlayMode | "">("");
   const [playPhase, setPlayPhase] = useState<PlayPhase>("");
   const [progress, setProgress] = useState<{ a: number | null; b: number | null }>({ a: null, b: null });
@@ -323,12 +400,44 @@ export function CombineWorkspace({
     [sources],
   );
 
-  const prepareTrackAudio = (scope: PreviewScope | null, track: "a" | "b") => {
+  // What the console is asking for right now. Zeroed while the Original toggle is
+  // held, so that what plays and what a drag hands over stay the same thing.
+  const tempoRatio = transform.transformed ? tempoRatioFor(match, transform.bpm) : 1;
+  const semitones = transform.transformed ? transform.semitones : 0;
+  // A pitch shift has no realtime equivalent; a tempo change does, so it is the
+  // only one of the two that can be heard without waiting for a render.
+  const needsRender = semitones !== 0;
+
+  const renderRequest = useMemo<MatchRenderRequest | null>(() => {
+    if (!candidate || !match) return null;
+    const source = sourceForId(candidate.sourceId);
+    const url = source ? resolveSourceAudioUrl(source) : null;
+    if (!url) return null;
+
+    return {
+      sourceId: candidate.sourceId,
+      fragmentId: candidate.id,
+      audioUrl: resolveAudioUrl(url),
+      start: candidate.start,
+      end: candidate.end,
+      tempoRatio,
+      semitones,
+    };
+  }, [candidate, match, sourceForId, tempoRatio, semitones]);
+
+  const { render, status: renderStatus, ensure: ensureRender } = useMatchRender(renderRequest);
+
+  const prepareTrackAudio = (scope: PreviewScope | null, track: "a" | "b", rate = 1) => {
     if (!scope?.url) return null;
     const audio = new Audio(resolveAudioUrl(scope.url));
     audio.dataset.track = track;
     audio.volume = mute[track] ? 0 : volumes[track];
     audio.loop = scope.clip ? false : loop[track];
+    // Chromium preserves pitch across a rate change by default, and does it well —
+    // which is what makes tempo matching free for auditioning. Set explicitly
+    // because the whole feature rests on it.
+    audio.preservesPitch = true;
+    audio.playbackRate = rate;
     scopesByAudio.current.set(audio, scope);
     audios.current.push(audio);
 
@@ -357,22 +466,27 @@ export function CombineWorkspace({
     return audio;
   };
 
-  const play = (mode: PlayMode) => {
+  const play = async (mode: PlayMode) => {
     if (!relationship || !candidate) return;
     stop();
     setPlaying(mode);
     onAuditioned(relationship);
+
+    const rendered = needsRender ? (render ?? await ensureRender()) : null;
 
     const anchorScope = playbackScopeForFragment(anchor, sourceForId(anchor.sourceId));
     const candidateScope = candidatePlaybackScope(
       candidate,
       sourceForId(candidate.sourceId),
       transform.transformed,
+      rendered?.url ?? null,
       relationship.transform?.asset,
     );
 
     const a = prepareTrackAudio(anchorScope, "a");
-    const b = prepareTrackAudio(candidateScope, "b");
+    // A render already plays at the matched tempo, so the rate applies only to the
+    // untransformed slice.
+    const b = prepareTrackAudio(candidateScope, "b", rendered ? 1 : tempoRatio);
 
     const safe = (audio: HTMLAudioElement, onFail?: () => void) => {
       playMediaElement(audio, () => {
@@ -433,7 +547,9 @@ export function CombineWorkspace({
     stop();
     const next = candidates.find((item) => item.id === id);
     const nextFragment = fragments.find((item) => item.id === next?.otherId);
-    if (next && nextFragment) setTransform(recommendationFor(next, nextFragment));
+    if (next && nextFragment) {
+      setTransform(openingDraft(matchFor(anchor, nextFragment), next, nextFragment));
+    }
     setActiveId(id);
   };
 
@@ -443,6 +559,22 @@ export function CombineWorkspace({
 
   const anchorPreviewing = playPhase === "a" || playPhase === "both";
   const candidatePreviewing = playPhase === "b" || playPhase === "both";
+  const matchLabels = match ? describeMatch(match) : relationship.transform?.labels ?? [];
+  const adapted = transform.transformed && isAudibleTransform(tempoRatio, semitones);
+  // Dragging the candidate out hands over the render, which is the slice as it is
+  // being auditioned. Until one exists the drag falls back to the whole recording,
+  // which is what it has always done.
+  const candidateDragPayload = render
+    ? {
+      target: {
+        sourceId: candidate.sourceId,
+        renderFile: render.fileName,
+        label: adapted ? `${candidate.name} (matched)` : candidate.name,
+      },
+      audioUrl: render.url,
+      fileName: `${candidate.name}${adapted ? " matched" : ""}.wav`,
+    }
+    : undefined;
   const stubHandlers = {
     sourceNameFor: (fragment: Fragment) => sourceForId(fragment.sourceId)?.name ?? fragment.source,
     sourceForId,
@@ -504,6 +636,7 @@ export function CombineWorkspace({
                 showActions={false}
                 embedded
                 {...stubHandlers}
+                dragPayload={candidateDragPayload}
                 onPreview={() => (playing === "B" ? stop() : play("B"))}
                 waveActions={(
                   <TrackWaveActions
@@ -517,7 +650,12 @@ export function CombineWorkspace({
               <div className="affinities-candidate-bar">
                 <div className="candidate-stats">
                   <b>{relationship.score}% fit</b>
-                  {relationship.transform?.labels.map((label) => <i key={label}>{label}</i>)}
+                  {matchLabels.map((label) => <i key={label}>{label}</i>)}
+                  {adapted && (
+                    <i className="candidate-stat-live">
+                      {needsRender && renderStatus === "rendering" ? "rendering…" : "adapted"}
+                    </i>
+                  )}
                 </div>
                 <Button
                   type="button"
@@ -570,6 +708,8 @@ export function CombineWorkspace({
                 const fragment = fragments.find((entry) => entry.id === item.otherId);
                 if (!fragment) return null;
                 const isActive = item.id === relationship.id;
+                const itemMatch = matchFor(anchor, fragment);
+                const itemLabels = itemMatch ? describeMatch(itemMatch) : item.transform?.labels ?? [];
                 return (
                   <div key={item.id} className="affinities-candidate-item">
                     <LibraryCard
@@ -584,7 +724,7 @@ export function CombineWorkspace({
                     />
                     <div className="affinities-candidate-item-meta">
                       <b>{item.score}% fit</b>
-                      {item.transform?.labels.map((label) => <i key={label}>{label}</i>)}
+                      {itemLabels.map((label) => <i key={label}>{label}</i>)}
                       {isActive && <span className="affinities-candidate-active">B</span>}
                     </div>
                   </div>
@@ -623,7 +763,9 @@ export function CombineWorkspace({
                 </button>
               </div>
               <label>
-                <span>Pitch <small>semitones</small></span>
+                <span>
+                  Pitch <small>semitones</small>
+                </span>
                 <input
                   type="number"
                   min="-12"
@@ -632,6 +774,23 @@ export function CombineWorkspace({
                   onChange={(event) => setTransform((current) => ({ ...current, semitones: Number(event.target.value) }))}
                 />
               </label>
+              {match?.semitones !== null && match?.semitones !== undefined && (
+                <p className="console-note">
+                  {match.semitones === 0
+                    ? "Already in the anchor's key."
+                    : `${anchor.key} is ${Math.abs(match.semitones)} semitone${Math.abs(match.semitones) === 1 ? "" : "s"} ${match.semitones > 0 ? "above" : "below"} this fragment.`}
+                  {match.sameScale === false && " The two disagree on major and minor, which a shift cannot fix."}
+                  {match.semitones !== 0 && (
+                    <button
+                      type="button"
+                      className="console-note-action"
+                      onClick={() => setTransform((current) => ({ ...current, semitones: match.semitones ?? 0 }))}
+                    >
+                      Match the key
+                    </button>
+                  )}
+                </p>
+              )}
               <label>
                 <span>Target BPM <small>time-stretch</small></span>
                 <input
@@ -639,9 +798,23 @@ export function CombineWorkspace({
                   min="40"
                   max="220"
                   value={transform.bpm}
+                  disabled={match !== null && match.fromBpm === null}
                   onChange={(event) => setTransform((current) => ({ ...current, bpm: Number(event.target.value) }))}
                 />
               </label>
+              {match !== null && match.fromBpm === null && (
+                <p className="console-note">
+                  This fragment&apos;s tempo was not measurable, so there is nothing to stretch
+                  towards.
+                </p>
+              )}
+              {match !== null && match.fromBpm !== null && match.tempoRatio === null && (
+                <p className="console-note">
+                  {`At ${match.fromBpm} against ${anchor.bpm || "—"} BPM, no reading of the pulse brings
+                  these together without a heavy stretch, so none is applied. Set a target to stretch
+                  anyway.`}
+                </p>
+              )}
               <label>
                 <span>Time interpretation</span>
                 <select
@@ -676,8 +849,21 @@ export function CombineWorkspace({
               <div className="console-recommendation">
                 <span>Recommended</span>
                 <b>
-                  {recommendation.semitones} st · {recommendation.bpm} BPM · {recommendation.beatOffset} beat · {recommendation.repeat}×
+                  {match
+                    ? (describeMatch(match).join(" · ") || "no change: already a match")
+                    : `${recommendation.semitones} st · ${recommendation.bpm} BPM · ${recommendation.beatOffset} beat · ${recommendation.repeat}×`}
                 </b>
+                {match && (
+                  <small>
+                    {needsRender
+                      ? renderStatus === "rendering"
+                        ? "Rendering the pitch shift…"
+                        : renderStatus === "failed"
+                          ? "The shift could not be rendered; playing the original."
+                          : "Pitch shifted, rendered to a file."
+                      : "Tempo matched during playback."}
+                  </small>
+                )}
               </div>
           </>
         </aside>

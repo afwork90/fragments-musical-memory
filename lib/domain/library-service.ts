@@ -49,6 +49,24 @@ const SOURCE_DOCUMENT_FILENAME = "source.json";
  */
 const WAVEFORM_FILENAME = "waveform.bin";
 
+/**
+ * Rendered matches — a fragment sliced out and tempo- or pitch-shifted to sit with
+ * another — live in a subfolder of the source they came from.
+ *
+ * Inside the source folder rather than at the library root so they are archived and
+ * deleted with it: a render is derived data, and an orphaned one nobody can trace
+ * back to a fragment is just a file taking up space.
+ */
+const RENDERS_DIR_NAME = "renders";
+
+/**
+ * How many renders a source keeps. The transform console lets someone type any
+ * target BPM, and every distinct setting is a file, so without a cap a session of
+ * knob-turning would leave a hundred of them. The oldest go first; they cost one
+ * re-render each, which is a second of work.
+ */
+const RENDERS_KEPT_PER_SOURCE = 16;
+
 /** Thrown when a live source already holds the same original filename. */
 export type DuplicateSourceError = Error & { code: "DUPLICATE_SOURCE" };
 
@@ -70,6 +88,10 @@ export type LibraryService = {
   /** Resolves `null` when a source has no sidecar yet, which is not an error. */
   readWaveform(sourceId: string): Promise<Uint8Array | null>;
   writeWaveform(sourceId: string, bytes: Uint8Array): Promise<void>;
+  resolveRenderPath(sourceId: string, fileName: string): string;
+  /** Resolves `null` when this match has not been rendered yet, which is not an error. */
+  readRender(sourceId: string, fileName: string): Promise<Uint8Array | null>;
+  writeRender(sourceId: string, fileName: string, bytes: Uint8Array): Promise<void>;
   updateSourceAnalysis(sourceId: string, analysis: MeasuredAnalysis): Promise<SourceDocument>;
   updateSourceSettings(sourceId: string, settings: SourceSettings): Promise<SourceDocument>;
   updateFragments(sourceId: string, fragments: FragmentInput[]): Promise<SourceDocument>;
@@ -312,10 +334,11 @@ export function createLibraryService(libraryRoot: string): LibraryService {
     }
   }
 
-  async function writeWaveform(sourceId: string, bytes: Uint8Array): Promise<void> {
-    const target = resolveWaveformPath(sourceId);
-    // Same rename-into-place discipline as `source.json`: a half-written sidecar
-    // would decode into a waveform that misrepresents the audio.
+  /**
+   * Same rename-into-place discipline as `source.json`: a half-written file would
+   * decode into audio, or a waveform, that misrepresents the recording.
+   */
+  async function writeAtomically(target: string, bytes: Uint8Array): Promise<void> {
     const temporary = `${target}.${randomUUID()}.tmp`;
     await fs.mkdir(path.dirname(target), { recursive: true });
     try {
@@ -324,6 +347,48 @@ export function createLibraryService(libraryRoot: string): LibraryService {
     } catch (error) {
       await fs.rm(temporary, { force: true }).catch(() => {});
       throw error;
+    }
+  }
+
+  async function writeWaveform(sourceId: string, bytes: Uint8Array): Promise<void> {
+    await writeAtomically(resolveWaveformPath(sourceId), bytes);
+  }
+
+  function resolveRenderPath(sourceId: string, fileName: string): string {
+    assertSafeRelativeFilename(fileName, "render");
+    return resolveWithinDir(path.join(sourceDirFor(sourceId), RENDERS_DIR_NAME), fileName);
+  }
+
+  async function readRender(sourceId: string, fileName: string): Promise<Uint8Array | null> {
+    try {
+      return await fs.readFile(resolveRenderPath(sourceId, fileName));
+    } catch (error) {
+      // Never rendered, or pruned since. The caller renders it again.
+      if (isErrnoException(error) && error.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  async function writeRender(sourceId: string, fileName: string, bytes: Uint8Array): Promise<void> {
+    await writeAtomically(resolveRenderPath(sourceId, fileName), bytes);
+    await pruneRenders(sourceId).catch(() => {});
+  }
+
+  /** Keeps the most recently written renders and drops the rest. */
+  async function pruneRenders(sourceId: string): Promise<void> {
+    const dir = path.join(sourceDirFor(sourceId), RENDERS_DIR_NAME);
+    const names = await fs.readdir(dir).catch(() => [] as string[]);
+    if (names.length <= RENDERS_KEPT_PER_SOURCE) return;
+
+    const dated = await Promise.all(names.map(async (name) => {
+      const at = path.join(dir, name);
+      const stats = await fs.stat(at).catch(() => null);
+      return { at, modified: stats?.mtimeMs ?? 0 };
+    }));
+    dated.sort((a, b) => b.modified - a.modified);
+
+    for (const stale of dated.slice(RENDERS_KEPT_PER_SOURCE)) {
+      await fs.rm(stale.at, { force: true }).catch(() => {});
     }
   }
 
@@ -437,6 +502,9 @@ export function createLibraryService(libraryRoot: string): LibraryService {
     resolveWaveformPath,
     readWaveform,
     writeWaveform,
+    resolveRenderPath,
+    readRender,
+    writeRender,
     updateSourceAnalysis,
     updateSourceSettings,
     updateFragments,

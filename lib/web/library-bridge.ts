@@ -93,6 +93,20 @@ export function createWebLibraryBridge(): FragmentsBridge {
       return unsupported();
     },
 
+    async readRender(id: string, fileName: string) {
+      const path = `${encodeURIComponent(id)}/${encodeURIComponent(fileName)}`;
+      const response = await fetch(`${WEB_LIBRARY_ROUTES.render}/${path}`);
+      // Not rendered yet is the normal case here, and more common than in Electron:
+      // the browser cannot persist what it renders, so it only ever finds renders
+      // the desktop app left behind.
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error(`render request failed with ${response.status}`);
+      return response.arrayBuffer();
+    },
+    async writeRender(): Promise<void> {
+      return unsupported();
+    },
+
     startDrag() {
       // A browser cannot hand a real file to another application. Callers check
       // `capabilities.drag` first; this stays silent so a stray call is harmless.

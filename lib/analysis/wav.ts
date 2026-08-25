@@ -27,7 +27,10 @@ function ascii(bytes: Uint8Array, at: number) {
  * Reads a signed little-endian integer of 2, 3, or 4 bytes.
  *
  * 24-bit needs doing by hand: there is no `getInt24`, and the sign bit has to be
- * carried up before being shifted back down.
+ * carried up before being shifted back down. Every byte is placed one byte higher
+ * than its value, so the arithmetic shift that sign-extends brings all three back
+ * — placing the low byte at bit 0 instead would shift it away, which reads as a
+ * quiet 0.8% error rather than as an obviously broken file.
  */
 function readSample(view: DataView, at: number, bytes: number) {
   if (bytes === 2) return view.getInt16(at, true);
@@ -35,7 +38,7 @@ function readSample(view: DataView, at: number, bytes: number) {
   const lo = view.getUint8(at);
   const mid = view.getUint8(at + 1);
   const hi = view.getUint8(at + 2);
-  return (lo | (mid << 8) | (hi << 24)) >> 8;
+  return ((lo << 8) | (mid << 16) | (hi << 24)) >> 8;
 }
 
 export function decodeWav(bytes: Uint8Array): DecodedAudio {

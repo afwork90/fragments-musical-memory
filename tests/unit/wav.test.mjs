@@ -97,6 +97,17 @@ test("sign-extends 24-bit samples", () => {
   assert.ok(Math.abs(decoded.signal[2] + 0.5) < 1e-6, `expected -0.5, got ${decoded.signal[2]}`);
 });
 
+test("24-bit reads every byte, not just the top two", () => {
+  // 0x400000 and its negation have zero low bytes, so they pass whether or not the
+  // low byte survives the shift. Full scale does not: dropping it read 0.9922.
+  const wav = buildWav({ bitsPerSample: 24, samples: [8388607, -8388608, 0x123456] });
+  const decoded = decodeWav(wav);
+
+  assert.ok(Math.abs(decoded.signal[0] - 1) < 1e-6, `expected 1, got ${decoded.signal[0]}`);
+  assert.equal(decoded.signal[1], -1);
+  assert.ok(Math.abs(decoded.signal[2] - 0x123456 / 8388608) < 1e-9);
+});
+
 test("walks past chunks that precede data", () => {
   const wav = buildWav({
     samples: [16384],

@@ -27,6 +27,8 @@ export const FRAGMENTS_CHANNELS = {
   updateRelationships: "fragments:update-relationships",
   readWaveform: "fragments:read-waveform",
   writeWaveform: "fragments:write-waveform",
+  readRender: "fragments:read-render",
+  writeRender: "fragments:write-render",
   startDrag: "fragments:start-drag",
 } as const;
 
@@ -48,6 +50,21 @@ export type SourceSettingsPatch = {
 export type DragTarget = {
   sourceId?: string;
   assetPath?: string;
+  /**
+   * A rendered match under the source's `renders/` folder, preferred over the whole
+   * managed file when it is there.
+   *
+   * This is how dragging a fragment hands over the fragment: the render is already
+   * the slice, tempo- and pitch-matched if the user asked for that. A name that has
+   * been pruned or never written falls back to the source rather than failing, so a
+   * drag always delivers something.
+   */
+  renderFile?: string;
+  /**
+   * What to call the file the other application receives. Without it the drop is
+   * named after the source id, which is a uuid.
+   */
+  label?: string;
 };
 
 /**
@@ -73,6 +90,7 @@ export const WEB_LIBRARY_ROUTES = {
   sources: "/__library/sources",
   audio: "/__library/audio",
   waveform: "/__library/waveform",
+  render: "/__library/render",
 } as const;
 
 export type FragmentsBridge = {
@@ -104,6 +122,18 @@ export type FragmentsBridge = {
   readWaveform(id: string): Promise<ArrayBuffer | null>;
   /** Requires the `persist` capability. */
   writeWaveform(id: string, bytes: ArrayBuffer): Promise<void>;
+  /**
+   * A previously rendered match, or `null` when this one has not been rendered — or
+   * was pruned to keep the cache bounded. Both are ordinary: the renderer makes it
+   * again. `fileName` comes from `renderFileName` in `lib/affinity/transform`, which
+   * is what keeps the two hosts naming the same render identically.
+   */
+  readRender(id: string, fileName: string): Promise<ArrayBuffer | null>;
+  /**
+   * Requires the `persist` capability. Without it, transformed audio still plays —
+   * it is rendered per session and held in memory rather than cached on disk.
+   */
+  writeRender(id: string, fileName: string, bytes: ArrayBuffer): Promise<void>;
   /** Fire-and-forget: starts an OS-level file drag. */
   startDrag(target: DragTarget): void;
 };

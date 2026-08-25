@@ -82,6 +82,23 @@ export async function initializePersistence() {
     return value;
   }
 
+  /** The service rejects traversal too; this keeps the wrong type out first. */
+  function assertFileName(value: unknown): string {
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error("file name must be a non-empty string");
+    }
+    return value;
+  }
+
+  function asBytes(value: unknown, label: string): Uint8Array {
+    if (!(value instanceof ArrayBuffer) && !ArrayBuffer.isView(value)) {
+      throw new Error(`${label} payload must be binary`);
+    }
+    return value instanceof ArrayBuffer
+      ? new Uint8Array(value)
+      : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+
   logged(FRAGMENTS_CHANNELS.pickAudio, async () => {
     const result = await dialog.showOpenDialog({
       properties: ["openFile"],
@@ -128,14 +145,18 @@ export async function initializePersistence() {
     return bytes ? new Uint8Array(bytes).slice().buffer : null;
   });
   logged(FRAGMENTS_CHANNELS.writeWaveform, async (_event, id: unknown, bytes: unknown) => {
-    if (!(bytes instanceof ArrayBuffer) && !ArrayBuffer.isView(bytes)) {
-      throw new Error("waveform payload must be binary");
-    }
-    const view = bytes instanceof ArrayBuffer
-      ? new Uint8Array(bytes)
-      : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    await library.writeWaveform(assertId(id), view);
+    await library.writeWaveform(assertId(id), asBytes(bytes, "waveform"));
   });
+  logged(FRAGMENTS_CHANNELS.readRender, async (_event, id: unknown, fileName: unknown) => {
+    const bytes = await library.readRender(assertId(id), assertFileName(fileName));
+    return bytes ? new Uint8Array(bytes).slice().buffer : null;
+  });
+  logged(
+    FRAGMENTS_CHANNELS.writeRender,
+    async (_event, id: unknown, fileName: unknown, bytes: unknown) => {
+      await library.writeRender(assertId(id), assertFileName(fileName), asBytes(bytes, "render"));
+    },
+  );
 
   const icon = dragIcon();
   const publicAssetsRoot = process.env.ELECTRON_RENDERER_URL
@@ -163,8 +184,16 @@ export async function initializePersistence() {
     try {
       const sourceId = typeof target === "string" ? target : target?.sourceId;
       const assetPath = (typeof target === "object" ? target?.assetPath : null) ?? null;
+      const renderFile = (typeof target === "object" ? target?.renderFile : null) ?? null;
       let filePath: string | null = null;
-      if (sourceId) {
+      if (sourceId && renderFile) {
+        // A render is the fragment itself — sliced, and matched if that was asked
+        // for — so it wins over the whole recording. Missing is normal: it may have
+        // been pruned, or never written because this host cannot persist.
+        const candidate = library.resolveRenderPath(sourceId, renderFile);
+        if (await fs.promises.stat(candidate).then(() => true, () => false)) filePath = candidate;
+      }
+      if (!filePath && sourceId) {
         const source = (await library.listSources()).find((item) => item.id === sourceId);
         if (source) filePath = library.resolveAudioPath(sourceId, source.audioFile);
       }
@@ -172,7 +201,9 @@ export async function initializePersistence() {
         filePath = resolveRendererPath(publicAssetsRoot, assetPath);
       }
       if (!filePath) return;
-      const label = sourceId || path.basename(assetPath || filePath, path.extname(filePath));
+      const label = (typeof target === "object" ? target?.label : null)
+        || sourceId
+        || path.basename(assetPath || filePath, path.extname(filePath));
       const staged = await stageForDrag(filePath, label).catch((error) => {
         console.error("[fragments] drag staging failed, dragging original path:", error);
         return filePath;
