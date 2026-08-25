@@ -816,3 +816,47 @@ script.
 
 A demo affordance whose cost disappears once 9.3 and 9.4 are real. Removing it early only costs a
 demo. Revisit after those land.
+### 9.16 Real affinities, and the axis that could not exist
+
+Chasing "the affinities modal shows an unrelated waveform" found no bug in the modal. The library
+contained **zero relationships**. All 67 affinities in the UI belonged to the prototype dataset, among
+its 28 demo fragments, so filtering by affinity count could only ever select prototype fragments —
+whose waveforms are hardcoded arrays with no audio behind them. Clicking Affinities on a *real*
+fragment did nothing at all, because `openCombineForAnchor` returns early when there is no top
+connection.
+
+**Nullable axes, not a nullable melody.** The plan was to drop `melody`, which measures nothing. But
+`melody` is not the only unmeasurable axis: `synth-rec_OBX` measures 139 BPM at confidence **0.00**,
+and 12 of 26 fragments come back the same way. Scoring an unmeasured axis 0 asserts "completely
+different", which is false. So every axis became `number | null`, `melody` was removed outright rather
+than made nullable, and both scoring paths take a weighted mean over the axes present. The view type's
+own comment had already called for exactly this, and had also recorded that the old data was
+duplicated or constant — `timbre` and `brightness` were 0.70 on every row of 791.
+
+Consequences worth remembering:
+
+- `SearchWeights.melody` went too. A slider that multiplies a number nobody computes is a control
+  that does nothing.
+- The match filter read `metrics.pitch` unguarded, so a null would have been coerced to 0 and hidden
+  every candidate whose key was not measurable.
+- Scoring moved out of `fragments-app.tsx` into `lib/affinity/score.ts`, which is what made the
+  absent-versus-zero distinction testable. It was untestable while it lived in the god-object.
+
+**Fragments had to be measured individually.** `FragmentDocument.analysis` already existed and was
+never populated, so every fragment inherited its source's numbers — under which all 17 Cloud Collapse
+fragments are perfect matches for one another. That failure looks exactly like a working scorer until
+you read the output. The batch pass now slices each fragment from the decoded signal at the native
+rate and resamples per fragment: 26 fragments measured, yielding 25 distinct chroma vectors.
+
+**Thresholds from the data, not from taste.** Cross-source similarities run 0.36 to 1.00, median 0.66.
+A floor of 0.55 kept 76% of pairs and said nothing; 0.70 keeps 46 relationships over 174 candidate
+pairs, and 25 of 26 fragments have at least one. The strongest is 1.000 between the two duplicate
+`song1.wav` imports, which is the sanity check working: identical audio scores identically.
+
+Only 17% of those relationships have a tempo. That number is the argument for nullable axes in one
+figure — under the old schema, 83% of the library's affinities would have carried a fabricated tempo
+similarity.
+
+Still outstanding: the prototype fragments and relationships are still merged into the library.
+Removing them is not an import deletion — `selectedId` initialises to the hardcoded `"f02"` and
+`activeFragmentById` falls back to the prototype lookup, so it needs real empty-state handling.

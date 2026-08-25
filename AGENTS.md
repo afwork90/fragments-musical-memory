@@ -238,6 +238,68 @@ queue so a library with no sidecars yet does not open an `AudioContext` per card
 Do not add a `Math.max(floor, ...)` to peak values. Drawing silence as a small
 non-zero bar is the same invented data as a fabricated BPM, in visual form.
 
+## Affinities
+
+`lib/affinity/` is pure and compiled twice, like `lib/domain/`. `compare.ts` scores
+one pair of fragments axis by axis, `generate.ts` decides which pairs are worth
+recording, and `score.ts` ranks them for display.
+
+**A metric axis is nullable, and `null` is not zero.** This is the rule the whole
+slice is built around. Essentia returns a plausible BPM at `bpmConfidence` 0 for
+unrhythmic audio, and 12 of the library's 26 fragments come back exactly that way,
+so for them the tempo relationship is genuinely unknown. Scoring it 0 asserts
+"completely different tempo", which is false and drags the pair down; scoring it
+high is invented. Both `generationSimilarity` and `similarityOf` take a weighted
+mean over the axes that are present and shrink the denominator to match. Never
+coerce an absent axis to a number, and never filter on one without a null check —
+the match filter did read `metrics.pitch` as 0 and silently hid every candidate
+whose key was not measurable.
+
+There is **no `melody` axis**. Nothing in `lib/analysis/` extracts pitch contour,
+so it could only ever have held a fabricated number. Add it back when something
+measures it, and not before.
+
+Each axis compares one measurement, and the reasoning is in the comments beside it:
+chroma by cosine (scale-invariant, so voicing and level do not matter), MFCC by
+cosine **skipping coefficient 0** because it tracks loudness rather than timbre,
+centroid and onset density in **octaves** because both are heard ratiometrically,
+key on the circle of fifths, tempo allowing **half and double time** because that is
+the same pulse and essentia octave-errors in exactly that way.
+
+**Fragments must be measured individually.** `FragmentDocument.analysis` exists for
+this. If fragments inherit their source's features, every fragment of one recording
+carries identical numbers and scores as a perfect match for its siblings — which is
+indistinguishable from a working scorer until you read the output.
+`scripts/analyze-library.mjs` slices each fragment from the decoded signal at the
+native rate and resamples per fragment.
+
+Generation is **deterministic**: same fragments in, same relationships out, with the
+same ids. `relationshipIdFor` sorts the pair, because ids are what the user's
+auditioned/preferred/rejected marks hang off and renumbering them on a rebuild
+would reassign somebody's judgement to a different pair. For the same reason
+`build-affinities.mjs` only replaces relationships whose `origin` is
+`"algorithmic"`.
+
+Same-source pairs are never related — two slices of one take are trivially similar
+and would fill every list. A pair needs at least `MIN_MEASURED_AXES` measured axes,
+because one axis is not evidence.
+
+Thresholds are set against the measured spread, not chosen as round numbers.
+Cross-source similarities run 0.36 to 1.00 with a median of 0.66, so
+`MIN_SIMILARITY` is 0.70: about a quarter survive, which is few enough that a
+relationship existing is itself information. Re-derive it if the library changes
+character rather than nudging it.
+
+```bash
+npm run analyze -- --write      # measure sources and fragments
+npm run affinities              # report what would be generated
+npm run affinities -- --write   # persist
+```
+
+Note that a generated relationship joins two library fragment ids, so
+`isLibraryRelationship` treats it as curated and the tolerance sliders do **not**
+filter it further. The generation threshold is the only filter it passes.
+
 ## Slice ownership
 
 Feature work should touch one slice. If your change needs to edit a shared

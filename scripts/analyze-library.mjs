@@ -96,6 +96,49 @@ function decodeWithFfmpeg(filePath) {
   return { signal, sampleRate, channels, bitsPerSample: 32 };
 }
 
+/**
+ * Measures each fragment from its own slice of the source audio.
+ *
+ * Fragments cannot inherit their source's features. Every fragment of one
+ * recording would then carry identical numbers, and an affinity scorer comparing
+ * them would rank all of them as perfect matches for one another — which is
+ * exactly as useless as it sounds, and indistinguishable from a working scorer
+ * until you look at the output.
+ *
+ * Slices at the native rate and resamples per fragment, so a fragment measures the
+ * same whether it was cut from a 48kHz master or a 22.05kHz one.
+ */
+function measureFragments(essentia, fragments, signal, sampleRate) {
+  return fragments.map((fragment) => {
+    const from = Math.max(0, Math.floor(fragment.start * sampleRate));
+    const to = Math.min(signal.length, Math.ceil(fragment.end * sampleRate));
+
+    if (to <= from) return { fragment, features: null, reason: "empty range" };
+
+    // A copy, for the reason windowForFeatures documents: arrayToVector copies from
+    // the backing buffer, so a subarray of a long recording would push the whole
+    // recording into the WASM heap.
+    const slice = signal.slice(from, to);
+    const prepared = windowForFeatures(
+      resample(slice, sampleRate, FEATURE_SAMPLE_RATE),
+      FEATURE_SAMPLE_RATE,
+    );
+
+    try {
+      const features = extractFeatures(essentia, prepared);
+      // All-null means the slice was shorter than one analysis frame. Reporting that
+      // as "measured" would overstate what happened.
+      const anything = features.bpm !== null || features.key !== null || features.timbre !== null;
+      return anything
+        ? { fragment, features, reason: null }
+        : { fragment, features: null, reason: "too short to measure" };
+    } catch (error) {
+      const message = typeof error === "number" ? `essentia aborted (${error})` : error?.message ?? String(error);
+      return { fragment, features: null, reason: message };
+    }
+  });
+}
+
 const args = process.argv.slice(2);
 const write = args.includes("--write");
 const force = args.includes("--force");
@@ -179,6 +222,52 @@ for (const source of sources) {
     console.log(`   onsets ${features.onsets ? features.onsets.length : "—"}`);
     console.log(`   timbre ${features.timbre ? `${features.timbre.length} MFCC means` : "—"}   chroma ${features.chroma ? `${features.chroma.length} bins` : "—"}   centroid ${features.centroidHz ?? "—"}Hz`);
     console.log(`   wave   ${(waveform.byteLength / 1024).toFixed(0)}KB at ${PEAKS_PER_SECOND}/s${write ? " (written)" : ""}`);
+
+    // Fragments are measured from their own slices, before the source-level
+    // provenance gate below: a hand-corrected source BPM is a judgement about the
+    // whole recording and says nothing about whether its fragments were measured.
+    const fragments = source.fragments ?? [];
+    const measurements = fragments.length
+      ? measureFragments(essentia, fragments, decoded.signal, decoded.sampleRate)
+      : [];
+
+    if (measurements.length) {
+      const done = measurements.filter((entry) => entry.features);
+      const trustedTempo = done.filter((entry) => (entry.features.bpmConfidence ?? 0) >= MIN_BPM_CONFIDENCE);
+      const short = measurements.filter((entry) => entry.reason === "too short to measure");
+      const errored = measurements.filter((entry) => entry.reason && entry.reason !== "too short to measure");
+
+      console.log(
+        `   frags  ${done.length}/${measurements.length} measured`
+        + `   ${trustedTempo.length} with a trusted tempo`
+        + (short.length ? `   ${short.length} too short` : "")
+        + (errored.length ? `   ${errored.length} failed` : ""),
+      );
+      for (const entry of errored) {
+        console.log(`          ${entry.fragment.name}: ${entry.reason}`);
+      }
+
+      if (write) {
+        const at = new Date().toISOString();
+        // Preserve a fragment whose analysis a user corrected by hand, for the same
+        // reason the source-level gate below exists.
+        const next = measurements.map(({ fragment, features }) => {
+          const editedByHand = fragment.analysis?.provenance?.origin === "edited";
+          if (!features || (editedByHand && !force)) return fragment;
+          return {
+            ...fragment,
+            analysis: {
+              ...fragment.analysis,
+              ...features,
+              provenance: { origin: "measured", extractor: essentia.version, at },
+            },
+          };
+        });
+        await service.updateFragments(source.id, next);
+        const written = next.filter((fragment, index) => fragment !== measurements[index].fragment).length;
+        console.log(`          ${written} fragment analyses written`);
+      }
+    }
 
     // A hand-corrected value is the user's judgement and outranks any measurement.
     // Overwriting it in a batch pass is the exact failure the provenance field
