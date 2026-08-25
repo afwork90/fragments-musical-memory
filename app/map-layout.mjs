@@ -8,13 +8,27 @@ const stableHash = (value) => Array.from(value).reduce((hash,char) => ((hash * 3
 
 const keyCertainty = (key) => key === "—" || key.includes("No stable") ? .05 : key.includes("Could fit") ? .35 : key.includes("Likely") ? .75 : 1;
 
-/** @param {{ id:string;role:keyof typeof ROLE_TONAL;roles:Array<keyof typeof ROLE_TONAL>;key:string;brightness:number }} fragment */
+// Measured centroid in octaves between 150Hz and 4kHz, since brightness is heard
+// ratiometrically. `brightness` is the demo dataset's hand-written stand-in; a measured
+// fragment carries 0 there, which is why they all used to land on one line.
+const CENTROID_OCTAVES = Math.log2(4000 / 150);
+
+/** @param {{ brightness:number;measured?:{ centroidHz:number|null }|undefined }} fragment */
+function brightnessOf(fragment) {
+  const centroid = fragment.measured?.centroidHz;
+  if (typeof centroid === "number" && centroid > 0) {
+    return clamp(Math.log2(centroid / 150) / CENTROID_OCTAVES,0,1);
+  }
+  return clamp((fragment.brightness - 20) / 70,0,1);
+}
+
+/** @param {{ id:string;role:keyof typeof ROLE_TONAL;roles:Array<keyof typeof ROLE_TONAL>;key:string;brightness:number;measured?:{ centroidHz:number|null }|undefined }} fragment */
 export function musicalMapPoint(fragment) {
   const primary=ROLE_TONAL[fragment.role] ?? .5;
   const secondaryRoles=fragment.roles.filter((role) => role !== fragment.role);
   const secondary=secondaryRoles.length ? secondaryRoles.reduce((sum,role) => sum + (ROLE_TONAL[role] ?? primary),0) / secondaryRoles.length : primary;
   const tonal=clamp((primary * .8 + secondary * .2) * .82 + keyCertainty(fragment.key) * .18,0,1);
-  const brightness=clamp((fragment.brightness - 20) / 70,0,1);
+  const brightness=brightnessOf(fragment);
   const hash=stableHash(fragment.id);
   const jitterX=((hash % 9) - 4) * 2.5;
   const jitterY=(((hash >>> 4) % 9) - 4) * 2;
