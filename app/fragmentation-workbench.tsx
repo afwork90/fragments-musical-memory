@@ -24,8 +24,8 @@ import {
   PreviewScope,
   applyPreviewTime,
   buildFragmentPreviewScope,
+  buildSourcePreviewScope,
   progressForAudio,
-  resolveSourceAudioUrl,
 } from "@/lib/audio/source-playback";
 import { Button } from "@/lib/ui/button";
 import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
@@ -320,7 +320,10 @@ export function FragmentationWorkbench({
   const rulerRef = useRef<HTMLDivElement>(null);
   const rangesRef = useRef(ranges);
   const onRangesChangeRef = useRef(onRangesChange);
-  const canPlaySource = Boolean(resolveSourceAudioUrl(source));
+  // The whole recording, which the header plays and every lane is a slice of. Its scope
+  // carries its own id (`source:<id>`), which is what keeps it distinguishable from a
+  // fragment in the one piece of playing state.
+  const sourceScope = useMemo(() => buildSourcePreviewScope(source), [source]);
 
   useEffect(() => { rangesRef.current = ranges; }, [ranges]);
   useEffect(() => { onRangesChangeRef.current = onRangesChange; }, [onRangesChange]);
@@ -350,14 +353,13 @@ export function FragmentationWorkbench({
     setPreviewProgress(null);
   }, []);
 
-  const preview = useCallback((fragment: Fragment, startRatio = 0) => {
-    const scope = buildFragmentPreviewScope(fragment, source);
+  const startPreview = useCallback((scope: PreviewScope | null, startRatio = 0, loop = false) => {
     if (!scope) return;
-    if (startRatio === 0 && previewingId === fragment.id && audioRef.current) {
+    if (startRatio === 0 && previewingId === scope.id && audioRef.current) {
       stopPreview();
       return;
     }
-    if (previewingId === fragment.id && audioRef.current && startRatio > 0) {
+    if (previewingId === scope.id && audioRef.current && startRatio > 0) {
       applyPreviewTime(audioRef.current, scope, startRatio);
       setPreviewProgress(startRatio);
       if (audioRef.current.paused) {
@@ -369,11 +371,11 @@ export function FragmentationWorkbench({
     stopPreview();
     const sessionId = previewSessionRef.current;
     const audio = new Audio(resolveAudioUrl(scope.url));
-    audio.loop = !scope.clip;
+    audio.loop = loop;
     audio.volume = 0.72;
     audioRef.current = audio;
     previewScopeRef.current = scope;
-    setPreviewingId(fragment.id);
+    setPreviewingId(scope.id);
     pendingSeekRef.current = startRatio > 0 ? startRatio : null;
 
     const syncPosition = () => {
@@ -392,7 +394,17 @@ export function FragmentationWorkbench({
     }
 
     playMediaElement(audio, () => stopPreview());
-  }, [previewingId, source, stopPreview]);
+  }, [previewingId, stopPreview]);
+
+  // A fragment whose file is the fragment loops, because there the file *is* the loop.
+  // One clipped out of a recording stops at its end instead.
+  const preview = useCallback((fragment: Fragment, startRatio = 0) => {
+    const scope = buildFragmentPreviewScope(fragment, source);
+    startPreview(scope, startRatio, scope ? !scope.clip : false);
+  }, [source, startPreview]);
+
+  // The recording plays once through. Looping six minutes is not auditioning.
+  const previewSource = useCallback(() => startPreview(sourceScope), [sourceScope, startPreview]);
 
   const seekPreview = useCallback((fragment: Fragment, ratio: number) => {
     const audio = audioRef.current;
@@ -544,11 +556,17 @@ export function FragmentationWorkbench({
     if (range) beginRangeDrag(event, range, next.edge);
   };
 
-  const headerFragment = displayFragments[0];
+  const playingSource = Boolean(sourceScope && previewingId === sourceScope.id);
   const previewingRange = ranges.find((range) => range.fragmentId === previewingId);
-  const timelinePlayheadLeft = previewingRange && previewProgress != null
-    ? ((previewingRange.start + previewProgress * (previewingRange.end - previewingRange.start)) / source.duration) * 100
-    : null;
+  // The playhead reads the same timeline either way: a fragment sweeps its own range,
+  // the recording sweeps the whole thing.
+  const timelinePlayheadLeft = previewProgress == null
+    ? null
+    : playingSource
+      ? previewProgress * 100
+      : previewingRange
+        ? ((previewingRange.start + previewProgress * (previewingRange.end - previewingRange.start)) / source.duration) * 100
+        : null;
 
   const close = () => {
     stopPreview();
@@ -574,22 +592,21 @@ export function FragmentationWorkbench({
         </div>
         <div className="source-editor-head-controls">
           {SHOW_SENSITIVITY && <SensitivityKnob sensitivity={sensitivity} onSensitivityChange={onSensitivityChange} />}
-          {headerFragment && (
-            <Button
-              type="button"
-              variant="lime"
-              size="sm"
-              className="fragment-workbench-play"
-              disabled={!canPlaySource}
-              onClick={() => preview(headerFragment)}
-            >
-              {previewingId === headerFragment.id ? (
-                <><Square className="size-3.5 fill-current" /> Stop</>
-              ) : (
-                <><Play className="size-3.5 fill-current" /> Play</>
-              )}
-            </Button>
-          )}
+          <Button
+            type="button"
+            variant="lime"
+            size="sm"
+            className="fragment-workbench-play"
+            disabled={!sourceScope}
+            title={sourceScope ? "Play the whole recording" : "This recording has no audio to play"}
+            onClick={previewSource}
+          >
+            {playingSource ? (
+              <><Square className="size-3.5 fill-current" /> Stop</>
+            ) : (
+              <><Play className="size-3.5 fill-current" /> Play</>
+            )}
+          </Button>
         </div>
       </div>
 
