@@ -2,6 +2,12 @@
 
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { KeyboardEvent } from "react";
+import { ChromaSparkline } from "@/lib/audio/chroma-sparkline";
+import {
+  brightnessLabel,
+  dynamicsLabel,
+  intensityLabel,
+} from "@/lib/audio/measured-labels";
 import { SignalCell } from "@/lib/audio/signal-cell";
 import { resolveSourceAudioUrl } from "@/lib/audio/source-playback";
 import { resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
@@ -96,6 +102,11 @@ function SourceTempoCell({ source }: { source: SourceFile }) {
   return <span className="block truncate" title={label}>{label}</span>;
 }
 
+/** An already-formatted measurement, truncated with the full text on hover. */
+function MeasuredValue({ value }: { value: string }) {
+  return <span className="block truncate" title={value}>{value}</span>;
+}
+
 function SourceKeyCell({ source }: { source: SourceFile }) {
   const cached = useCachedAudioBySourceId(source.audioCacheKey ? source.id : null);
   const { keyStrength } = sourceAnalysis(source, cached);
@@ -111,9 +122,15 @@ function SourceKeyCell({ source }: { source: SourceFile }) {
 
 function columnHeadClass(columnId: SourceSortColumn) {
   return cn(
-    columnId === "signal" && "min-w-[240px] w-[30%]",
+    // The signal gave up width for the measured columns. It is still the widest
+    // thing here, and a waveform degrades gracefully where a number does not.
+    columnId === "signal" && "min-w-[180px] w-[22%]",
     columnId === "tempo" && "min-w-[80px]",
     columnId === "key" && "min-w-[90px]",
+    columnId === "brightness" && "min-w-[86px]",
+    columnId === "dynamics" && "min-w-[84px]",
+    columnId === "intensity" && "min-w-[92px]",
+    columnId === "chroma" && "min-w-[72px]",
   );
 }
 
@@ -185,6 +202,36 @@ function SourceTableCell({
       return (
         <TableCell className={sourceTableCellClass("max-w-[120px] truncate text-foreground/90")}>
           <SourceKeyCell source={source} />
+        </TableCell>
+      );
+    // The measured characteristics come straight off `source.measured`, which is
+    // what analysis wrote to disk. Unlike tempo and key there is no cached
+    // preview to reconcile with: quick analysis in the renderer produces a BPM
+    // and a key and nothing else.
+    case "brightness":
+      return (
+        <TableCell className={sourceTableCellClass("text-foreground/90")}>
+          <MeasuredValue value={brightnessLabel(source.measured?.centroidHz)} />
+        </TableCell>
+      );
+    case "dynamics":
+      return (
+        <TableCell className={sourceTableCellClass("text-foreground/90")}>
+          <MeasuredValue value={dynamicsLabel(source.measured?.dynamicComplexity)} />
+        </TableCell>
+      );
+    case "intensity":
+      return (
+        <TableCell className={sourceTableCellClass("text-foreground/90")}>
+          <MeasuredValue value={intensityLabel(source.measured?.intensity)} />
+        </TableCell>
+      );
+    case "chroma":
+      return (
+        <TableCell className={sourceTableCellClass()}>
+          {source.measured?.chroma
+            ? <ChromaSparkline chroma={source.measured.chroma} className="chroma-sparkline-compact" />
+            : <span className="text-foreground/90">—</span>}
         </TableCell>
       );
     case "fragments":
@@ -274,6 +321,7 @@ export function SourceTable({
                   <button
                     type="button"
                     className="inline-flex w-full items-center justify-between gap-1 text-left hover:text-foreground"
+                    title={column.hint}
                     onClick={() => onSortChange(toggleSourceSort(column.id, sort))}
                   >
                     {column.label}

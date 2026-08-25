@@ -1,9 +1,10 @@
-import { app, dialog, ipcMain, nativeImage, net, protocol } from "electron";
+import { app, dialog, ipcMain, nativeImage, protocol } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { Readable } from "node:stream";
 import { resolveRendererPath } from "./protocols/resolve-renderer-path.js";
+import { audioMimeType, parseByteRange } from "../lib/domain/audio-serving.js";
 import { createLibraryService } from "../lib/domain/library-service.js";
 import { resolveLibraryRoot } from "../lib/domain/paths.js";
 import { FRAGMENTS_CHANNELS } from "../lib/ipc/contract.js";
@@ -31,6 +32,57 @@ function dragIcon() {
   return iconPath;
 }
 
+/**
+ * Answers a media request for a file on disk, honouring `Range`.
+ *
+ * Not `net.fetch(file://…)`, which is what this used to be: Electron's file
+ * loader ignores the `Range` header Chromium sends and always replies `200` with
+ * the whole body and no `Accept-Ranges`. Chromium reads that as an unseekable
+ * resource — `audio.seekable` is `[0, 0]` and every `currentTime` assignment
+ * snaps back to zero — so a fragment played the top of its whole recording
+ * instead of its own slice. The browser preview never had the bug because the
+ * dev server has always answered ranges, which is exactly the kind of drift
+ * `lib/domain/audio-serving.ts` exists to stop.
+ */
+async function respondWithFile(filePath: string, request: Request): Promise<Response> {
+  let size: number;
+  try {
+    size = (await fs.promises.stat(filePath)).size;
+  } catch {
+    return new Response("Not found", { status: 404 });
+  }
+
+  const contentType = audioMimeType(filePath);
+  const range = parseByteRange(request.headers.get("range") ?? undefined, size);
+
+  if (range === "unsatisfiable") {
+    return new Response(null, {
+      status: 416,
+      headers: { "Content-Range": `bytes */${size}`, "Accept-Ranges": "bytes" },
+    });
+  }
+
+  const start = range?.start ?? 0;
+  const end = range?.end ?? Math.max(0, size - 1);
+  const headers: Record<string, string> = {
+    "Content-Type": contentType,
+    "Accept-Ranges": "bytes",
+    "Content-Length": String(size === 0 ? 0 : end - start + 1),
+  };
+  if (range) headers["Content-Range"] = `bytes ${start}-${end}/${size}`;
+
+  // A HEAD asks what the resource is, not for its bytes; answering with a body
+  // makes Chromium wait on a stream nothing will read.
+  if (request.method === "HEAD" || size === 0) {
+    return new Response(null, { status: range ? 206 : 200, headers });
+  }
+
+  const stream = Readable.toWeb(
+    fs.createReadStream(filePath, { start, end }),
+  ) as ReadableStream<Uint8Array>;
+  return new Response(stream, { status: range ? 206 : 200, headers });
+}
+
 export function registerAudioScheme() {
   protocol.registerSchemesAsPrivileged([{
     scheme: AUDIO_SCHEME,
@@ -55,7 +107,7 @@ export async function initializePersistence() {
     const id = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
     const source = (await library.listSources()).find((item) => item.id === id);
     if (!source) return new Response("Not found", { status: 404 });
-    return net.fetch(pathToFileURL(library.resolveAudioPath(id, source.audioFile)).href);
+    return respondWithFile(library.resolveAudioPath(id, source.audioFile), request);
   });
 
   // Handler args arrive over IPC as `unknown` by construction: a compromised or

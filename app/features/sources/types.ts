@@ -9,6 +9,10 @@ export type SourceSortColumn =
   | "format"
   | "tempo"
   | "key"
+  | "brightness"
+  | "dynamics"
+  | "intensity"
+  | "chroma"
   | "fragments"
   | "actions";
 
@@ -20,4 +24,6 @@ export type SourceSort = {
 export type SourceColumnDef = {
   id: SourceSortColumn;
   label: string;
+  /** What the column means, for a header the abbreviated label cannot explain. */
+  hint?: string;
 };

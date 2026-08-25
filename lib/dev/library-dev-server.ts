@@ -16,47 +16,10 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { Plugin } from "vite";
 
+import { audioMimeType, parseByteRange } from "../domain/audio-serving";
 import { createLibraryService } from "../domain/library-service";
 import { resolveLibraryRoot } from "../domain/paths";
 import { WEB_LIBRARY_ROUTES } from "../ipc/contract";
-
-const AUDIO_MIME: Record<string, string> = {
-  ".wav": "audio/wav",
-  ".mp3": "audio/mpeg",
-  ".m4a": "audio/mp4",
-  ".aif": "audio/aiff",
-  ".aiff": "audio/aiff",
-  ".flac": "audio/flac",
-  ".ogg": "audio/ogg",
-};
-
-/**
- * Parses a single-range `Range: bytes=start-end` header. Seeking in an `<audio>`
- * element depends on this: Chrome asks for a range and treats a plain `200` with
- * the whole body as non-seekable, which makes scrubbing feel broken.
- */
-function parseRange(header: string | undefined, size: number) {
-  if (!header) return null;
-  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
-  if (!match) return null;
-  const [, rawStart, rawEnd] = match;
-  if (rawStart === "" && rawEnd === "") return null;
-
-  let start: number;
-  let end: number;
-  if (rawStart === "") {
-    const suffix = Number(rawEnd);
-    if (!Number.isFinite(suffix) || suffix <= 0) return null;
-    start = Math.max(0, size - suffix);
-    end = size - 1;
-  } else {
-    start = Number(rawStart);
-    end = rawEnd === "" ? size - 1 : Number(rawEnd);
-  }
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  if (start > end || start < 0 || start >= size) return null;
-  return { start, end: Math.min(end, size - 1) };
-}
 
 export function libraryDevServer(): Plugin {
   const libraryRoot = resolveLibraryRoot(path.join(homedir(), "Documents"));
@@ -161,11 +124,17 @@ export function libraryDevServer(): Plugin {
           // resolveAudioPath rejects traversal, so `id` cannot escape the library.
           const filePath = library.resolveAudioPath(id, source.audioFile);
           const { size } = await stat(filePath);
-          const contentType = AUDIO_MIME[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
-          const range = parseRange(request.headers.range, size);
+          const range = parseByteRange(request.headers.range, size);
 
-          response.setHeader("Content-Type", contentType);
+          response.setHeader("Content-Type", audioMimeType(filePath));
           response.setHeader("Accept-Ranges", "bytes");
+
+          if (range === "unsatisfiable") {
+            response.statusCode = 416;
+            response.setHeader("Content-Range", `bytes */${size}`);
+            response.end();
+            return;
+          }
 
           if (!range) {
             response.setHeader("Content-Length", String(size));
