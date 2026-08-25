@@ -173,8 +173,53 @@ Stop at clip end (loop only when the loop control is on). Don’t restart from f
 
 ## UI product notes from recent work
 
-- Library list cards should **not** show Save/Saved; that control belongs in the fragmentation workbench.
-- Fragment lane strip (selection widgets) height was raised so ~7 lanes fit without scrolling (`.fragment-lanes-scroll` ~165px).
+- Library list cards should **not** show Save/Saved. Neither do the workbench's cards any more:
+  one **Save all fragments** button per source is the only thing that writes, and it carries the
+  state — an amber `*` while anything differs from disk, a check and a disabled button when nothing
+  does. `hasUnsavedRanges` (exported from `app/fragmentation-workbench.tsx`) derives that by
+  comparing ranges against their fragments, so it needs no bookkeeping and self-corrects. Renaming
+  and promoting a draft therefore no longer touch disk, and neither does closing: closing with
+  edits in hand opens a confirmation offering **Keep editing / Discard changes / Save all
+  fragments**. Deleting a fragment is the exception — it still persists immediately.
+- Two flags, and they answer different questions. `hasUnsavedRanges` asks whether this source
+  differs from disk, which is what marks the button. `unsavedEditSourceIds` asks whether *the user*
+  changed something here without saving, which is what warns on close — a source that was already
+  out of sync when it opened (the prototype dataset is, always) has nothing of theirs to lose, and
+  prompting about it is a nag. Discard re-reads the library through `listSources` rather than
+  replaying an edit history: disk is authoritative, so there is nothing to keep and nothing to
+  drift. It drops only `WORKBENCH_OVERRIDE_KEYS`; role and tags belong to the detail panel.
+- The workbench no longer gives each fragment its own lane. A fixed 21px rail (`.boundary-rail`)
+  above the waveform shows the handles of the **one** range being pointed at, so nothing has to be
+  packed around anything else and the strip never grows — the old lane list scrolled at 165px. The
+  carving itself is read off the waveform overlay; the drag magnifier is unchanged.
+- **The chip is not the target.** Pressing down anywhere within `GRAB_REACH` (24px) of a cut takes
+  hold of it, over a surface covering both the rail and the wave; the chip only shows which cut you
+  already have. Two earlier designs made the chip itself the target and both failed on real data,
+  which is worth not repeating: the library's thinnest slice is 1.51s, and at 4.74 px/s that is
+  **7.1px** — less than half a 16px chip. Whatever you do with placement, a slice's two chips
+  cannot both sit inside it, so they overhang the neighbour, and reaching for one used to lose it
+  to whatever the pointer crossed. A hysteresis latch ("keep what you point at") fixed the losing
+  but not the acquiring: the slice you had to point at first was still 7px.
+- `activeHandleAt` resolves the cut, and the rule that does the work is that **a handle is grabbed
+  from inside its own slice** — a `start` only from x ≥ start, an `end` only from x ≤ end. That is
+  what settles the two coincident handles at a shared cut (you get the one whose slice you are
+  standing in) and what keeps a too-thin slice editable at all: its left half trims its start, its
+  right half its end. Nearest cut wins, ties to the narrower slice, which is the one with nowhere
+  else to be reached from. With nothing in reach the answer is the slice itself, so pointing into a
+  long fragment still says which fragment it is. Verified against the real library and against
+  nested, overlapping, both-ends and adjacent-0.5s layouts: every cut has exactly one contiguous
+  band, none unreachable.
+- Because only one chip shows at a time, it is **centred on its cut** with the tick running through
+  it, and `handleShift` moves it only at the ends of the rail so a cut at 0:00 is not half off
+  screen. Two consequences to know: the chip's number and colour flip as you cross a shared cut
+  without the chip moving (the highlighted slice is what tells you which one you have), and no cut
+  is in reach over 50–95% of the rail, so the affordance is invisible until you approach one.
+- What is still not solved: a 7px slice gives each of its handles a ~3.5px band (2px at a 1000px
+  rail). Four of that source's seventeen cuts are under 10px. Inflating a thin slice's claim was
+  measured and rejected — giving it 24px robbed a 23px neighbour down to 1.8px, since the pixels
+  have to come from somewhere. The remaining answers are more pixels per second (a zoom) or
+  acquiring by selection rather than by pointing; the keyboard path exists (tab to a handle, arrows
+  at 0.25s, Shift for 1s) but it is 34 tab stops on that source.
 - Affinities candidates panel needs an explicit scrollable flex layout (see `.affinities-workspace` / candidate list CSS) or long lists become unreachable.
 
 ---

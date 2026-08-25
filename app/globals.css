@@ -616,12 +616,32 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .soft-button { border:1px solid #a99cff49; border-radius:8px; color:#c8c2ec; background:#a99cff0e; padding:9px 12px; font-size:9px; }
 .timeline-card { position:relative; padding:20px; border:1px solid var(--line); border-radius:13px; background:#0d0c10; }
 .timeline-labels { display:flex; justify-content:space-between; color:#55535c; font:8px var(--font-geist-mono); }
-.fragment-lanes { position:relative; width:100%; margin-bottom:5px; border-bottom:1px solid #2a2730; background:linear-gradient(90deg,#ffffff05 1px,transparent 1px); background-size:10% 100%; }
-.fragment-lane { position:absolute; left:0; right:0; height:19px; --fragment-color:var(--violet); }
-.fragment-bar { position:absolute; top:1px; min-width:20px; height:17px; display:flex; align-items:center; justify-content:center; border:1px solid var(--fragment-color); border-radius:3px; background:#121116; box-shadow:0 0 12px color-mix(in srgb,var(--fragment-color) 14%,transparent); }
-.fragment-bar>span { max-width:calc(100% - 12px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#dedce2; font:6px var(--font-geist-mono); pointer-events:none; }
-.range-handle { position:absolute; z-index:3; top:-1px; bottom:-1px; width:7px; border:0; border-radius:2px; background:var(--fragment-color); padding:0; cursor:ew-resize; touch-action:none; box-shadow:0 0 7px color-mix(in srgb,var(--fragment-color) 48%,transparent); }
-.range-handle.start { left:-3px; }.range-handle.end { right:-3px; }
+/* One fixed-height boundary rail above the waveform, showing the handles of the one
+   fragment being pointed at. The rail and the wave are a single hover surface, so a
+   handle stays put while you reach for it. `margin:0 1px` matches the waveform's 1px
+   border, keeping a chip's tick on the same pixel as the edge it moves. */
+/* Pressing down anywhere in this surface takes the boundary in reach, so the cursor says so
+   across the whole band rather than only over the 16px chip. */
+.boundary-hover-surface { position:relative; }
+.boundary-hover-surface.grabbing-edge { cursor:ew-resize; }
+.boundary-rail { position:relative; height:21px; margin:4px 1px 0; border-bottom:1px solid #2a2730; background:linear-gradient(90deg,#ffffff05 1px,transparent 1px); background-size:10% 100%; }
+/* Hidden marks stay in the DOM, and stay tabbable: keyboard focus reveals its own handle. */
+/* Hidden marks stay in the DOM and stay tabbable: the keyboard is how a boundary too crowded to
+   point at is reached, and focus reveals its own chip. Nothing here takes the pointer — the
+   surface below owns that — so chips at a shared cut may sit on the same pixels harmlessly. */
+.boundary-mark { position:absolute; top:0; bottom:0; width:0; opacity:0; pointer-events:none; transition:opacity .09s ease-out; --fragment-color:var(--violet); }
+.boundary-mark.revealed,.boundary-mark:has(.boundary-handle:focus-visible) { opacity:1; }
+/* The tick is where the boundary actually is; the chip is threaded onto it, so it stays visible
+   above and below and the handle never has to claim to be the edge itself. */
+.boundary-tick { position:absolute; top:0; bottom:0; left:-.5px; width:1px; background:color-mix(in srgb,var(--fragment-color) 70%,transparent); pointer-events:none; }
+.boundary-mark.revealed .boundary-tick,.boundary-mark:has(.boundary-handle:focus-visible) .boundary-tick { background:var(--fragment-color); box-shadow:0 0 6px color-mix(in srgb,var(--fragment-color) 55%,transparent); }
+.boundary-mark:has(.boundary-handle.dragging) .boundary-tick { background:var(--lime); box-shadow:0 0 8px var(--lime); }
+/* Centred on its boundary, so the tick runs through the chip rather than along an edge and the
+   handle is the same target from either side. `--handle-shift` is the nudge that keeps the two
+   handles of a thin range apart and keeps a boundary at 0:00 on the rail. */
+.boundary-handle { position:absolute; z-index:3; left:calc(-8px + var(--handle-shift,0px)); bottom:5px; width:16px; height:12px; display:grid; place-items:center; border:1px solid var(--fragment-color); border-radius:3px; background:#1c1a22; color:#efedf3; padding:0; font:6px var(--font-geist-mono); cursor:ew-resize; touch-action:none; }
+.boundary-handle:focus-visible { z-index:6; outline:none; box-shadow:0 0 0 2px color-mix(in srgb,var(--fragment-color) 45%,transparent); }
+.boundary-handle.dragging { z-index:7; border-color:var(--lime); background:#161a10; color:var(--lime); box-shadow:0 0 12px #c8fa7844; }
 .continuous-wave-wrap { position:relative; height:150px; margin-top:5px; padding:0; border:1px solid #2f2c34; border-radius:5px; background:#0a090d; overflow:visible; }
 .continuous-wave-wrap .continuous-wave,.continuous-wave-wrap .waveform-frame { height:100%; width:100%; border:0; border-radius:0; background:transparent; }
 .continuous-wave { width:100%; height:100%; display:block; }
@@ -797,10 +817,17 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .sources-toolbar .library-card-action { order:0; }
 .sources-toolbar .search { order:1; }
 
-.fragment-lanes-scroll { max-height:165px;margin-bottom:5px;overflow-y:auto;overflow-x:hidden;border-bottom:1px solid #2a2730;background:linear-gradient(90deg,#ffffff05 1px,transparent 1px);background-size:10% 100%; }
-.fragment-lanes-scroll .fragment-lanes { margin-bottom:0;border-bottom:0;background:none; }
 .sensitivity-dial:focus-visible { outline:2px solid var(--lime);outline-offset:2px; }
 .detected-actions { display:flex;gap:5px; }
+/* One commit point for the whole source, so the button carries the state: an amber mark
+   while anything differs from disk, a spent check once nothing does. */
+.fragment-save-all .unsaved-mark { margin-left:3px;color:var(--amber);font-style:normal;font-weight:700; }
+/* The workbench is a fixed overlay at z-index 160, so its own close confirmation has to clear it. */
+.workbench-close-confirm { z-index:200; }
+[data-slot="dialog-overlay"]:has(+ .workbench-close-confirm) { z-index:199; }
+.fragment-save-all.saved { display:inline-flex;align-items:center;gap:4px;border-color:#3a3742;background:#14131a;color:#6f6b77; }
+.fragment-save-all.saved:disabled { opacity:1; }
+.fragment-save-all.saved svg { color:var(--lime); }
 .detected-head .detected-actions button:first-child { border:1px solid #4a4551;background:#17151b;color:#b2aeb8; }
 
 .combine-wave-wrap { position:relative; overflow:hidden; padding:0; line-height:0; border:1px solid #2a2830; border-radius:var(--waveform-frame-radius); background:#09080b; }
@@ -926,7 +953,7 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .correction-lanes { height:120px;overflow-y:auto; }
 @keyframes scanWave { from{left:0} to{left:100%} }
 
-@media(max-width:900px){.candidate-controls{grid-column:2}.candidate-edit-source{margin-top:8px}.fragment-lanes-scroll{max-height:165px}}
+@media(max-width:900px){.candidate-controls{grid-column:2}.candidate-edit-source{margin-top:8px}}
 @media(prefers-reduced-motion:reduce){.scan-playhead{animation:none;left:50%}}
 
 /* Link accounting and complete source/map interactions */
@@ -935,10 +962,11 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .links-cell>b { min-width:13px;color:#c8c4ce!important;font:9px var(--font-geist-mono)!important; }
 .links-cell>em { overflow:hidden;text-overflow:ellipsis;border:1px solid #ffbc6566;border-radius:3px;background:#ffbc650b;color:#ffbc65!important;padding:2px 4px;font:650 6px var(--font-geist-mono)!important;white-space:nowrap; }
 
-.range-handle { width:9px;overflow:visible; }
-.range-handle:after { content:"⌕";position:absolute;left:50%;top:-16px;width:16px;height:13px;display:grid;place-items:center;transform:translateX(-50%);border:1px solid color-mix(in srgb,var(--fragment-color) 62%,#3d3943);border-radius:3px;background:#15131ae8;color:#d8d5de;font:8px var(--font-geist-mono);opacity:.62;box-shadow:0 4px 10px #0008; }
-.range-handle:hover:after,.range-handle:focus-visible:after { opacity:1; }
 .wave-range.auditioning { background:color-mix(in srgb,var(--fragment-color) 25%,transparent); }
+.wave-range.focused { box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--fragment-color) 55%,transparent),0 0 16px color-mix(in srgb,var(--fragment-color) 40%,transparent); }
+/* The range whose handles are showing lifts slightly, so the pointer's answer is visible. */
+.wave-range.revealed { background:color-mix(in srgb,var(--fragment-color) 22%,transparent); }
+.wave-range.adjusting { background:color-mix(in srgb,var(--fragment-color) 28%,transparent); }
 .fragment-scan-playhead { position:absolute!important;z-index:8!important;top:0!important;bottom:0!important;left:0!important;width:1px!important;background:#efffd1!important;box-shadow:0 0 8px #c8fa78!important;animation:scanFragment 2.8s linear infinite; }
 .detected-row { grid-template-columns:12px 22px 1fr auto; }
 .fragment-audition { width:22px;height:22px!important;display:grid;place-items:center;border:1px solid #45404c!important;border-radius:50%!important;background:#17151b!important;color:#bcb8c3!important;padding:0!important;font-size:7px!important; }
@@ -990,7 +1018,6 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .source-editor-overlay .fragmentation-workbench { width:100%;height:100%;max-height:none;border-left:0;padding:15px 22px 65px;background:#17161cf7;box-shadow:0 -18px 65px #0009; }
 .source-editor-overlay .timeline-card { margin-top:4px; }
 .source-editor-overlay .source-lower { grid-template-columns:1fr; }
-.fragment-lane.focused .fragment-bar { z-index:5;box-shadow:0 0 18px color-mix(in srgb,var(--fragment-color) 50%,transparent); }
 .detected-row.focused { background:#c8fa7808;box-shadow:inset 2px 0 var(--lime); }
 .ruler-edge-magnifier { position:absolute;z-index:45;top:-67px;width:180px;height:70px;transform:translateX(-50%);overflow:hidden;border:1px solid var(--lime);border-radius:6px;background:#0a090df7;box-shadow:0 12px 35px #000c,0 0 18px #c8fa7824;pointer-events:none; }
 .ruler-edge-magnifier:after { content:"";position:absolute;z-index:3;left:50%;top:20px;bottom:0;width:1px;background:var(--lime);box-shadow:0 0 7px var(--lime); }

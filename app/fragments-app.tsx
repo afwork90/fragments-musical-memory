@@ -15,6 +15,16 @@ import { DEFAULT_TOLERANCES, DEFAULT_WEIGHTS } from "@/lib/view/search";
 import type { MatchTolerances, SearchWeights } from "@/lib/view/search";
 import type { MusicalRole, RangeMode, RelationshipStatus, SearchContext } from "@/lib/view/vocabulary";
 import { Waveform } from "@/lib/audio/waveform";
+import { Button } from "@/lib/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/lib/ui/dialog";
+import { ModalTitlebar } from "@/lib/ui/modal-titlebar";
 import { DuplicateTakesDialog } from "./features/library/duplicate-takes-dialog";
 import { ConnectionsTable } from "./features/library/connections-table";
 import { LibraryView } from "./features/library/library-view";
@@ -25,7 +35,7 @@ import { SourcesView } from "./features/sources/sources-view";
 import { SourceSort } from "./features/sources/types";
 import { CombineCandidate, CombineWorkspace, ExportSheet } from "./hero-workflow";
 import { FRAGMENTS_LOGO_SRC } from "./fragments-logo";
-import { defaultFragmentName, draftFragmentForRange, EditableRange, FragmentationWorkbench } from "./fragmentation-workbench";
+import { defaultFragmentName, draftFragmentForRange, EditableRange, FragmentationWorkbench, hasUnsavedRanges } from "./fragmentation-workbench";
 import { LibraryFilters, createLibraryFilters } from "./library-filter-popover";
 import { formatSeconds } from "@/lib/format";
 import { bindSourceAudio, getCachedAudio, retainCachedAudio, updateCachedAnalysis } from "@/lib/audio/audio-service";
@@ -235,6 +245,9 @@ function sourceFileFromDocument(document: SourceRecord, audioUrl?: string): Sour
   };
 }
 
+/** The override fields the fragmentation workbench writes, and so the ones a discard undoes. */
+const WORKBENCH_OVERRIDE_KEYS = ["name","start","end","duration","analysisRevision"] as const;
+
 function rangesFromDocument(document: SourceDocument): EditableRange[] {
   return document.fragments.map((fragment, index) => ({
     id: `${fragment.id}-range`,
@@ -282,6 +295,16 @@ export default function FragmentsApp() {
   const [importedFragments,setImportedFragments] = useState<Fragment[]>([]);
   const [importedRelationships,setImportedRelationships] = useState<Relationship[]>([]);
   const [savedFragmentIds,setSavedFragmentIds] = useState<Set<string>>(new Set());
+  /**
+   * Sources the user has edited in this session without saving. `hasUnsavedRanges` already
+   * sees boundary changes by comparing, so this is not how the save button learns it has
+   * work to do — it is what separates "you have unsaved work here" from "this source was
+   * never in sync", which is the difference between warning on close and nagging. It also
+   * carries the one edit ranges cannot show: a rename.
+   */
+  const [unsavedEditSourceIds,setUnsavedEditSourceIds] = useState<Set<string>>(new Set());
+  /** Set when closing would drop edits, so the close is confirmed rather than silent. */
+  const [closeConfirmOpen,setCloseConfirmOpen] = useState(false);
   const [combineCandidates,setCombineCandidates] = useState<CombineCandidate[] | null>(null);
   const [correctionRelationship,setCorrectionRelationship] = useState<CombineCandidate | null>(null);
   const [correctionPhase,setCorrectionPhase] = useState<CorrectionPhase>("edit");
@@ -350,6 +373,10 @@ export default function FragmentsApp() {
   const selected = activeFragmentById(selectedFragmentId ?? "f02");
   const selectedSource = sources.find((source) => source.id === selectedSourceId)!;
   const selectedRanges = sourceRanges[selectedSourceId] ?? [];
+  /** Whether this source's slices differ from the library, and so whether "Save all fragments" has work to do. */
+  const editorUnsaved = hasUnsavedRanges(selectedRanges, activeFragments) || unsavedEditSourceIds.has(selectedSourceId);
+  const markSourceEdited = (sourceId:string) => setUnsavedEditSourceIds((current) => current.has(sourceId) ? current : new Set([...current,sourceId]));
+  const clearSourceEdited = (sourceId:string) => setUnsavedEditSourceIds((current) => { if (!current.has(sourceId)) return current; const next=new Set(current); next.delete(sourceId); return next; });
 
   const clearPreviewListeners = () => {
     previewCleanupRef.current?.();
@@ -540,6 +567,7 @@ export default function FragmentsApp() {
   const addManualFragment = () => {
     const index=selectedRanges.length;
     const next={ ...rangeForIndex(selectedSource,index),fragmentId:undefined,id:`${selectedSource.id}-manual-${Date.now()}` };
+    markSourceEdited(selectedSource.id);
     setSourceRanges((current) => ({ ...current,[selectedSource.id]:[...(current[selectedSource.id] ?? []),next] }));
     notify(`Fragment ${index + 1} added. Adjust its range above.`);
   };
@@ -790,10 +818,17 @@ export default function FragmentsApp() {
   };
   const sourceForId = (sourceId: string) => sources.find((source) => source.id === sourceId);
   const closeConnections = () => { stopAllAudio();setConnectionsOpen(false);setAdvancedOpen(false); };
-  const closeSourceEditor = () => {
-    if (correctionRelationship) { setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);return; }
+  const finishCloseSourceEditor = () => {
     if (restoreReturn("source-edit")) return;
     stopAllAudio();setSourceEditorOpen(false);setSourceEditorModal(false);setInfoFragmentId(null);
+  };
+  const closeSourceEditor = () => {
+    if (correctionRelationship) { setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCorrectionOriginal(null);setCombineDraftRanges(null);setCombineDraftSensitivity(null);return; }
+    // "Save all fragments" is the only thing that writes, so closing with edits in hand has
+    // to ask. The question is only worth asking about edits made here: a source that was
+    // already out of sync with disk when it opened has nothing of the user's to lose.
+    if (sourcePanelMode === "fragmentation" && unsavedEditSourceIds.has(selectedSourceId)) { setCloseConfirmOpen(true);return; }
+    finishCloseSourceEditor();
   };
   const openSourceEditor = (sourceId: string, mode: SourcePanelMode, modal: boolean) => {
     stopAllAudio();
@@ -972,27 +1007,70 @@ export default function FragmentsApp() {
         ? { ...source,fragmentIds:Array.from(new Set([...source.fragmentIds,...created.map((fragment) => fragment.id)])) }
         : source));
     }
-    if (created.length) setSavedFragmentIds((current) => new Set([...current,...created.map((fragment) => fragment.id)]));
-
     const survivingFragments = activeFragments
       .filter((fragment) => fragment.sourceId === selectedSource.id)
       .map((fragment) => ({ ...fragment,...patches[fragment.id] }));
-    persistFragmentsForSource(selectedSource.id,[...survivingFragments,...created]);
+    const written=[...survivingFragments,...created];
+    persistFragmentsForSource(selectedSource.id,written);
+    // Everything this source has is now on disk, so nothing about it is pending.
+    setSavedFragmentIds((current) => new Set([...current,...written.map((fragment) => fragment.id)]));
+    clearSourceEdited(selectedSource.id);
 
-    notify(created.length ? `Boundaries saved; ${created.length} new fragment${created.length > 1 ? "s" : ""} added to the library.` : "Boundaries saved; library references updated.");
+    notify(created.length
+      ? `${written.length} fragment${written.length > 1 ? "s" : ""} saved; ${created.length} new in the library.`
+      : `${written.length} fragment${written.length > 1 ? "s" : ""} saved.`);
   };
 
-  /** Commits a range's promotion into a real fragment: updates state, source.fragmentIds, and disk. */
+  /**
+   * Puts a source back to what the library holds. Disk is authoritative, so it is re-read
+   * rather than un-applied: there is no edit history to keep and nothing to drift. A source
+   * with no document — the prototype dataset, or a host that cannot read — has no disk state
+   * to return to, so its deterministic seed ranges are rebuilt instead.
+   *
+   * Only the fields the workbench writes are dropped. Role and tags come from the detail
+   * panel, which is not what the user is discarding.
+   */
+  const discardSourceEdits = async (source:SourceFile) => {
+    clearSourceEdited(source.id);
+    const bridge=getFragmentsBridge();
+    const documents=bridge
+      ? await bridge.listSources().catch((error:unknown) => { console.warn("Could not re-read the library:",error);return [] as SourceRecord[]; })
+      : [];
+    const document=documents.find((item) => item.id === source.id);
+    if (!document) {
+      setSourceRanges((current) => ({ ...current,[source.id]:Array.from({ length:fragmentCountForSensitivity(source.sensitivity) },(_,index) => rangeForIndex(source,index)) }));
+      return;
+    }
+    const restored=document.fragments.map((fragmentDoc,index) => fragmentFromDocument(fragmentDoc,index,source));
+    setSourceRanges((current) => ({ ...current,[source.id]:rangesFromDocument(document) }));
+    setImportedFragments((current) => [...current.filter((fragment) => fragment.sourceId !== source.id),...restored]);
+    setSources((current) => current.map((item) => item.id === source.id ? { ...item,fragmentIds:restored.map((fragment) => fragment.id) } : item));
+    setSavedFragmentIds((current) => new Set([...current,...restored.map((fragment) => fragment.id)]));
+    setFragmentOverrides((current) => {
+      const next={ ...current };
+      for (const fragment of restored) {
+        const override=next[fragment.id];
+        if (!override) continue;
+        const kept={ ...override };
+        for (const key of WORKBENCH_OVERRIDE_KEYS) delete kept[key];
+        if (Object.keys(kept).length) next[fragment.id]=kept; else delete next[fragment.id];
+      }
+      return next;
+    });
+  };
+
+  /**
+   * Commits a range's promotion into a real fragment in memory only. Nothing reaches disk
+   * here: "Save all fragments" is the one commit point, so a rename must leave the source
+   * reported as unsaved rather than quietly writing a slice the user has not approved.
+   */
   const commitPromotedRange = (nextRange:EditableRange,fragment:Fragment,source:SourceFile) => {
     setImportedFragments((current) => [...current,fragment]);
     setSourceRanges((current) => ({ ...current,[source.id]:(current[source.id] ?? []).map((item) => item.id === nextRange.id ? nextRange : item) }));
     setSources((current) => current.map((item) => item.id === source.id
       ? { ...item,fragmentIds:Array.from(new Set([...item.fragmentIds,fragment.id])) }
       : item));
-    setSavedFragmentIds((current) => new Set([...current,fragment.id]));
-    const siblings=[...activeFragments.filter((item) => item.sourceId === source.id),fragment];
-    persistFragmentsForSource(source.id,siblings);
-    notify(`${fragment.name} saved.`);
+    markSourceEdited(source.id);
   };
 
   /** Finds the range backing a Library card's fragment id, whether it's already real (`fragmentId`) or still a draft (`range.id`). */
@@ -1016,27 +1094,16 @@ export default function FragmentsApp() {
   const renameFragment = (fragment:Fragment,name:string) => {
     setFragmentOverrides((current) => ({ ...current,[fragment.id]:{ ...current[fragment.id],name } }));
     setSavedFragmentIds((current) => { if (!current.has(fragment.id)) return current; const next=new Set(current); next.delete(fragment.id); return next; });
+    markSourceEdited(fragment.sourceId);
   };
 
   /** Persists a single fragment's current state (name, bounds, etc.) to its source.json and flips its card to "Saved". */
   const saveFragment = (fragment:Fragment) => {
     setSavedFragmentIds((current) => new Set([...current,fragment.id]));
+    clearSourceEdited(fragment.sourceId);
     const siblings = activeFragments.filter((item) => item.sourceId === fragment.sourceId);
     persistFragmentsForSource(fragment.sourceId,siblings);
     notify(`${fragment.name} saved.`);
-  };
-
-  /** Save button for a fragment card: promotes a draft range on first use, otherwise just re-persists it. */
-  const saveFragmentOrRange = (id:string) => {
-    const range=rangeForFragmentCardId(id);
-    if (!range) return;
-    if (range.fragmentId) {
-      saveFragment(activeFragmentById(range.fragmentId));
-      return;
-    }
-    const index=selectedRanges.indexOf(range);
-    const { range:nextRange,fragment } = promoteRangeToFragment(range,index,selectedSource);
-    commitPromotedRange(nextRange,fragment,selectedSource);
   };
 
   /** Removes a fragment slice from the workbench and library. */
@@ -1103,7 +1170,7 @@ export default function FragmentsApp() {
   const editorSensitivity=correctionRelationship ? (combineDraftSensitivity ?? selectedSource.sensitivity) : selectedSource.sensitivity;
   const correctedRange=correctionRelationship ? editorRanges.find((range) => range.fragmentId === correctionRelationship.otherId) : null;
   const correctionFooter=correctionRelationship && correctionPhase === "recompute" ? <div className="recompute workbench-result"><i/><strong>Recomputing metadata and active match…</strong><span>Revision {(correctionOriginal?.analysisRevision ?? 1) + 1}</span></div> : correctionRelationship && correctionPhase === "prompt" && correctionOriginal ? <div className="correction-result workbench-result"><div className="metadata-diff"><span>Field</span><span>Before</span><span>After</span>{[["Duration",correctionOriginal.duration,formatSeconds((correctedRange?.end ?? 0) - (correctedRange?.start ?? 0))],["Key",correctionOriginal.key,"C minor"],["BPM",correctionOriginal.bpm,"90"],["Bars",correctionOriginal.bars,"3"],["Beats",correctionOriginal.beats,"17"],["Confidence",`${Math.round(correctionOriginal.confidence * 100)}%`,`93%`],["Match",`${correctionRelationship.score}%`,`76%`]].map((row) => row.map((cell,index) => <span className={index === 2 ? "changed" : ""} key={`${row[0]}-${index}`}>{cell}</span>))}</div><div className="link-prompt"><span className="relationship-badge manual">criteria changed</span><h3>This fragment no longer matches the original search. Keep it linked to this comparison?</h3><p>The boundary correction is saved either way. A manual link preserves your musical judgment.</p><div><button onClick={rejectCorrectionLink}>Reject and show next</button><button className="primary-button" onClick={keepCorrectionLink}>Yes, keep linked</button></div></div></div> : null;
-  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => correctionRelationship ? setCombineDraftRanges(ranges) : setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges }))} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} onRenameFragment={correctionRelationship ? undefined : renameFragmentOrRange} onSaveFragment={correctionRelationship ? undefined : saveFragmentOrRange} onDeleteFragment={correctionRelationship ? undefined : deleteFragmentOrRange} savedFragmentIds={savedFragmentIds} saveLabel={correctionRelationship ? "Save & recompute" : "Save boundaries"} footerContent={correctionFooter}/> : null;
+  const fragmentationPanel=sourceEditorOpen ? <FragmentationWorkbench source={selectedSource} ranges={editorRanges} fragments={activeFragments} sensitivity={editorSensitivity} focusedFragmentId={correctionRelationship?.otherId} onRangesChange={(ranges) => { if (correctionRelationship) { setCombineDraftRanges(ranges);return; } markSourceEdited(selectedSource.id);setSourceRanges((current) => ({ ...current,[selectedSource.id]:ranges })); }} onSensitivityChange={correctionRelationship ? updateCombineSensitivity : updateSourceSensitivity} onAddRange={correctionRelationship ? addCombineFragment : addManualFragment} onSave={correctionRelationship ? saveCombineSourceBoundaries : saveSourceBoundaries} onClose={closeSourceEditor} onOpenFragment={correctionRelationship ? undefined : (id) => { setSourceEditorOpen(false);setSourceEditorModal(false);openFragment(id); }} onRenameFragment={correctionRelationship ? undefined : renameFragmentOrRange} onDeleteFragment={correctionRelationship ? undefined : deleteFragmentOrRange} unsavedChanges={correctionRelationship ? undefined : editorUnsaved} saveLabel={correctionRelationship ? "Save & recompute" : "Save all fragments"} footerContent={correctionFooter}/> : null;
   const detailFragment = infoFragmentId ? activeFragments.find((fragment) => fragment.id === infoFragmentId) ?? null : null;
   const detailPanel=sourceEditorOpen && sourcePanelMode === "detail" ? <SourceDetailPanel
     source={selectedSource}
@@ -1300,6 +1367,43 @@ export default function FragmentsApp() {
         <div className="panel-titlebar"><h1>Archive</h1></div>
         {archived.size === 0 ? <div className="empty-state"><span>◌</span><h2>Nothing archived yet</h2><p>When you tidy alternate takes, they remain safely recoverable here.</p><button onClick={() => navigate("library")}>Return to library</button></div> : <div className="archive-list">{activeFragments.filter((fragment) => archived.has(fragment.id)).map((fragment) => <div className="archive-row" key={fragment.id}><Waveform values={fragment.waveform}/><span><b>{fragment.name}</b><small>{sourceNameFor(fragment)} · {fragment.dateLabel}</small></span><em>{fragment.role}</em><button onClick={() => restoreFragment(fragment.id)}>↟ Restore to matching</button></div>)}</div>}
       </section>}
+
+      <Dialog open={closeConfirmOpen} onOpenChange={(open) => { if (!open) setCloseConfirmOpen(false); }}>
+        <DialogContent showCloseButton={false} className="workbench-close-confirm sm:max-w-md">
+          <DialogHeader>
+            <ModalTitlebar
+              className="mb-0"
+              eyebrow="Unsaved fragments"
+              title={<DialogTitle className="modal-titlebar-title">{selectedSource.name}</DialogTitle>}
+            />
+            <DialogDescription className="mt-2">
+              You have changed the slices for{" "}
+              <strong className="font-medium text-foreground">{selectedSource.name}</strong> without
+              saving. Saving writes all {selectedRanges.length} fragments to its{" "}
+              <code>source.json</code>; discarding returns them to what the library already holds.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setCloseConfirmOpen(false)}>
+              Keep editing
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => { setCloseConfirmOpen(false);void discardSourceEdits(selectedSource);finishCloseSourceEditor(); }}
+            >
+              Discard changes
+            </Button>
+            <Button
+              type="button"
+              variant="lime"
+              onClick={() => { setCloseConfirmOpen(false);saveSourceBoundaries();finishCloseSourceEditor(); }}
+            >
+              Save all fragments
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <DuplicateTakesDialog
         open={Boolean(duplicateGroup)}
