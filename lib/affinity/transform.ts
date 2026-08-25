@@ -46,6 +46,12 @@ export type MatchTransform = {
   tempoRatio: number | null;
   /** The candidate's own measured tempo, or `null` when it was not trustworthy. */
   fromBpm: number | null;
+  /**
+   * The anchor's, on the same terms. Both sides are reported because a refusal has
+   * two very different causes — a tempo nothing could measure, or two tempi too far
+   * apart to bridge — and a UI that cannot tell them apart blames the wrong one.
+   */
+  toBpm: number | null;
   /** The tempo the candidate ends up playing at once `tempoRatio` is applied. */
   matchedBpm: number | null;
   timing: MatchTiming;
@@ -58,6 +64,12 @@ export type MatchTransform = {
    * seven semitones is a bigger move than shifting down five.
    */
   semitones: number | null;
+  /**
+   * Whether that shift is small enough to offer. False leaves `semitones` intact —
+   * the console still shows the distance and still lets someone apply it, it just
+   * stops calling it a recommendation.
+   */
+  pitchRecommended: boolean;
   /**
    * Whether the two agree on major or minor, or `null` when no key comparison was
    * possible. Worth surfacing because a shift aligns roots and can do nothing
@@ -99,6 +111,36 @@ const TEMPO_DEADBAND = 0.005;
  */
 const MAX_STRETCH = 1.25;
 
+/**
+ * The largest shift offered by default: a major third.
+ *
+ * A quality bound like `MAX_STRETCH`, and for a related reason. SoundTouch shifts
+ * pitch by resampling and stretching back, so the formants travel with the note —
+ * within a few semitones that reads as transposition, and past it as processing.
+ * It is also a musical claim: a fourth or a tritone re-sites the harmony rather
+ * than nudging it.
+ *
+ * Measured against the library, the shortest paths between related fragments are
+ * 0(×9) 1(×4) 2(×2) 3(×2) 4(×2) 5(×6) semitones, so this recommends nineteen pairs
+ * and declines six. Nothing reaches 6.
+ */
+const MAX_SHIFT = 4;
+
+/** Key names a semitone apart, in both spellings, so a flat key stays flat. */
+const SHARP_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const FLAT_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
+
+/**
+ * The key a fragment lands in once shifted, for the console's `C → D`. Returns
+ * `null` for a key nothing measured, which the caller renders as an em dash.
+ */
+export function transposeKey(key: string | null | undefined, semitones: number): string | null {
+  const from = pitchClassOf(key);
+  if (from === null || !Number.isFinite(semitones)) return null;
+  const names = key?.includes("b") ? FLAT_NAMES : SHARP_NAMES;
+  return names[(((from + Math.round(semitones)) % 12) + 12) % 12];
+}
+
 export function matchTransform(anchor: MatchInput, candidate: MatchInput): MatchTransform {
   const anchorBpm = trustedBpm(anchor);
   const candidateBpm = trustedBpm(candidate);
@@ -124,12 +166,16 @@ export function matchTransform(anchor: MatchInput, candidate: MatchInput): Match
     }
   }
 
+  const semitones = semitonesBetween(anchor, candidate);
+
   return {
     tempoRatio,
     fromBpm: candidateBpm,
+    toBpm: anchorBpm,
     matchedBpm,
     timing,
-    semitones: semitonesBetween(anchor, candidate),
+    semitones,
+    pitchRecommended: semitones !== null && Math.abs(semitones) <= MAX_SHIFT,
     sameScale: scaleAgreement(anchor, candidate),
   };
 }
@@ -146,7 +192,7 @@ export function describeMatch(transform: MatchTransform): string[] {
     if (delta !== 0) labels.push(`${signed(delta)} BPM`);
   }
 
-  if (transform.semitones !== null && transform.semitones !== 0) {
+  if (transform.semitones !== null && transform.semitones !== 0 && transform.pitchRecommended) {
     labels.push(`${signed(transform.semitones)} st`);
   }
 

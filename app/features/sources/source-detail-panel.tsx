@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Play, Square } from "lucide-react";
+import { MIN_BPM_CONFIDENCE } from "@/lib/analysis/features";
 import { ContinuousWaveform } from "@/lib/audio/continuous-waveform";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { formatMusicalKey, resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
@@ -17,13 +18,6 @@ import type { SourceFile } from "@/lib/view/source-file";
 import type { MusicalRole } from "@/lib/view/vocabulary";
 import { LIBRARY_ROLES } from "../library/library-columns";
 import { cn } from "@/lib/utils";
-
-/**
- * Mirrors `MIN_BPM_CONFIDENCE` in `lib/analysis/features.ts`. Not imported from
- * there: this component would then pull the essentia-facing module into the
- * renderer bundle for one number.
- */
-const TRUSTED_BPM_CONFIDENCE = 1;
 
 export type SourceAnalysisValues = {
   bpm: number | null;
@@ -410,8 +404,11 @@ function MeasuredBlock({ measured }: { measured?: MeasuredSummary }) {
     return (
       <div className="space-y-1 rounded-lg border border-border bg-card/40 p-4">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Measured</span>
+        {/* No command here: the panel is read by whoever is using the app, not by
+            whoever is building it. Where analysis comes from is our problem. */}
         <p className="text-[11px] text-muted-foreground">
-          Not analysed yet. Run <code>npm run analyze -- --write</code>.
+          Nothing measured yet, so any tempo or key shown above is the recording&apos;s own or
+          a placeholder.
         </p>
       </div>
     );
@@ -421,7 +418,7 @@ function MeasuredBlock({ measured }: { measured?: MeasuredSummary }) {
     ? "—"
     : measured.bpmConfidence === null
       ? `${measured.bpm} BPM`
-      : measured.bpmConfidence >= TRUSTED_BPM_CONFIDENCE
+      : measured.bpmConfidence >= MIN_BPM_CONFIDENCE
         ? `${measured.bpm} BPM · confidence ${measured.bpmConfidence.toFixed(2)}`
         : `${measured.bpm} BPM · confidence ${measured.bpmConfidence.toFixed(2)}, too low to trust`;
 

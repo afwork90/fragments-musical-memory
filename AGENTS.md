@@ -50,7 +50,11 @@ affinities, key/BPM display, or playback.
   type takes more than a few seconds to read, simplify it.
 - **Validation is hand-rolled and lives beside the type.** No schema library.
 - **No invented data.** If analysis did not produce a BPM or key, persist
-  `null` and render `—`. Never synthesise a plausible-looking value.
+ `null` and render `—`. Never synthesise a plausible-looking value.
+- **UI copy addresses whoever is using the app, not whoever is building it.** No
+ `npm` commands, script names, or file paths in the interface. Two empty states
+ told a musician to run `npm run analyze -- --write`; the commands live in this
+ file and in `docs/`, and the UI says what is true of their audio instead.
 - **`any` is a bug at the IPC boundary.** Use the typed `window.fragments`
   declaration, not a cast.
 - **Disk beats cache.** Persisted `source.json` analysis is authoritative;
@@ -324,6 +328,20 @@ indistinguishable from a working scorer until you read the output.
 `scripts/analyze-library.mjs` slices each fragment from the decoded signal at the
 native rate and resamples per fragment.
 
+**And they must be *displayed* individually**, which is a separate bug with the same
+shape. `fragmentKeyLabels` reads the fragment's own key and falls back to its source
+only when the fragment was never measured; it used to be the other way round, so a
+card, the search text, the key filter, and the sort all showed every fragment of a
+D major recording as D major while the transform console — measuring per fragment —
+correctly called one of them F# minor. Two views of the same fragment disagreeing is
+how it was found. Route any new key display through that helper.
+
+A card also **dims a BPM whose `bpmConfidence` is below `MIN_BPM_CONFIDENCE`**, with a
+tooltip, for the same reason: nothing matches tempo to it, so presenting it like a
+measurement makes the console's refusal look arbitrary. Import the threshold from
+`lib/analysis/features`; do not mirror it. That module is already in the renderer
+bundle and pulls in nothing essentia-facing.
+
 Generation is **deterministic**: same fragments in, same relationships out, with the
 same ids. `relationshipIdFor` sorts the pair, because ids are what the user's
 auditioned/preferred/rejected marks hang off and renumbering them on a rebuild
@@ -382,11 +400,27 @@ showed hand-written values from `app/prototype-data.ts` and moved no audio at al
  pairs with a trustworthy tempo at both ends, 19% and 39% apart, and it admits the
  first.
 - **Pitch is computed but off by default.** Shifting a candidate to the anchor's key
- changes the harmonic relationship the pair was ranked on, so the console shows the
- semitones and a button, not a default. The shift is the shortest chromatic path
- (±6), not the circle-of-fifths distance `pitchSimilarity` scores: a fifth is a
+ changes the harmonic relationship the pair was ranked on, so the console opens at
+ zero and offers the shift; it does not apply it. The shift is the shortest chromatic
+ path (±6), not the circle-of-fifths distance `pitchSimilarity` scores: a fifth is a
  *near* relationship, but moving seven semitones is a bigger move than five down.
  A mode clash is reported, because no shift fixes it.
+- **`MAX_SHIFT` (4) is where a shift stops being advice**, the pitch counterpart to
+ `MAX_STRETCH`, and quality-based for a related reason: SoundTouch shifts by
+ resampling and stretching back, so formants travel with the note and a large move
+ is heard as processing. Past the bound `pitchRecommended` is false while `semitones`
+ stays put — the console says "not recommended", explains itself, and still lets
+ someone apply it. Across the library the shortest paths are 0(×9) 1(×4) 2(×2) 3(×2)
+ 4(×2) 5(×6), so this advises nineteen pairs and declines six.
+
+The console is two rows, each `from → to` with the change between them as the only
+editable number, because a measurement and the control that moves it are one thing.
+There is no Original/Transformed toggle: a row equal to what was measured *is* the
+original, so what is heard and what a drag hands over cannot drift apart. There is
+no time interpretation, beat offset, or repeat control either — nothing measured or
+applied them, and the one pulse reinterpretation that is real is already folded into
+`tempoRatio` (the row then reads 140 → 144 against an anchor at 72, which the note
+explains).
 
 ## Rendering audio
 

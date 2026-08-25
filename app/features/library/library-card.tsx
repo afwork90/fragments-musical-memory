@@ -7,7 +7,8 @@ import { slicePeaks } from "@/lib/audio/slice-peaks";
 import { useCachedAudioBySourceId } from "@/lib/audio/use-audio-cache";
 import { useSourceWaveform } from "@/lib/audio/use-source-waveform";
 import { startDesktopDrag } from "@/lib/audio/desktop-drag";
-import { formatMusicalKey, resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
+import { MIN_BPM_CONFIDENCE } from "@/lib/analysis/features";
+import { formatMusicalKey, fragmentKeyLabels, resolvedSourceAnalysis } from "@/lib/audio/source-metadata";
 import { resolveSourceAudioUrl, buildFragmentPreviewScope } from "@/lib/audio/source-playback";
 import { Button } from "@/lib/ui/button";
 import { cn } from "@/lib/utils";
@@ -93,11 +94,27 @@ function DragHandle({
   );
 }
 
-function MetaItem({ label, value }: { label: string; value: string }) {
+function MetaItem({
+  label,
+  value,
+  unsure,
+  hint,
+}: {
+  label: string;
+  value: string;
+  /** Measured, but not firmly enough for anything to act on. */
+  unsure?: boolean;
+  hint?: string;
+}) {
   return (
     <span className="library-card-meta-item">
       <span className="library-card-meta-label">{label}</span>
-      <span className="library-card-meta-value">{value}</span>
+      <span
+        className={cn("library-card-meta-value", unsure && "library-card-meta-unsure")}
+        title={hint}
+      >
+        {value}
+      </span>
     </span>
   );
 }
@@ -509,9 +526,16 @@ function FragmentLibraryCard({
 }) {
   const source = sourceForId(fragment.sourceId);
   const links = linkSummaryFor(fragment.id);
-  const keyLabel =
-    formatMusicalKey(source?.key, source?.scale) ??
-    (fragment.key && fragment.key !== "—" ? fragment.key : null);
+  // The fragment's own measurement first. `fragment.key` already falls back to the
+  // source when the fragment was never measured, so reading the source here only
+  // hid what analysis found: an F# minor fragment of a D major take.
+  const [keyLabel] = fragmentKeyLabels(fragment, source);
+  // Essentia answers with a plausible tempo at zero confidence for unrhythmic audio,
+  // and 12 of 26 fragments come back that way. Printing that number bare is what made
+  // the transform console look arbitrary when it declined to match to it.
+  const tempoUnsure = fragment.bpm > 0
+    && fragment.measured !== undefined
+    && (fragment.measured.bpmConfidence ?? 0) < MIN_BPM_CONFIDENCE;
   const slice = source
     ? { start: fragment.start, end: fragment.end, duration: source.duration }
     : undefined;
@@ -564,7 +588,14 @@ function FragmentLibraryCard({
             <MetaItem label="Imported" value={fragment.dateLabel} />
             <MetaItem label="Length" value={formatSeconds(fragment.end - fragment.start)} />
             <MetaItem label="Key" value={keyLabel ?? "—"} />
-            <MetaItem label="BPM" value={fragment.bpm > 0 ? String(fragment.bpm) : "—"} />
+            <MetaItem
+              label="BPM"
+              value={fragment.bpm > 0 ? String(fragment.bpm) : "—"}
+              unsure={tempoUnsure}
+              hint={tempoUnsure
+                ? "Measured at low confidence, which is how essentia answers unrhythmic audio. Nothing matches tempo to it."
+                : undefined}
+            />
             {/* Falls back to the denormalized name so a fragment whose source has
                 been archived still says where it came from. */}
             <MetaItem label="Source" value={source?.name || fragment.source || "—"} />

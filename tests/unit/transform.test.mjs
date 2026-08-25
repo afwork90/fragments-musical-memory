@@ -6,6 +6,7 @@ import {
   isAudibleTransform,
   matchTransform,
   renderFileName,
+  transposeKey,
 } from "../../electron-dist/lib/affinity/transform.js";
 import { tempoSimilarity } from "../../electron-dist/lib/affinity/compare.js";
 
@@ -36,6 +37,18 @@ test("an untrusted tempo yields no ratio rather than a fabricated one", () => {
   assert.equal(matchTransform(measured(), unconfident).tempoRatio, null);
   assert.equal(matchTransform(unconfident, measured()).tempoRatio, null);
   assert.equal(matchTransform(measured(), measured({ bpm: null })).tempoRatio, null);
+
+  // Which side was unusable is reported, because "nothing to match to" and "too far
+  // apart to match" are different sentences and the console has to pick one. The
+  // library's common case is an anchor at confidence 0 against a measured candidate.
+  const weakAnchor = matchTransform(measured({ bpm: 135, bpmConfidence: 0 }), measured({ bpm: 120 }));
+  assert.equal(weakAnchor.fromBpm, 120);
+  assert.equal(weakAnchor.toBpm, null);
+  assert.equal(weakAnchor.tempoRatio, null);
+
+  const weakCandidate = matchTransform(measured({ bpm: 135 }), unconfident);
+  assert.equal(weakCandidate.fromBpm, null);
+  assert.equal(weakCandidate.toBpm, 135);
 
   // And nothing is claimed about it.
   assert.deepEqual(describeMatch(matchTransform(measured(), unconfident)), []);
@@ -72,9 +85,11 @@ test("a stretch past a quarter is refused rather than applied", () => {
     const refused = matchTransform(measured({ bpm: anchorBpm }), measured({ bpm }));
     assert.equal(refused.tempoRatio, null, `${anchorBpm} against ${bpm} was matched`);
     assert.equal(refused.matchedBpm, null);
-    // The candidate's own tempo was measured, and saying so is what lets the console
-    // offer a manual stretch rather than disabling the field.
+    // Both tempi were measured, and saying so is what lets the console offer a manual
+    // stretch rather than disabling the field, and blame the distance rather than the
+    // measurement.
     assert.equal(refused.fromBpm, bpm);
+    assert.equal(refused.toBpm, anchorBpm);
     assert.deepEqual(describeMatch(refused), []);
   }
 
@@ -103,6 +118,46 @@ test("pitch matching takes the shortest chromatic path", () => {
 
   // A tritone is six either way; up is as good an answer as down.
   assert.equal(matchTransform(measured({ key: "F#" }), measured({ key: "C" })).semitones, 6);
+});
+
+test("a shift past a major third is shown but not recommended", () => {
+  // Within the bound: offered, and said out loud in the labels.
+  const third = matchTransform(measured({ key: "E" }), measured({ key: "C" }));
+  assert.equal(third.semitones, 4);
+  assert.equal(third.pitchRecommended, true);
+  assert.deepEqual(describeMatch(third), ["+4 st"]);
+
+  // Past it: the distance still stands, so the console can explain itself and still
+  // let someone apply it. It just stops being advice.
+  for (const key of ["F", "F#", "G"]) {
+    const far = matchTransform(measured({ key }), measured({ key: "C" }));
+    assert.notEqual(far.semitones, null);
+    assert.equal(far.pitchRecommended, false, `${key} was recommended`);
+    assert.deepEqual(describeMatch(far), []);
+  }
+
+  // Not measurable is not the same as not recommended.
+  const unmeasured = matchTransform(measured(), measured({ keyStrength: 10 }));
+  assert.equal(unmeasured.semitones, null);
+  assert.equal(unmeasured.pitchRecommended, false);
+});
+
+test("transposing a key names where a shift lands", () => {
+  assert.equal(transposeKey("C", 2), "D");
+  assert.equal(transposeKey("C", -3), "A");
+  assert.equal(transposeKey("A", 4), "C#");
+  assert.equal(transposeKey("C", 0), "C");
+
+  // Spelling is kept: a flat key transposes to flats.
+  assert.equal(transposeKey("Eb", 1), "E");
+  assert.equal(transposeKey("Eb", 2), "F");
+  assert.equal(transposeKey("Eb", 3), "Gb");
+  assert.equal(transposeKey("D", 1), "D#");
+
+  // Nothing measured, nothing named.
+  assert.equal(transposeKey(null, 2), null);
+  assert.equal(transposeKey("H", 2), null);
+  assert.equal(transposeKey("C", Number.NaN), null);
 });
 
 test("a weak or missing key is not shifted", () => {

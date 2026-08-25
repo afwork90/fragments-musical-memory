@@ -911,3 +911,62 @@ circular. `MAX_STRETCH` is 1.25 instead — where a stretch stops sounding like 
 performance. Of the two pairs in the library with a trustworthy tempo at both ends, 101
 against 120 BPM (19%) is offered and 101 against 140 (39%) is not. 16 of 34 relationships
 offer a pitch shift, so the key path has data behind it either way.
+
+### 9.18 The console after the controls that computed nothing were removed
+
+The five controls became two rows, each `from → to` with the change between them as the only
+editable number — the shape asked for in review, and the honest one: three of the five
+(time interpretation, beat offset, repeat) had nothing behind them, and the two that did
+were split across a control, a recommendation card, and a note.
+
+- **The Original/Transformed toggle is gone**, and with it `TransformDraft.transformed`. A row
+  equal to what was measured *is* the original, so there is one set of numbers behind what
+  plays, what renders, and what a drag hands over rather than a boolean that could disagree
+  with them. The prototype pairs keep playing their pre-baked asset, which is the only
+  adaptation they have.
+- **Half and double time surface as a sentence, not a select.** The row shows the candidate's
+  own tempo and where it lands (140 → 144), which is not the anchor's 72, so the note says it
+  is being counted at double time. The select could set a timing nothing read.
+- **`MAX_SHIFT` is 4 semitones**, the pitch counterpart to `MAX_STRETCH` and quality-based for
+  a related reason: the shift resamples and stretches back, so formants travel with the note.
+  Past the bound `pitchRecommended` is false while `semitones` stays measured, which is what
+  lets the row say "Key matching not recommended", explain why, and still allow it. Measured
+  across the library the shortest paths are 0(×9) 1(×4) 2(×2) 3(×2) 4(×2) 5(×6) — nothing
+  reaches 6 — so this advises nineteen pairs and declines six.
+- **"Reset to recommendation" applies the pitch shift**, which the opening draft deliberately
+  does not. That is not a contradiction of "pitch is opt-in": opt-in means not on arrival, and
+  a button someone presses is the opt-in.
+
+### 9.19 The console looked random because the cards were wrong
+
+Reported as "A shows D, 135 BPM, B shows C, 120, but the panel says 120 → 120 and G → G". The
+panel was right on every number; two older bugs made it look arbitrary.
+
+**Fragment cards showed their source's key.** `fragmentKeyLabels` — and the copies of its logic
+in the card, the search text, the sort, and the filter option list — read `source.key` first and
+fell back to the fragment's own. So `09_30_2025_gtrjam fragment 2` displayed D major, its
+source's key, while it measures F# minor at 91% strength; the candidate displayed C major while
+measuring G major. The console reads per-fragment analysis, so it named the real keys and its
+−1 semitone recommendation (G → F#) was correct. Inverted to fragment-first, with the four call
+sites routed through the one helper.
+
+**And a confidence-0 BPM was printed like a measurement.** The anchor's 135 BPM came back at
+`bpmConfidence` 0.00, so `matchTransform` refused to match to it — correctly — while the card
+presented 135 as fact. Cards now dim such a value with a tooltip. This is the display-side
+counterpart of the nullable-axis rule in 9.16: a number nothing will act on should not look
+like one that something will.
+
+The note was also misleading here: with the *anchor* unmeasurable it still blamed the distance
+("no reading of the pulse brings these together"). `MatchTransform` now carries `toBpm` beside
+`fromBpm`, so the console can say which side is missing.
+
+**The same session turned up the mirror-image confusion on a demo pair**, where the console said
+"neither fragment has been measured" while both cards showed a BPM. Both statements were true:
+the numbers are hand-written in `app/prototype-data.ts` (92, 88, keys like "Likely C minor",
+which is why they read as low confidence), and matching to them would have been inventing a
+target. The console now says the card's numbers did not come from analysis, which is the part
+that was missing. It is also the second report in one session caused by the prototype dataset
+sitting alongside the real library — see 9.7, which is due for a decision.
+
+Both empty states also told the user to run `npm run analyze -- --write`. Removed: UI copy is
+for whoever is using the app. The convention is now recorded in `AGENTS.md`.

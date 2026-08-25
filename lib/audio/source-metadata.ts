@@ -49,15 +49,22 @@ export function sourceKeyLabels(source: { key?: string | null; scale?: string | 
   return labels;
 }
 
+/**
+ * A fragment's own key, falling back to its source's only when the fragment was
+ * never measured.
+ *
+ * The order matters and was wrong: fragments are analysed individually, so a
+ * recording in D major holds fragments in F# minor, and reading the source first
+ * showed, sorted, and filtered every fragment of one take under a key none of them
+ * are in. It also disagreed with the transform console, which measures per fragment.
+ */
 export function fragmentKeyLabels(
   fragment: { key?: string | null; alternateKeys?: string[] },
   source?: { key?: string | null; scale?: string | null } | null,
 ) {
   // Filter identity is the analysis key only — never relative/alternate keys.
-  const fromSource = sourceKeyLabels(source);
-  if (fromSource.length) return fromSource;
   if (fragment.key && fragment.key !== "—") return [fragment.key];
-  return [];
+  return sourceKeyLabels(source);
 }
 
 export function matchesKeySelection(candidates: string[], selected: string[]) {
