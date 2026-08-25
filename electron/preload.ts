@@ -13,6 +13,7 @@ const bridge: FragmentsBridge = {
     ipcRenderer.invoke(FRAGMENTS_CHANNELS.finalizeImport, id, metadata),
   cancelImport: (id) => ipcRenderer.invoke(FRAGMENTS_CHANNELS.cancelImport, id),
   archiveSource: (id) => ipcRenderer.invoke(FRAGMENTS_CHANNELS.archiveSource, id),
+  deleteSource: (id) => ipcRenderer.invoke(FRAGMENTS_CHANNELS.deleteSource, id),
   listSources: () => ipcRenderer.invoke(FRAGMENTS_CHANNELS.listSources),
   updateSourceAnalysis: (id, analysis) =>
     ipcRenderer.invoke(FRAGMENTS_CHANNELS.updateSourceAnalysis, id, analysis),

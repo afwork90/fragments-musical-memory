@@ -65,6 +65,9 @@ export function createWebLibraryBridge(): FragmentsBridge {
     async archiveSource(): Promise<SourceRecord> {
       return unsupported();
     },
+    async deleteSource(): Promise<void> {
+      return unsupported();
+    },
     async updateSourceAnalysis(): Promise<SourceRecord> {
       return unsupported();
     },

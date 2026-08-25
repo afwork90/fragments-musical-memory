@@ -27,6 +27,8 @@ type SourcesViewProps = {
   onPreviewFragment: (fragment: Fragment) => void;
   onPreviewSource: (source: SourceFile) => void;
   onRemoveSource: (sourceId: string) => void;
+  onDeleteSource: (sourceId: string) => void;
+  canDeleteFiles: boolean;
   getFragmentById: (id: string) => Fragment;
   editorPanel: ReactNode;
 };
@@ -49,6 +51,8 @@ export function SourcesView({
   onPreviewFragment,
   onPreviewSource,
   onRemoveSource,
+  onDeleteSource,
+  canDeleteFiles,
   getFragmentById,
   editorPanel,
 }: SourcesViewProps) {
@@ -81,6 +85,8 @@ export function SourcesView({
               onPreviewFragment={onPreviewFragment}
               onPreviewSource={onPreviewSource}
               onRemoveSource={onRemoveSource}
+              onDeleteSource={onDeleteSource}
+              canDeleteFiles={canDeleteFiles}
               getFragmentById={getFragmentById}
             />
           </div>

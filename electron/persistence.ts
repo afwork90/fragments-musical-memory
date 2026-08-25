@@ -103,6 +103,7 @@ export async function initializePersistence() {
   logged(FRAGMENTS_CHANNELS.archiveSource, async (_event, id: unknown) => (
     withAudioUrl(await library.archiveSource(assertId(id)))
   ));
+  logged(FRAGMENTS_CHANNELS.deleteSource, (_event, id: unknown) => library.deleteSource(assertId(id)));
   logged(FRAGMENTS_CHANNELS.listSources, async () => (
     (await library.listSources())
       .filter((source) => source.duration)

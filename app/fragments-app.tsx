@@ -294,6 +294,8 @@ export default function FragmentsApp() {
   const [mapSelectedId,setMapSelectedId] = useState<string | null>(null);
   const [hoveredMapId,setHoveredMapId] = useState<string | null>(null);
   const [infoFragmentId, setInfoFragmentId] = useState<string | null>(null);
+  /** Whether this host can change the library on disk. False in the web preview. */
+  const [canWriteFiles, setCanWriteFiles] = useState(false);
   const returnScroll = useRef(0);
   const returnStack = useRef<ReturnSnapshot[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -312,6 +314,10 @@ export default function FragmentsApp() {
   useEffect(() => {
     const bridge = getFragmentsBridge();
     if (!bridge) return;
+    // Read once here rather than at every render: the host cannot change while the
+    // app is open, and components that offer a destructive action need to know
+    // whether this host can carry it out before they offer it.
+    setCanWriteFiles(bridge.capabilities.persist);
     void bridge.listSources().then((documents) => {
       const persisted = documents.map((document) => sourceFileFromDocument(document));
       setSources((current) => [...current.filter((source) => !persisted.some((item) => item.id === source.id)),...persisted]);
@@ -690,19 +696,17 @@ export default function FragmentsApp() {
   const openFragment = (id:string) => { stopAllAudio(); setSelectedId(id); setFilterOpen(false); setConnectionsOpen(true); setAdvancedOpen(false); setView("library"); };
   const highlightLibraryFragment = (id: string) => { setSelectedId(id); };
   const highlightLibrarySource = (source: SourceFile) => { setSelectedId(`source:${source.id}`); };
-  const removeSource = (sourceId: string) => {
-    const source = sources.find((item) => item.id === sourceId);
-    if (!source) return;
-
+  /**
+   * Drops a source and its fragments out of the session. Says nothing about disk —
+   * both removal paths need exactly this cleanup, and they differ only in what they
+   * do to the folder and what they tell the user.
+   */
+  const forgetSource = (sourceId: string) => {
     stopAllAudio();
     const removedFragmentIds = activeFragments
       .filter((fragment) => fragment.sourceId === sourceId)
       .map((fragment) => fragment.id);
     const remainingSources = sources.filter((item) => item.id !== sourceId);
-    const bridge = getFragmentsBridge();
-    if (bridge?.capabilities.persist && source.imported) {
-      void bridge.archiveSource(sourceId).catch((error: unknown) => console.warn("Could not archive source:", error));
-    }
 
     setArchived((current) => new Set([...current, ...removedFragmentIds]));
     setImportedFragments((current) => current.filter((fragment) => fragment.sourceId !== sourceId));
@@ -729,8 +733,50 @@ export default function FragmentsApp() {
       );
       setSelectedId(nextFragment?.id ?? "f02");
     }
+  };
 
+  /** Soft delete: the folder stays, so re-importing the same file brings it back. */
+  const removeSource = (sourceId: string) => {
+    const source = sources.find((item) => item.id === sourceId);
+    if (!source) return;
+
+    const bridge = getFragmentsBridge();
+    if (bridge?.capabilities.persist && source.imported) {
+      void bridge.archiveSource(sourceId).catch((error: unknown) => console.warn("Could not archive source:", error));
+    }
+
+    forgetSource(sourceId);
     notify(`Removed ${source.name} from your library. Import a file with the same name to restore your slices.`);
+  };
+
+  /**
+   * Hard delete: the folder goes.
+   *
+   * Unlike archiving, this waits for the disk before touching the session. A failed
+   * archive is harmless — the source is out of the library either way and the file
+   * is still there — but a failed delete that had already removed the row would
+   * leave a folder on disk with no way back to it in the app.
+   */
+  const deleteSourceFromDisk = async (sourceId: string) => {
+    const source = sources.find((item) => item.id === sourceId);
+    if (!source) return;
+
+    const bridge = getFragmentsBridge();
+    if (!bridge?.capabilities.persist) {
+      notify("Deleting files needs the desktop app. The web preview can only read your library.");
+      return;
+    }
+
+    try {
+      await bridge.deleteSource(sourceId);
+    } catch (error) {
+      console.warn("Could not delete source:", error);
+      notify(`Could not delete ${source.name}. Its folder is still on disk.`);
+      return;
+    }
+
+    forgetSource(sourceId);
+    notify(`Deleted ${source.name} and its slices from disk.`);
   };
   const editSourceForLibrarySource = (sourceId: string) => {
     pushReturn("source-edit");
@@ -1201,6 +1247,8 @@ export default function FragmentsApp() {
         onPreviewFragment={previewSingle}
         onPreviewSource={previewSource}
         onRemoveSource={removeSource}
+        onDeleteSource={(sourceId) => void deleteSourceFromDisk(sourceId)}
+        canDeleteFiles={canWriteFiles}
         getFragmentById={fragmentById}
         editorPanel={sourcePanelMode === "detail" ? detailPanel : fragmentationPanel}
       />}

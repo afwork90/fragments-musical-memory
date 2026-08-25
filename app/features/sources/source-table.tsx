@@ -38,6 +38,8 @@ type SourceTableProps = {
   onPreviewFragment: (fragment: Fragment) => void;
   onPreviewSource: (source: SourceFile) => void;
   onRemoveSource: (sourceId: string) => void;
+  onDeleteSource: (sourceId: string) => void;
+  canDeleteFiles: boolean;
   getFragmentById: (id: string) => Fragment;
 };
 
@@ -128,6 +130,8 @@ function SourceTableCell({
   onPreview,
   onOpenFragmentation,
   onRemoveSource,
+  onDeleteSource,
+  canDeleteFiles,
 }: {
   columnId: SourceSortColumn;
   source: SourceFile;
@@ -137,6 +141,8 @@ function SourceTableCell({
   onPreview: () => void;
   onOpenFragmentation: () => void;
   onRemoveSource: (sourceId: string) => void;
+  onDeleteSource: (sourceId: string) => void;
+  canDeleteFiles: boolean;
 }) {
   switch (columnId) {
     case "name":
@@ -201,7 +207,12 @@ function SourceTableCell({
     case "actions":
       return (
         <TableCell className={sourceTableCellClass("w-10")}>
-          <SourceRowActions source={source} onRemove={onRemoveSource} />
+          <SourceRowActions
+            source={source}
+            onRemove={onRemoveSource}
+            onDelete={onDeleteSource}
+            canDeleteFiles={canDeleteFiles}
+          />
         </TableCell>
       );
     default:
@@ -222,6 +233,8 @@ export function SourceTable({
   onPreviewFragment,
   onPreviewSource,
   onRemoveSource,
+  onDeleteSource,
+  canDeleteFiles,
   getFragmentById,
 }: SourceTableProps) {
   const handleRowKeyDown = (sourceId: string) => (event: KeyboardEvent<HTMLTableRowElement>) => {
@@ -310,6 +323,8 @@ export function SourceTable({
                     }}
                     onOpenFragmentation={() => onOpenFragmentation(source.id)}
                     onRemoveSource={onRemoveSource}
+                    onDeleteSource={onDeleteSource}
+                    canDeleteFiles={canDeleteFiles}
                   />
                 ))}
               </TableRow>

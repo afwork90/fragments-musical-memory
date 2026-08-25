@@ -63,6 +63,8 @@ export type LibraryService = {
   cancelImport(sourceId: string): Promise<void>;
   listSources(): Promise<SourceDocument[]>;
   archiveSource(sourceId: string): Promise<SourceDocument>;
+  /** Removes the source's folder from disk. Not recoverable. */
+  deleteSource(sourceId: string): Promise<void>;
   resolveAudioPath(sourceId: string, audioFile: string): string;
   resolveWaveformPath(sourceId: string): string;
   /** Resolves `null` when a source has no sidecar yet, which is not an error. */
@@ -149,6 +151,21 @@ export function createLibraryService(libraryRoot: string): LibraryService {
   async function archiveSource(sourceId: string): Promise<SourceDocument> {
     const existing = await readSourceDocument(sourceId);
     return writeSourceDocument({ ...existing, deletedAt: new Date().toISOString() });
+  }
+
+  /**
+   * Deletes a source's folder — the managed audio copy, `source.json`, the waveform
+   * sidecar, everything. There is no undo and nothing to re-import.
+   *
+   * The document is read first so a missing or unreadable source fails here rather
+   * than silently succeeding: `fs.rm` with `force` cannot tell "already gone" from
+   * "wrong id", and a delete that reports success without deleting anything is worse
+   * than an error. `sourceDirFor` runs the id through `assertSafeSourceId`, so this
+   * cannot be pointed outside the library.
+   */
+  async function deleteSource(sourceId: string): Promise<void> {
+    await readSourceDocument(sourceId);
+    await fs.rm(sourceDirFor(sourceId), { recursive: true, force: true });
   }
 
   async function restoreSource(sourceId: string): Promise<SourceDocument> {
@@ -415,6 +432,7 @@ export function createLibraryService(libraryRoot: string): LibraryService {
     cancelImport,
     listSources,
     archiveSource,
+    deleteSource,
     resolveAudioPath,
     resolveWaveformPath,
     readWaveform,

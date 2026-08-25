@@ -467,6 +467,40 @@ test("beginImport restores a soft-deleted source with the same filename", async 
   });
 });
 
+test("deleteSource removes the folder, and the same file imports fresh afterwards", async () => {
+  await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
+    const fixturePath = await makeFixtureFile(fixturesDir, "delete-me.wav", Buffer.from("delete fixture"));
+    const service = createLibraryService(libraryRoot);
+    const created = await service.beginImport(fixturePath);
+    await service.finalizeImport(created.id, validFinalizeMetadata());
+    await service.writeWaveform(created.id, new Uint8Array([1, 2, 3, 4]));
+
+    await service.deleteSource(created.id);
+
+    assert.equal((await service.listSources()).length, 0);
+    assert.deepEqual(await readdir(path.join(libraryRoot, "sources")), []);
+
+    // Nothing is left to restore, so the same filename imports as a new source
+    // rather than reviving the old one the way an archived source would.
+    const reimported = await service.beginImport(fixturePath);
+    assert.notEqual(reimported.id, created.id);
+    assert.equal(reimported.restored, undefined);
+    assert.equal(reimported.fragments.length, 0);
+  });
+});
+
+test("deleteSource refuses an id that is not a source rather than reporting success", async () => {
+  await withTempDirs(async ({ libraryRoot }) => {
+    const service = createLibraryService(libraryRoot);
+
+    // `fs.rm` with `force` cannot tell "already gone" from "wrong id", so the
+    // document is read first. A delete that quietly removes nothing would leave a
+    // folder on disk that the app has already forgotten about.
+    await assert.rejects(() => service.deleteSource("11111111-1111-4111-8111-111111111111"));
+    await assert.rejects(() => service.deleteSource("../elsewhere"));
+  });
+});
+
 test("beginImport rejects importing a file that is already active in the library", async () => {
   await withTempDirs(async ({ libraryRoot, fixturesDir }) => {
     const fixturePath = await makeFixtureFile(fixturesDir, "duplicate.wav", Buffer.from("duplicate fixture"));

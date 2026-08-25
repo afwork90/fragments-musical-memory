@@ -19,6 +19,7 @@ export const FRAGMENTS_CHANNELS = {
   finalizeImport: "fragments:finalize-import",
   cancelImport: "fragments:cancel-import",
   archiveSource: "fragments:archive-source",
+  deleteSource: "fragments:delete-source",
   listSources: "fragments:list-sources",
   updateSourceAnalysis: "fragments:update-source-analysis",
   updateSourceSettings: "fragments:update-source-settings",
@@ -81,7 +82,13 @@ export type FragmentsBridge = {
   beginImport(filePath: string): Promise<BeginImportResult>;
   finalizeImport(id: string, metadata: FinalizeMetadata): Promise<SourceRecord>;
   cancelImport(id: string): Promise<void>;
+  /** Soft delete: the folder stays and re-importing the same filename restores it. */
   archiveSource(id: string): Promise<SourceRecord>;
+  /**
+   * Hard delete: removes the source's folder from disk. Requires the `persist`
+   * capability, and there is nothing to restore afterwards.
+   */
+  deleteSource(id: string): Promise<void>;
   listSources(): Promise<SourceRecord[]>;
   updateSourceAnalysis(id: string, analysis: MeasuredAnalysis): Promise<SourceRecord>;
   updateSourceSettings(id: string, settings: SourceSettingsPatch): Promise<SourceRecord>;
