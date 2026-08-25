@@ -970,3 +970,34 @@ sitting alongside the real library — see 9.7, which is due for a decision.
 
 Both empty states also told the user to run `npm run analyze -- --write`. Removed: UI copy is
 for whoever is using the app. The convention is now recorded in `AGENTS.md`.
+
+### 9.20 "The first fragment plays" was two bugs with one symptom
+
+Reported as one thing — a play button playing the wrong audio — and it was two, in
+different files, for unrelated reasons. Both were masked by the same coincidence: a source
+whose only fragment spans the whole recording, where fragment 1 *is* the source. Four of
+the library's sources are single-fragment, two of them whole-span, so either bug looks
+fine until a 17-fragment source is opened.
+
+**Affinities, fixed.** `sourceSupportsSlicing` let a source be sliced when it was
+`imported`, and the demo dataset gives a source the audio URL of its lead fragment
+(`audioUrl: lead?.audio`) while the staged source claims `imported: true` and a
+522-second duration. So playing balcony fragment 7 asked a twenty-second file for 2:14 to
+2:34; the seek fails quietly, `currentTime` stays 0, and fragment 1 plays. The `imported`
+override is gone: a `/audio/` asset is already a slice, so nothing clips into it and the
+fragment's own file plays instead. Library slices and pending-import blobs are unchanged,
+verified against the function rather than argued from it.
+
+**The fragments modal, deferred.** Not a plumbing bug at all — the header button is
+`onClick={() => preview(headerFragment)}` over `const headerFragment = displayFragments[0]`,
+so it plays fragment 1 by construction. The intent is legible one line up: its guard is
+`canPlaySource = Boolean(resolveSourceAudioUrl(source))`, computed from the *source's* URL,
+and `buildSourcePreviewScope` sits unused in the same module. Decided: it plays the whole
+recording, since every lane already has its own play button.
+
+Not done yet because `preview()` keys `previewingId`, the timeline playhead, and the
+per-lane stop state on a fragment id, so a source-wide scope needs an id that is not a
+fragment's — `buildSourcePreviewScope` already returns `source:<id>` for exactly this.
+Around twenty lines, all in `app/fragmentation-workbench.tsx`, which is being rewritten
+for boundary handles by another agent in the same working tree. Waiting for that commit
+rather than racing it.
