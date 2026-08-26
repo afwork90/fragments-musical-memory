@@ -1108,26 +1108,56 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 @media(max-width:700px){.filters-summary{order:2}.search{order:3}.map-legend{gap:9px}.map-legend span{font-size:9px}.map-axis-x{left:54px;right:54px}.map-axis-y{left:13px}}
 @media(prefers-reduced-motion:reduce){.column-filter-trigger,.graph-node,.graph-edges line{transition:none!important}}
 
-/* Fracture map. Positions come from lib/map/, so nothing here encodes meaning
-   except colour, which is the measured pitch class. */
+/* Switches the Map page between the graph and the shatter map. Deliberately
+   quiet: it names the other mode, so it is an aside to the legend beside it. */
+.map-mode-switch { flex:0 0 auto; margin-left:auto; padding:4px 10px; font-size:11px; border-radius:999px;
+  color:var(--muted-foreground); background:transparent; border:1px solid var(--border); cursor:pointer;
+  transition:color .12s ease, border-color .12s ease, background .12s ease; }
+.map-mode-switch:hover { color:var(--foreground); border-color:var(--muted-foreground);
+  background:color-mix(in oklab, var(--card) 60%, transparent); }
+
+/* Shatter map. Positions come from lib/map/, so nothing here encodes meaning
+   except colour, which is the cluster the same features grouped a point into. */
 .fracture-page { display:flex; flex-direction:column; gap:12px; min-height:0; }
 .fracture-legend { display:flex; gap:18px; font-size:11px; color:var(--muted-foreground); }
-.fracture-board { position:relative; flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:16px; }
-.fracture-canvas { position:relative; width:100%; max-height:100%; border:1px solid var(--border); border-radius:14px;
-  background:radial-gradient(circle at 50% 40%, color-mix(in oklab, var(--card) 88%, transparent), var(--background)); }
-.fracture-empty { max-width:34ch; text-align:center; color:var(--muted-foreground); font-size:13px; }
 
-.fracture-axis { position:absolute; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted-foreground); }
-.fracture-axis-x { bottom:8px; left:50%; transform:translateX(-50%); }
-.fracture-axis-y { left:8px; top:50%; transform:translateY(-50%) rotate(-90deg); transform-origin:center; }
+/* Axis captions sit in gutters rather than over the plot, so a point near the
+   edge cannot land on top of one. */
+.fracture-plot { flex:1; min-height:0; display:grid; grid-template-columns:auto minmax(0,1fr);
+  grid-template-rows:minmax(0,1fr) auto; gap:10px; padding:4px 12px 0; }
+/* Sized from its height, which the fixed page height makes definite, with the
+   inline aspect ratio supplying the width. It needs a definite dimension in one
+   axis or the other: the children are all absolutely positioned, so a shrink-to-fit
+   width collapses to zero and every node's percentage offset lands on the origin. */
+.fracture-canvas { grid-column:2; grid-row:1; position:relative; height:100%; width:auto; max-width:100%;
+  justify-self:center; align-self:center; border:1px solid var(--border); border-radius:14px; overflow:hidden;
+  background:radial-gradient(circle at 50% 40%, color-mix(in oklab, var(--card) 88%, transparent), var(--background)); }
+
+/* One region per point, tiling the plot. The gap between them is the canvas
+   showing through a background-coloured stroke, which is what makes them read as
+   shards rather than a heat map. */
+.fracture-cells { position:absolute; inset:0; width:100%; height:100%; }
+.fracture-cell { fill:hsl(var(--fracture-hue,0deg) 42% 19%); stroke:var(--background); stroke-width:2;
+  cursor:pointer; transition:fill .12s ease; }
+.fracture-cell:hover { fill:hsl(var(--fracture-hue,0deg) 52% 29%); }
+.fracture-cell.is-selected { fill:hsl(var(--fracture-hue,0deg) 58% 38%); stroke:var(--foreground); stroke-width:2.5; }
+.fracture-cell.is-unsettled { fill-opacity:.45; }
+.fracture-empty { margin:auto; max-width:34ch; text-align:center; color:var(--muted-foreground); font-size:13px; }
+
+.fracture-axis { font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted-foreground); }
+.fracture-axis em { font-style:normal; opacity:.65; }
+.fracture-axis-x { grid-column:2; grid-row:2; text-align:center; }
+.fracture-axis-y { grid-column:1; grid-row:1; align-self:center; writing-mode:vertical-rl; transform:rotate(180deg); }
 
 .fracture-node { position:absolute; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; gap:3px;
   background:none; border:none; padding:2px; cursor:pointer; }
-.fracture-node-dot { width:13px; height:13px; border-radius:50%;
-  background:hsl(var(--fracture-hue,0deg) 62% 58%); box-shadow:0 0 0 1px color-mix(in oklab, var(--background) 70%, transparent); transition:transform .12s ease; }
-.fracture-node.is-unpitched .fracture-node-dot { background:var(--muted-foreground); }
+/* Marks the measured position inside its cell. Smaller than it was, because the
+   cell now carries the colour and the dot only has to say "the reading is here". */
+.fracture-node-dot { width:9px; height:9px; border-radius:50%; background:hsl(var(--fracture-hue,0deg) 85% 76%);
+  box-shadow:0 0 8px -1px hsl(var(--fracture-hue,0deg) 80% 60% / .6); transition:transform .12s ease; }
+/* Legible over a filled cell, which a muted grey was not. */
 .fracture-node-label { font-size:9px; max-width:96px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  color:var(--muted-foreground); opacity:0; transition:opacity .12s ease; }
+  color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.85); opacity:0; transition:opacity .12s ease; }
 .fracture-node:hover .fracture-node-label,
 .fracture-node:focus-visible .fracture-node-label,
 .fracture-node.is-selected .fracture-node-label { opacity:1; }
@@ -1135,5 +1165,9 @@ h1 { font-size:24px; line-height:1; letter-spacing:-.055em; margin:7px 0 8px; fo
 .fracture-node.is-selected .fracture-node-dot { transform:scale(1.5); box-shadow:0 0 0 2px var(--foreground); }
 .fracture-node.is-unsettled .fracture-node-dot { opacity:.4; }
 
-.fracture-inspector { position:absolute; left:50%; bottom:16px; transform:translateX(-50%); width:min(520px, calc(100% - 48px));
-  background:var(--card); border:1px solid var(--border); border-radius:12px; padding:10px; box-shadow:0 12px 40px rgba(0,0,0,.35); }
+/* Below the map, full width, and always occupying its space so that selecting a
+   point does not resize the plot under the cursor. The card carries its own
+   border and background, so this wrapper has none. */
+.fracture-inspector { flex:0 0 auto; min-height:150px; display:flex; flex-direction:column; justify-content:center; }
+.fracture-inspector > * { flex:0 0 auto; }
+.fracture-inspector-hint { margin:0; text-align:center; font-size:12px; color:var(--muted-foreground); }
