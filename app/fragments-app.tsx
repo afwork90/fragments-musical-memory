@@ -1137,6 +1137,16 @@ export default function FragmentsApp() {
   const mapDegreeFor=(id:string) => mapRelationships.filter((relationship) => relationship.source === id || relationship.target === id);
   const mapFragment=mapSelectedId && !archived.has(mapSelectedId) ? activeFragments.find((fragment) => fragment.id === mapSelectedId) ?? null : null;
   const focusMapInspector=() => window.setTimeout(() => mapInspectorCloseRef.current?.focus({ preventScroll:true }),0);
+  // A Fracture map selection is a PreviewScope id, so it is either `source:<id>`
+  // or a fragment id — which is exactly what lets one selection mean either.
+  const fractureSourceSelected=fractureSelectedId?.startsWith("source:") ?? false;
+  const fractureSource=fractureSourceSelected
+    ? sources.find((source) => source.id === fractureSelectedId!.slice("source:".length))
+    : undefined;
+  const fractureFragment=fractureSelectedId && !fractureSourceSelected
+    ? activeFragments.find((fragment) => fragment.id === fractureSelectedId)
+    : undefined;
+
   const closeMapInspector=() => { const id=mapSelectedId;stopAllAudio();setMapSelectedId(null);if (id) window.setTimeout(() => document.querySelector<HTMLButtonElement>(`[data-map-node="${id}"]`)?.focus({ preventScroll:true }),0); };
   const editorRanges=correctionRelationship ? (combineDraftRanges ?? []) : selectedRanges;
   const editorSensitivity=correctionRelationship ? (combineDraftSensitivity ?? selectedSource.sensitivity) : selectedSource.sensitivity;
@@ -1342,7 +1352,42 @@ export default function FragmentsApp() {
         seedAnalysis={SEED_ANALYSIS}
         selectedId={fractureSelectedId}
         onSelect={(assetId) => setFractureSelectedId(assetId)}
-        inspector={null}
+        inspector={fractureFragment
+          ? <LibraryCard
+              item={{ kind:"fragment", id:fractureFragment.id, fragment:fractureFragment }}
+              isSelected={false}
+              isPreviewing={previewingId === fractureFragment.id}
+              previewProgress={previewingId === fractureFragment.id ? previewProgress : null}
+              sourceNameFor={sourceNameFor}
+              sourceForId={sourceForId}
+              linkSummaryFor={linkSummaryFor}
+              fragmentAudioFor={fragmentAudioFor}
+              onSelect={() => {}}
+              onPreview={() => previewSingle(fractureFragment)}
+              onSeek={(ratio) => previewSingle(fractureFragment, ratio)}
+              onOpenMatches={() => openMatchesForFragment(fractureFragment.id)}
+              onOpenInfo={() => openSourceInfo(fractureFragment.sourceId, true)}
+              onRename={(name) => renameFragment(fractureFragment, name)}
+              onSave={() => saveFragment(fractureFragment)}
+              isSaved={savedFragmentIds.has(fractureFragment.id)}
+            />
+          : fractureSource
+            ? <LibraryCard
+                item={{ kind:"source", id:`source:${fractureSource.id}`, source:fractureSource }}
+                isSelected={false}
+                isPreviewing={previewingId === `source:${fractureSource.id}`}
+                previewProgress={previewingId === `source:${fractureSource.id}` ? previewProgress : null}
+                sourceNameFor={sourceNameFor}
+                sourceForId={sourceForId}
+                linkSummaryFor={linkSummaryFor}
+                fragmentAudioFor={fragmentAudioFor}
+                onSelect={() => {}}
+                onPreview={() => previewSource(fractureSource)}
+                onSeek={(ratio) => previewSource(fractureSource, ratio)}
+                onOpenMatches={() => openMatchesForSource(fractureSource)}
+                onOpenInfo={() => openSourceInfo(fractureSource.id, true)}
+              />
+            : null}
       />}
 
       {!combineCandidates && view === "archive" && <section className="page-view archive-page">
