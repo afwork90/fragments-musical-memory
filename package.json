@@ -25,6 +25,7 @@
     "seed-docs": "npm run build:electron && node scripts/compute-prototype-sources.mjs",
     "analyze": "npm run build:electron && node scripts/analyze-library.mjs",
     "affinities": "npm run build:electron && node scripts/build-affinities.mjs",
+    "fracture": "npm run build:electron && node scripts/fracture-report.mjs",
     "pack": "npm run build && npm run prepack-electron && electron-builder --dir",
     "dist": "npm run build && npm run prepack-electron && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",
