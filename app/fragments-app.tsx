@@ -40,7 +40,6 @@ import { LibraryFilters, createLibraryFilters } from "./library-filter-popover";
 import { formatSeconds } from "@/lib/format";
 import { bindSourceAudio, getCachedAudio, retainCachedAudio, updateCachedAnalysis } from "@/lib/audio/audio-service";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
-import { FEATURE_MAX_SECONDS } from "@/lib/analysis/features";
 import {
   PreviewScope,
   buildFragmentPreviewScope,
@@ -60,9 +59,9 @@ import { SourceAnalysisValues } from "./features/sources/source-detail-panel";
 import { LibraryCard } from "./features/library/library-card";
 import { MAP_WORLD, musicalMapPoint } from "./map-layout.mjs";
 import { DEFAULT_SENSITIVITY } from "@/lib/domain/source-document";
+import { measuredSummaryFrom } from "@/lib/domain/measured-summary";
 import type { FragmentDocument, SourceDocument } from "@/lib/domain/source-document";
-import type { MeasuredAnalysis, MusicalRole as DomainMusicalRole } from "@/lib/domain/source-document";
-import type { MeasuredSummary } from "@/lib/view/analysis";
+import type { MusicalRole as DomainMusicalRole } from "@/lib/domain/source-document";
 import type { SourceRecord } from "@/lib/ipc/contract";
 import { getFragmentsBridge } from "@/lib/web/bridge";
 
@@ -106,46 +105,6 @@ function displayRole(role: DomainMusicalRole | undefined): MusicalRole {
 }
 
 /** Rebuilds an in-memory Fragment from a source.json fragment record, so persisted segmentation shows up in the Library after a reload. */
-/**
- * The measured fields worth showing a person, straight off the document.
- *
- * `seconds` is what the measurements cover, which is the shorter of the audio and
- * the analysis window — onset density is meaningless against the wrong denominator,
- * and it must match what `rhythmSimilarity` divided by or the panel would disagree
- * with the affinities it explains.
- */
-function measuredSummaryFrom(
-  analysis: MeasuredAnalysis | undefined,
-  seconds: number,
-): MeasuredSummary | undefined {
-  if (!analysis) return undefined;
-
-  const measuredSeconds = Math.min(seconds, FEATURE_MAX_SECONDS);
-  const origin = analysis.provenance?.origin;
-  return {
-    bpm: analysis.bpm ?? null,
-    bpmConfidence: analysis.bpmConfidence ?? null,
-    key: analysis.key ?? null,
-    scale: analysis.scale ?? null,
-    keyStrength: analysis.keyStrength ?? null,
-    centroidHz: analysis.centroidHz ?? null,
-    onsetsPerSecond: analysis.onsets && measuredSeconds > 0
-      ? analysis.onsets.length / measuredSeconds
-      : null,
-    flatness: analysis.flatness ?? null,
-    lufs: analysis.lufs ?? null,
-    loudnessRange: analysis.loudnessRange ?? null,
-    dynamicComplexity: analysis.dynamicComplexity ?? null,
-    intensity: analysis.intensity ?? null,
-    leadingSilence: analysis.leadingSilence ?? null,
-    trailingSilence: analysis.trailingSilence ?? null,
-    chroma: analysis.chroma?.length ? analysis.chroma : null,
-    origin: origin === "measured" || origin === "edited" ? origin : null,
-    extractor: analysis.provenance?.extractor ?? null,
-    measuredAt: analysis.provenance?.at ?? null,
-  };
-}
-
 function fragmentFromDocument(fragmentDoc: FragmentDocument, index: number, source: SourceFile): Fragment {
   return {
     id: fragmentDoc.id,
