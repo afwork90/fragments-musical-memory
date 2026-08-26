@@ -5,6 +5,7 @@ import {
   FRAGMENTS,
   IMPORTED_FRAGMENT_IDS,
   RELATIONSHIPS,
+  SEED_ANALYSIS,
   SOURCE_FILES,
 } from "./prototype-data";
 import type { Fragment } from "@/lib/view/fragment";
@@ -57,6 +58,7 @@ import {
 } from "@/lib/audio/source-metadata";
 import { SourceAnalysisValues } from "./features/sources/source-detail-panel";
 import { LibraryCard } from "./features/library/library-card";
+import { FractureMapView } from "./features/fracture-map/fracture-map-view";
 import { MAP_WORLD, musicalMapPoint } from "./map-layout.mjs";
 import { DEFAULT_SENSITIVITY } from "@/lib/domain/source-document";
 import { measuredSummaryFrom } from "@/lib/domain/measured-summary";
@@ -65,7 +67,7 @@ import type { MusicalRole as DomainMusicalRole } from "@/lib/domain/source-docum
 import type { SourceRecord } from "@/lib/ipc/contract";
 import { getFragmentsBridge } from "@/lib/web/bridge";
 
-type View = "library" | "source" | "map" | "archive";
+type View = "library" | "source" | "map" | "fracture" | "archive";
 type ScoredRelationship = Relationship & { score: number; otherId: string };
 type ReturnSnapshot = { kind:"source-edit";view:View;selectedId:string;selectedSourceId:string;connectionsOpen:boolean;advancedOpen:boolean;scrollY:number };
 type CorrectionPhase = "edit" | "recompute" | "prompt";
@@ -274,6 +276,9 @@ export default function FragmentsApp() {
   const [relationshipStatuses,setRelationshipStatuses] = useState<Record<string,RelationshipStatus>>({ ...INITIAL_RELATIONSHIP_STATUSES });
   const [manualRelationshipIds,setManualRelationshipIds] = useState<Set<string>>(() => new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));
   const [mapSelectedId,setMapSelectedId] = useState<string | null>(null);
+  // A PreviewScope id, so it is either a fragment id or `source:<id>` — the
+  // Fracture map treats a slice and a whole recording as the same kind of thing.
+  const [fractureSelectedId,setFractureSelectedId] = useState<string | null>(null);
   const [hoveredMapId,setHoveredMapId] = useState<string | null>(null);
   const [infoFragmentId, setInfoFragmentId] = useState<string | null>(null);
   /** Whether this host can change the library on disk. False in the web preview. */
@@ -447,7 +452,7 @@ export default function FragmentsApp() {
     applyPreviewPosition(audio, scope, ratio);
   };
 
-  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setFilterOpen(false);setInfoFragmentId(null);setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCombineCandidates(null);setExportRelationship(null);setDuplicateGroup(null);setImportOpen(false);if (next !== "map") setMapSelectedId(null);setView(next); };
+  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setFilterOpen(false);setInfoFragmentId(null);setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCombineCandidates(null);setExportRelationship(null);setDuplicateGroup(null);setImportOpen(false);if (next !== "map") setMapSelectedId(null);if (next !== "fracture") setFractureSelectedId(null);setView(next); };
   const notify = (message:string) => { setToast(message); window.setTimeout(() => setToast(null), 2400); };
 
   useEffect(() => {
@@ -457,7 +462,7 @@ export default function FragmentsApp() {
   useEffect(() => {
     const handler = (event:KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); navigate("library"); window.setTimeout(() => searchRef.current?.focus(), 0); }
-      if (event.key === "Escape") { if (filterOpenRef.current) { setFilterOpen(false); return; } setDuplicateGroup(null);setMapSelectedId(null);stopAllAudio(); }
+      if (event.key === "Escape") { if (filterOpenRef.current) { setFilterOpen(false); return; } setDuplicateGroup(null);setMapSelectedId(null);setFractureSelectedId(null);stopAllAudio(); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -518,6 +523,14 @@ export default function FragmentsApp() {
   };
 
   const filterableFragments=useMemo(() => activeFragments.filter((fragment) => !archived.has(fragment.id)),[activeFragments,archived]);
+
+  // Archived *and* duplicate-excluded. `filterableFragments` drops only the first,
+  // and a fragment the user excluded from its duplicate group should not reappear
+  // on the Fracture map as its own point.
+  const fractureFragments=useMemo(
+    () => activeFragments.filter((fragment) => !archived.has(fragment.id) && !duplicateExclusions.has(fragment.id)),
+    [activeFragments,archived,duplicateExclusions],
+  );
 
   const updateSourceSensitivity = (value:number) => {
     setSources((current) => current.map((source) => source.id === selectedSourceId ? { ...source,sensitivity:value } : source));
@@ -1159,6 +1172,7 @@ export default function FragmentsApp() {
           <button className={view === "library" ? "nav-active" : ""} onClick={() => navigate("library")}>Library</button>
           <button className={view === "source" ? "nav-active" : ""} onClick={() => navigate("source")}>Sources</button>
           <button className={view === "map" ? "nav-active" : ""} onClick={() => navigate("map")}>Map</button>
+          <button className={view === "fracture" ? "nav-active" : ""} onClick={() => navigate("fracture")}>Fracture map</button>
           {/* <button className={view === "archive" ? "nav-active" : ""} onClick={() => navigate("archive")}>Archive {archived.size > 0 && <b>{archived.size}</b>}</button> */}
         </nav>
         {/* <div className="index-status"><span /><small>{activeFragments.length} surfaced · 2,418 indexed</small></div> */}
@@ -1321,6 +1335,15 @@ export default function FragmentsApp() {
           </section>}
         </div>
       </section>}
+
+      {!combineCandidates && view === "fracture" && <FractureMapView
+        sources={sources}
+        fragments={fractureFragments}
+        seedAnalysis={SEED_ANALYSIS}
+        selectedId={fractureSelectedId}
+        onSelect={(assetId) => setFractureSelectedId(assetId)}
+        inspector={null}
+      />}
 
       {!combineCandidates && view === "archive" && <section className="page-view archive-page">
         <div className="panel-titlebar"><h1>Archive</h1></div>
