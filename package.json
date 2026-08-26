@@ -22,6 +22,7 @@
     "test": "npm run test:unit && npm run test:smoke",
     "check": "npm run typecheck && npm run lint && npm run test:unit",
     "compute-waveforms": "node scripts/compute-prototype-waveforms.mjs",
+    "seed-docs": "npm run build:electron && node scripts/compute-prototype-sources.mjs",
     "analyze": "npm run build:electron && node scripts/analyze-library.mjs",
     "affinities": "npm run build:electron && node scripts/build-affinities.mjs",
     "pack": "npm run build && npm run prepack-electron && electron-builder --dir",
