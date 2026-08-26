@@ -12,6 +12,7 @@
 
 - `npm run check` (typecheck + lint + unit tests) must pass at the end of every task, and must stay fast.
 - Modules under `lib/map/` and `lib/domain/` are compiled twice (by `tsc -p electron/tsconfig.json` into `electron-dist/`, and by Vite into the renderer). Therefore: **relative specifiers, never the `@/` alias**; **no file extensions** in relative imports; **no `node:*` imports**; **no DOM globals**. Neither typecheck nor lint catches these — the unit tests, which import from `electron-dist/`, do.
+- **`electron/tsconfig.json` has an explicit `include` list, and `lib/map/` is a new directory.** Add `"../lib/map/**/*.ts"` to it beside `../lib/affinity/**/*.ts` before running any test that imports from `electron-dist/lib/map/`. Without it the build silently emits nothing for the directory and every test fails with "cannot find module", which looks like a missing file rather than a missing config line. Done as part of Task 2.
 - Inside `app/`, the `@/` alias is normal and correct. Inside `electron/`, keep the `.js` suffix.
 - No `any` and no `@ts-nocheck` anywhere in `app/`, `lib/`, `electron/`, `types/`. At an untrusted boundary take `unknown` and narrow.
 - **No invented data.** If a measurement is absent, it is `null` and renders `—`. Never synthesise a plausible value.
