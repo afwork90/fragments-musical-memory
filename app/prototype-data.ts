@@ -14,8 +14,10 @@
 //   - Never use it as a fallback for a real source's missing analysis. Missing
 //     analysis is `null` and renders "—".
 
+import prototypeAnalysis from "./prototype-analysis.json";
 import prototypeWaveforms from "./prototype-waveforms.json";
 import { parseMusicalKeyLabel } from "@/lib/audio/source-metadata";
+import type { MeasuredSummary } from "@/lib/view/analysis";
 import type { Fragment } from "@/lib/view/fragment";
 import type { Relationship, Transform } from "@/lib/view/relationship";
 import type { SourceFile } from "@/lib/view/source-file";
@@ -165,4 +167,18 @@ export const SOURCE_FILES: SourceFile[] = uniqueSourceNames.map((name,index) => 
     uploadedAt:imported ? "2026-08-20" : lead?.date ?? "2020-01-01",
   };
 });
+
+/**
+ * What the seed audio actually measures, from `npm run seed-docs`.
+ *
+ * Deliberately NOT attached to the `Fragment` objects above. Their `bpm`, `key`
+ * and `role` are hand-written and are what the cards, table and filters render;
+ * attaching real measurements to the same objects would make a card read
+ * "A minor · 92 BPM" while its detail panel reported something else measured from
+ * the same file. Only the Fracture map reads this, through one fallback.
+ *
+ * Retiring the seed data means deleting this, `prototype-analysis.json`, the
+ * script that writes it, and that fallback.
+ */
+export const SEED_ANALYSIS = prototypeAnalysis.fragments as Record<string, MeasuredSummary>;
 

@@ -15,6 +15,7 @@
     "../lib/ipc/**/*.ts",
     "../lib/analysis/**/*.ts",
     "../lib/affinity/**/*.ts",
+    "../lib/map/**/*.ts",
     "../lib/view/**/*.ts",
     "../types/**/*.d.ts"
   ]

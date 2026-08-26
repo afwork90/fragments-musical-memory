@@ -22,8 +22,10 @@
     "test": "npm run test:unit && npm run test:smoke",
     "check": "npm run typecheck && npm run lint && npm run test:unit",
     "compute-waveforms": "node scripts/compute-prototype-waveforms.mjs",
+    "seed-docs": "npm run build:electron && node scripts/compute-prototype-sources.mjs",
     "analyze": "npm run build:electron && node scripts/analyze-library.mjs",
     "affinities": "npm run build:electron && node scripts/build-affinities.mjs",
+    "fracture": "npm run build:electron && node scripts/fracture-report.mjs",
     "pack": "npm run build && npm run prepack-electron && electron-builder --dir",
     "dist": "npm run build && npm run prepack-electron && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",
@@ -34,7 +36,9 @@
   "build": {
     "appId": "com.fragments.musical-memory",
     "productName": "Fragments",
-    "directories": { "output": "release" },
+    "directories": {
+      "output": "release"
+    },
     "files": [
       "electron-dist/**",
       "dist/client/**",
@@ -42,15 +46,22 @@
     ],
     "mac": {
       "category": "public.app-category.music",
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "win": {
-      "target": ["nsis", "zip"]
+      "target": [
+        "nsis",
+        "zip"
+      ]
     }
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "d3-delaunay": "^6.0.4",
     "essentia.js": "^0.1.3",
     "lucide-react": "^1.33.0",
     "radix-ui": "^1.6.7",

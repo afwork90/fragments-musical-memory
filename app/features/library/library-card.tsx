@@ -35,6 +35,18 @@ type LibraryCardProps = {
   onOpenInfo: () => void;
   onKeyDown?: (event: KeyboardEvent<HTMLElement>) => void;
   showActions?: boolean;
+  /**
+   * Whether to offer Affinities. Separate from `showActions` because Info and
+   * Affinities are two different things: the shatter map wants somewhere to read
+   * the details but has no room for the matches workspace.
+   */
+  showAffinities?: boolean;
+  /**
+   * What the Info button says. The shatter map calls it "Show in Library",
+   * because there the panel is not alongside the card — getting to it leaves the
+   * map, and the button should say so.
+   */
+  infoLabel?: string;
   embedded?: boolean;
   waveformValues?: number[];
   waveActions?: ReactNode;
@@ -127,6 +139,8 @@ function CardActions({
   onDelete,
   isSaved,
   showMatchActions = true,
+  showAffinities = true,
+  infoLabel = "Info",
 }: {
   matchCount: number;
   onOpenMatches: () => void;
@@ -135,6 +149,8 @@ function CardActions({
   onDelete?: () => void;
   isSaved?: boolean;
   showMatchActions?: boolean;
+  showAffinities?: boolean;
+  infoLabel?: string;
 }) {
   return (
     <div className="library-card-actions">
@@ -169,19 +185,21 @@ function CardActions({
       )}
       {showMatchActions && (
         <>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="library-card-action"
-            disabled={matchCount === 0}
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenMatches();
-            }}
-          >
-            Affinities ({matchCount})
-          </Button>
+          {showAffinities && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="library-card-action"
+              disabled={matchCount === 0}
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenMatches();
+              }}
+            >
+              Affinities ({matchCount})
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"
@@ -192,7 +210,7 @@ function CardActions({
               onOpenInfo();
             }}
           >
-            Info
+            {infoLabel}
           </Button>
         </>
       )}
@@ -281,6 +299,8 @@ function CardHeading({
   onOpenMatches,
   onOpenInfo,
   showActions = true,
+  showAffinities = true,
+  infoLabel,
   onRename,
   onSave,
   onDelete,
@@ -293,6 +313,8 @@ function CardHeading({
   onOpenMatches: () => void;
   onOpenInfo: () => void;
   showActions?: boolean;
+  showAffinities?: boolean;
+  infoLabel?: string;
   onRename?: (name: string) => void;
   onSave?: () => void;
   onDelete?: () => void;
@@ -304,7 +326,7 @@ function CardHeading({
       <div className="library-card-heading-right">
         <div className="library-card-meta">{meta}</div>
         {(showActions || onSave || onDelete) && (
-          <CardActions matchCount={matchCount} onOpenMatches={onOpenMatches} onOpenInfo={onOpenInfo} onSave={onSave} onDelete={onDelete} isSaved={isSaved} showMatchActions={showActions} />
+          <CardActions matchCount={matchCount} onOpenMatches={onOpenMatches} onOpenInfo={onOpenInfo} onSave={onSave} onDelete={onDelete} isSaved={isSaved} showMatchActions={showActions} showAffinities={showAffinities} infoLabel={infoLabel} />
         )}
       </div>
     </div>
@@ -326,6 +348,8 @@ export function LibraryCard({
   onOpenInfo,
   onKeyDown,
   showActions = true,
+  showAffinities = true,
+  infoLabel,
   embedded = false,
   waveformValues,
   waveActions,
@@ -350,6 +374,8 @@ export function LibraryCard({
         onOpenMatches={onOpenMatches}
         onOpenInfo={onOpenInfo}
         onKeyDown={onKeyDown}
+        showAffinities={showAffinities}
+        infoLabel={infoLabel}
         waveActions={waveActions}
       />
     );
@@ -371,6 +397,8 @@ export function LibraryCard({
       onOpenInfo={onOpenInfo}
       onKeyDown={onKeyDown}
       showActions={showActions}
+      showAffinities={showAffinities}
+      infoLabel={infoLabel}
       embedded={embedded}
       waveformValues={waveformValues}
       waveActions={waveActions}
@@ -396,6 +424,8 @@ function SourceLibraryCard({
   onOpenMatches,
   onOpenInfo,
   onKeyDown,
+  showAffinities = true,
+  infoLabel,
   waveActions,
 }: {
   source: SourceFile;
@@ -410,6 +440,8 @@ function SourceLibraryCard({
   onOpenMatches: () => void;
   onOpenInfo: () => void;
   onKeyDown?: (event: KeyboardEvent<HTMLElement>) => void;
+  showAffinities?: boolean;
+  infoLabel?: string;
   waveActions?: ReactNode;
 }) {
   const cached = useCachedAudioBySourceId(source.id);
@@ -434,6 +466,8 @@ function SourceLibraryCard({
         matchCount={matchCount}
         onOpenMatches={onOpenMatches}
         onOpenInfo={onOpenInfo}
+        showAffinities={showAffinities}
+        infoLabel={infoLabel}
         meta={(
           <>
             <MetaItem label="Imported" value={source.date} />
@@ -492,6 +526,8 @@ function FragmentLibraryCard({
   onOpenInfo,
   onKeyDown,
   showActions = true,
+  showAffinities = true,
+  infoLabel,
   embedded = false,
   waveformValues,
   waveActions,
@@ -515,6 +551,8 @@ function FragmentLibraryCard({
   onOpenInfo: () => void;
   onKeyDown?: (event: KeyboardEvent<HTMLElement>) => void;
   showActions?: boolean;
+  showAffinities?: boolean;
+  infoLabel?: string;
   embedded?: boolean;
   waveformValues?: number[];
   waveActions?: ReactNode;
@@ -579,6 +617,8 @@ function FragmentLibraryCard({
         onOpenMatches={onOpenMatches}
         onOpenInfo={onOpenInfo}
         showActions={showActions}
+        showAffinities={showAffinities}
+        infoLabel={infoLabel}
         onRename={onRename}
         onSave={onSave}
         onDelete={onDelete}

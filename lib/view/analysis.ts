@@ -1,9 +1,9 @@
 // What analysis measured, shaped for display.
 //
 // A pure type with no imports, like the rest of `lib/view/`. It mirrors the subset
-// of `MeasuredAnalysis` worth showing a person, and that subset is smaller than
-// what the scorer uses: the 13 MFCC means are a direction in a space with no names
-// for its axes, so there is no honest way to print them. Chroma survives because a
+// of `MeasuredAnalysis` worth showing a person. The 13 MFCC means are a direction
+// in a space with no names for its axes, so nothing prints them — but the Fracture
+// map projects them, which is why they are carried here. Chroma survives because a
 // bar per pitch class is readable as a shape even unlabelled.
 //
 // `null` means not measured, and must render as "—" rather than as a zero.
@@ -43,6 +43,11 @@ export type MeasuredSummary = {
   trailingSilence: number | null;
   /** The 12 pitch classes starting at A, averaged over frames. Drawn, not read. */
   chroma: number[] | null;
+  /**
+   * The 13 MFCC means. Never displayed — see the note at the top of this file —
+   * but projected by the Fracture map, which is the only reason it is here.
+   */
+  timbre: number[] | null;
   /** Whether these numbers were measured or corrected by hand. */
   origin: "measured" | "edited" | null;
   extractor: string | null;
