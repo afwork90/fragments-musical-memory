@@ -5,6 +5,7 @@ import {
   FRAGMENTS,
   IMPORTED_FRAGMENT_IDS,
   RELATIONSHIPS,
+  SEED_ANALYSIS,
   SOURCE_FILES,
 } from "./prototype-data";
 import type { Fragment } from "@/lib/view/fragment";
@@ -40,7 +41,6 @@ import { LibraryFilters, createLibraryFilters } from "./library-filter-popover";
 import { formatSeconds } from "@/lib/format";
 import { bindSourceAudio, getCachedAudio, retainCachedAudio, updateCachedAnalysis } from "@/lib/audio/audio-service";
 import { slicePeaks } from "@/lib/audio/slice-peaks";
-import { FEATURE_MAX_SECONDS } from "@/lib/analysis/features";
 import {
   PreviewScope,
   buildFragmentPreviewScope,
@@ -58,15 +58,18 @@ import {
 } from "@/lib/audio/source-metadata";
 import { SourceAnalysisValues } from "./features/sources/source-detail-panel";
 import { LibraryCard } from "./features/library/library-card";
+import { FractureMapView } from "./features/fracture-map/fracture-map-view";
 import { MAP_WORLD, musicalMapPoint } from "./map-layout.mjs";
 import { DEFAULT_SENSITIVITY } from "@/lib/domain/source-document";
+import { measuredSummaryFrom } from "@/lib/domain/measured-summary";
 import type { FragmentDocument, SourceDocument } from "@/lib/domain/source-document";
-import type { MeasuredAnalysis, MusicalRole as DomainMusicalRole } from "@/lib/domain/source-document";
-import type { MeasuredSummary } from "@/lib/view/analysis";
+import type { MusicalRole as DomainMusicalRole } from "@/lib/domain/source-document";
 import type { SourceRecord } from "@/lib/ipc/contract";
 import { getFragmentsBridge } from "@/lib/web/bridge";
 
 type View = "library" | "source" | "map" | "archive";
+/** The Map page shows one set of audio two ways. Not a view: the tab is the same tab. */
+type MapMode = "graph" | "shatter";
 type ScoredRelationship = Relationship & { score: number; otherId: string };
 type ReturnSnapshot = { kind:"source-edit";view:View;selectedId:string;selectedSourceId:string;connectionsOpen:boolean;advancedOpen:boolean;scrollY:number };
 type CorrectionPhase = "edit" | "recompute" | "prompt";
@@ -106,46 +109,6 @@ function displayRole(role: DomainMusicalRole | undefined): MusicalRole {
 }
 
 /** Rebuilds an in-memory Fragment from a source.json fragment record, so persisted segmentation shows up in the Library after a reload. */
-/**
- * The measured fields worth showing a person, straight off the document.
- *
- * `seconds` is what the measurements cover, which is the shorter of the audio and
- * the analysis window — onset density is meaningless against the wrong denominator,
- * and it must match what `rhythmSimilarity` divided by or the panel would disagree
- * with the affinities it explains.
- */
-function measuredSummaryFrom(
-  analysis: MeasuredAnalysis | undefined,
-  seconds: number,
-): MeasuredSummary | undefined {
-  if (!analysis) return undefined;
-
-  const measuredSeconds = Math.min(seconds, FEATURE_MAX_SECONDS);
-  const origin = analysis.provenance?.origin;
-  return {
-    bpm: analysis.bpm ?? null,
-    bpmConfidence: analysis.bpmConfidence ?? null,
-    key: analysis.key ?? null,
-    scale: analysis.scale ?? null,
-    keyStrength: analysis.keyStrength ?? null,
-    centroidHz: analysis.centroidHz ?? null,
-    onsetsPerSecond: analysis.onsets && measuredSeconds > 0
-      ? analysis.onsets.length / measuredSeconds
-      : null,
-    flatness: analysis.flatness ?? null,
-    lufs: analysis.lufs ?? null,
-    loudnessRange: analysis.loudnessRange ?? null,
-    dynamicComplexity: analysis.dynamicComplexity ?? null,
-    intensity: analysis.intensity ?? null,
-    leadingSilence: analysis.leadingSilence ?? null,
-    trailingSilence: analysis.trailingSilence ?? null,
-    chroma: analysis.chroma?.length ? analysis.chroma : null,
-    origin: origin === "measured" || origin === "edited" ? origin : null,
-    extractor: analysis.provenance?.extractor ?? null,
-    measuredAt: analysis.provenance?.at ?? null,
-  };
-}
-
 function fragmentFromDocument(fragmentDoc: FragmentDocument, index: number, source: SourceFile): Fragment {
   return {
     id: fragmentDoc.id,
@@ -314,7 +277,11 @@ export default function FragmentsApp() {
   const [exportRelationship,setExportRelationship] = useState<CombineCandidate | null>(null);
   const [relationshipStatuses,setRelationshipStatuses] = useState<Record<string,RelationshipStatus>>({ ...INITIAL_RELATIONSHIP_STATUSES });
   const [manualRelationshipIds,setManualRelationshipIds] = useState<Set<string>>(() => new Set(INITIAL_MANUAL_RELATIONSHIP_IDS));
+  const [mapMode,setMapMode] = useState<MapMode>("shatter");
   const [mapSelectedId,setMapSelectedId] = useState<string | null>(null);
+  // A PreviewScope id, so it is either a fragment id or `source:<id>` — the
+  // shatter map treats a slice and a whole recording as the same kind of thing.
+  const [fractureSelectedId,setFractureSelectedId] = useState<string | null>(null);
   const [hoveredMapId,setHoveredMapId] = useState<string | null>(null);
   const [infoFragmentId, setInfoFragmentId] = useState<string | null>(null);
   /** Whether this host can change the library on disk. False in the web preview. */
@@ -488,7 +455,20 @@ export default function FragmentsApp() {
     applyPreviewPosition(audio, scope, ratio);
   };
 
-  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setFilterOpen(false);setInfoFragmentId(null);setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCombineCandidates(null);setExportRelationship(null);setDuplicateGroup(null);setImportOpen(false);if (next !== "map") setMapSelectedId(null);setView(next); };
+  const navigate = (next:View) => { stopAllAudio();returnStack.current=[];setFilterOpen(false);setInfoFragmentId(null);setConnectionsOpen(false);setAdvancedOpen(false);setSourceEditorOpen(false);setSourceEditorModal(false);setCorrectionRelationship(null);setCorrectionPhase("edit");setCombineCandidates(null);setExportRelationship(null);setDuplicateGroup(null);setImportOpen(false);if (next !== "map") { setMapSelectedId(null);setFractureSelectedId(null); }setView(next); };
+
+  /**
+   * Both modes hang off one tab, but their selections are not interchangeable: the
+   * graph holds a fragment id and the shatter map a `PreviewScope` id. Carrying one
+   * across would leave a card for something the new mode cannot show.
+   */
+  const switchMapMode = (next:MapMode) => {
+    if (next === mapMode) return;
+    stopAllAudio();
+    setMapSelectedId(null);
+    setFractureSelectedId(null);
+    setMapMode(next);
+  };
   const notify = (message:string) => { setToast(message); window.setTimeout(() => setToast(null), 2400); };
 
   useEffect(() => {
@@ -498,7 +478,7 @@ export default function FragmentsApp() {
   useEffect(() => {
     const handler = (event:KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); navigate("library"); window.setTimeout(() => searchRef.current?.focus(), 0); }
-      if (event.key === "Escape") { if (filterOpenRef.current) { setFilterOpen(false); return; } setDuplicateGroup(null);setMapSelectedId(null);stopAllAudio(); }
+      if (event.key === "Escape") { if (filterOpenRef.current) { setFilterOpen(false); return; } setDuplicateGroup(null);setMapSelectedId(null);setFractureSelectedId(null);stopAllAudio(); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -559,6 +539,14 @@ export default function FragmentsApp() {
   };
 
   const filterableFragments=useMemo(() => activeFragments.filter((fragment) => !archived.has(fragment.id)),[activeFragments,archived]);
+
+  // Archived *and* duplicate-excluded. `filterableFragments` drops only the first,
+  // and a fragment the user excluded from its duplicate group should not reappear
+  // on the Fracture map as its own point.
+  const fractureFragments=useMemo(
+    () => activeFragments.filter((fragment) => !archived.has(fragment.id) && !duplicateExclusions.has(fragment.id)),
+    [activeFragments,archived,duplicateExclusions],
+  );
 
   const updateSourceSensitivity = (value:number) => {
     setSources((current) => current.map((source) => source.id === selectedSourceId ? { ...source,sensitivity:value } : source));
@@ -674,6 +662,20 @@ export default function FragmentsApp() {
 
   const openLibraryInfo = (target: { sourceId: string; fragmentId?: string }) => {
     openSourceInfo(target.sourceId, false, target.fragmentId);
+  };
+
+  /**
+   * Info from the shatter map, which has to travel to the library to be seen —
+   * hence the button there reads "Show in Library" rather than "Info".
+   *
+   * The detail panel is a side panel, hosted only by the library and sources
+   * views; there is no modal form of it, so `openSourceInfo(id, true)` from a map
+   * sets the state and displays nothing. `navigate` closes the editor, hence the
+   * order here.
+   */
+  const openFractureInfo = (sourceId: string, fragmentId?: string) => {
+    navigate("library");
+    openLibraryInfo({ sourceId, fragmentId });
   };
 
   const toggleLibraryFilter = () => {
@@ -1165,6 +1167,30 @@ export default function FragmentsApp() {
   const mapDegreeFor=(id:string) => mapRelationships.filter((relationship) => relationship.source === id || relationship.target === id);
   const mapFragment=mapSelectedId && !archived.has(mapSelectedId) ? activeFragments.find((fragment) => fragment.id === mapSelectedId) ?? null : null;
   const focusMapInspector=() => window.setTimeout(() => mapInspectorCloseRef.current?.focus({ preventScroll:true }),0);
+  /**
+   * Names the mode you would switch to, rather than the one you are in, so the
+   * label is the action. Rendered inside whichever view is showing, because the
+   * Map page's titlebar belongs to the view rather than to the page.
+   */
+  const mapModeSwitch=(
+    <button
+      type="button"
+      className="map-mode-switch"
+      onClick={() => switchMapMode(mapMode === "graph" ? "shatter" : "graph")}
+    >
+      {mapMode === "graph" ? "Show as shatter map" : "Show as graph"}
+    </button>
+  );
+  // A shatter map selection is a PreviewScope id, so it is either `source:<id>`
+  // or a fragment id — which is exactly what lets one selection mean either.
+  const fractureSourceSelected=fractureSelectedId?.startsWith("source:") ?? false;
+  const fractureSource=fractureSourceSelected
+    ? sources.find((source) => source.id === fractureSelectedId!.slice("source:".length))
+    : undefined;
+  const fractureFragment=fractureSelectedId && !fractureSourceSelected
+    ? activeFragments.find((fragment) => fragment.id === fractureSelectedId)
+    : undefined;
+
   const closeMapInspector=() => { const id=mapSelectedId;stopAllAudio();setMapSelectedId(null);if (id) window.setTimeout(() => document.querySelector<HTMLButtonElement>(`[data-map-node="${id}"]`)?.focus({ preventScroll:true }),0); };
   const editorRanges=correctionRelationship ? (combineDraftRanges ?? []) : selectedRanges;
   const editorSensitivity=correctionRelationship ? (combineDraftSensitivity ?? selectedSource.sensitivity) : selectedSource.sensitivity;
@@ -1320,8 +1346,8 @@ export default function FragmentsApp() {
         editorPanel={sourcePanelMode === "detail" ? detailPanel : fragmentationPanel}
       />}
 
-      {!combineCandidates && view === "map" && <section className="page-view map-page">
-        <div className="panel-titlebar map-heading"><div className="map-legend"><span><i className="dot violet"/>Direct affinity</span><span><i className="line amber"/>Transformed bridge</span><span><i className="line take"/>Related takes</span><span><i className="node-size"/>Size = matches</span><span className="dimension-legend">Position · tonal focus × timbral brightness</span></div></div>
+      {!combineCandidates && view === "map" && mapMode === "graph" && <section className="page-view map-page">
+        <div className="panel-titlebar map-heading"><div className="map-legend"><span><i className="dot violet"/>Direct affinity</span><span><i className="line amber"/>Transformed bridge</span><span><i className="line take"/>Related takes</span><span><i className="node-size"/>Size = matches</span><span className="dimension-legend">Position · tonal focus × timbral brightness</span></div>{mapModeSwitch}</div>
         <div className="graph-board" role="region" aria-label="Musical fragment map" aria-describedby="map-help">
           <div className="graph-canvas">
             <div className="map-grid" aria-hidden="true"/>
@@ -1362,6 +1388,53 @@ export default function FragmentsApp() {
           </section>}
         </div>
       </section>}
+
+      {!combineCandidates && view === "map" && mapMode === "shatter" && <FractureMapView
+        modeSwitch={mapModeSwitch}
+        sources={sources}
+        fragments={fractureFragments}
+        seedAnalysis={SEED_ANALYSIS}
+        selectedId={fractureSelectedId}
+        onSelect={(assetId) => setFractureSelectedId(assetId)}
+        inspector={fractureFragment
+          ? <LibraryCard
+              item={{ kind:"fragment", id:fractureFragment.id, fragment:fractureFragment }}
+              isSelected={false}
+              isPreviewing={previewingId === fractureFragment.id}
+              previewProgress={previewingId === fractureFragment.id ? previewProgress : null}
+              sourceNameFor={sourceNameFor}
+              sourceForId={sourceForId}
+              linkSummaryFor={linkSummaryFor}
+              fragmentAudioFor={fragmentAudioFor}
+              onSelect={() => {}}
+              onPreview={() => previewSingle(fractureFragment)}
+              onSeek={(ratio) => previewSingle(fractureFragment, ratio)}
+              onOpenMatches={() => openMatchesForFragment(fractureFragment.id)}
+              onOpenInfo={() => openFractureInfo(fractureFragment.sourceId, fractureFragment.id)}
+              onRename={(name) => renameFragment(fractureFragment, name)}
+              showAffinities={false}
+              infoLabel="Show in Library"
+            />
+          : fractureSource
+            ? <LibraryCard
+                item={{ kind:"source", id:`source:${fractureSource.id}`, source:fractureSource }}
+                isSelected={false}
+                isPreviewing={previewingId === `source:${fractureSource.id}`}
+                previewProgress={previewingId === `source:${fractureSource.id}` ? previewProgress : null}
+                sourceNameFor={sourceNameFor}
+                sourceForId={sourceForId}
+                linkSummaryFor={linkSummaryFor}
+                fragmentAudioFor={fragmentAudioFor}
+                onSelect={() => {}}
+                onPreview={() => previewSource(fractureSource)}
+                onSeek={(ratio) => previewSource(fractureSource, ratio)}
+                onOpenMatches={() => openMatchesForSource(fractureSource)}
+                onOpenInfo={() => openFractureInfo(fractureSource.id)}
+                showAffinities={false}
+                infoLabel="Show in Library"
+              />
+            : null}
+      />}
 
       {!combineCandidates && view === "archive" && <section className="page-view archive-page">
         <div className="panel-titlebar"><h1>Archive</h1></div>
