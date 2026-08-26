@@ -552,6 +552,30 @@ export default function FragmentsApp() {
     setSources((current) => current.map((source) => source.id === selectedSourceId ? { ...source,sensitivity:value } : source));
   };
 
+  const applyDetectedRanges = (
+    segments: { start: number; end: number; label: string }[],
+  ) => {
+    if (!Array.isArray(segments)) {
+      notify("Unexpected response from the fragmentation backend.");
+      return;
+    }
+
+    const detectedRanges: EditableRange[] = segments
+      // drop silence — remove this filter if you want silence kept as its own fragment
+      .filter((segment) => segment.label !== "silence")
+      .map((segment, index) => ({
+        id: `${selectedSource.id}-detected-${Date.now()}-${index}`,
+        start: Math.round(segment.start * 100) / 100, // rounded to 2 decimals
+        end: Math.round(segment.end * 100) / 100,
+        color: RANGE_COLORS[index % RANGE_COLORS.length],
+      }));
+
+    setSourceRanges((current) => ({ ...current, [selectedSource.id]: detectedRanges }));
+    notify(
+      `Detected ${detectedRanges.length} fragment${detectedRanges.length === 1 ? "" : "s"} — click "Save boundaries" to add ${detectedRanges.length === 1 ? "it" : "them"} to the library.`,
+    );
+  };
+
   const detectionTimerRef = useRef<number | null>(null);
 
   const startDetectionTimer = () => {
